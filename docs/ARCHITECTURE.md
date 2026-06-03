@@ -11,7 +11,6 @@ Technical architecture and design documentation for Qwen Gate.
 - [Key Subsystems](#key-subsystems)
   - [Session Pool](#session-pool)
   - [Echo Detection](#echo-detection)
-  - [RTK Compression](#rtk-compression)
   - [Streaming Pipeline](#streaming-pipeline)
 - [Technology Stack](#technology-stack)
 - [Design Decisions](#design-decisions)
@@ -25,14 +24,14 @@ Qwen Gate is an OpenAI-compatible API proxy that provides access to Qwen AI mode
 1. **Automating browser interactions** with Qwen's chat interface
 2. **Managing multiple accounts** with automatic rotation and session pooling
 3. **Providing OpenAI-compatible endpoints** for seamless integration
-4. **Optimizing responses** with echo detection and compression
+4. **Optimizing responses** with echo detection and content filtering
 5. **Monitoring and debugging** through a real-time dashboard
 
 ### Core Principles
 
 - **Transparency**: OpenAI-compatible API that works with existing clients
 - **Reliability**: Multi-account rotation and automatic failover
-- **Efficiency**: RTK compression and intelligent caching
+- **Efficiency**: Content filtering and intelligent caching
 - **Observability**: Real-time monitoring and comprehensive logging
 - **Safety**: Echo detection and content filtering
 
@@ -76,8 +75,7 @@ Qwen Gate is an OpenAI-compatible API proxy that provides access to Qwen AI mode
 │  ┌────────────────▼─────────────────────────────────────┐  │
 │  │           Response Pipeline                          │  │
 │  │  - Echo detection & filtering                        │  │
-│  │  - RTK compression                                   │  │
-│  │  - Content filtering                                 │  │
+│  │  - Content filtering                                  │  │
 │  │  - OpenAI format conversion                          │  │
 │  └────────────────┬─────────────────────────────────────┘  │
 │                   │                                        │
@@ -90,7 +88,7 @@ Qwen Gate is an OpenAI-compatible API proxy that provides access to Qwen AI mode
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│                   Dashboard (SolidJS)                       │
+│                Dashboard (Vanilla HTML/JS)                   │
 │  - Real-time monitoring                                     │
 │  - Account management                                       │
 │  - Configuration UI                                         │
@@ -172,16 +170,14 @@ Processes and optimizes Qwen responses before returning to client.
 
 - `StreamingEchoFilter.ts` - Echo detection and filtering
 - `StreamingContentFilter.ts` - Content sanitization
-- `toolCompressor.ts` - RTK-style compression
 
 **Pipeline Stages**:
 
 1. **Raw Response** - Extract from Qwen
 2. **Echo Detection** - Filter verbatim tool echoes
 3. **Content Filtering** - Remove sensitive data
-4. **RTK Compression** - Compress tool results
-5. **Format Conversion** - Convert to OpenAI format
-6. **Streaming** - Send to client
+4. **Format Conversion** - Convert to OpenAI format
+5. **Streaming** - Send to client
 
 ### 5. Configuration Service
 
@@ -204,17 +200,24 @@ Centralized configuration management with three-tier priority.
 
 ### 6. Dashboard (Frontend)
 
-**Location**: `frontend/`
+**Location**: `src/routes/dashboard/`
 
-SolidJS + Astro dashboard for monitoring and management.
+Five standalone HTML pages served by Hono at `/dashboard/*` routes. No framework, no build step.
+
+**Pages**:
+
+- `overview.ts` - System health KPIs and session pool status
+- `logs.ts` - Real-time request log with foldable detail sections
+- `accounts.ts` - Account management with cooldown indicators
+- `network.ts` - Network request viewer and chunk inspection
+- `settings.ts` - Configuration editor for runtime settings
 
 **Features**:
 
-- Real-time request logs
-- Account management UI
-- Configuration editor
-- System health monitoring
-- Network request viewer
+- Real-time SSE updates for live data
+- Inline CSS with claymorphism design (warm cream palette)
+- Sidebar navigation shared across all pages
+- Template literals with embedded JS for interactivity
 
 ## Data Flow
 
@@ -257,7 +260,6 @@ SolidJS + Astro dashboard for monitoring and management.
 6. Response Pipeline
    - Echo detection (bidirectional containment)
    - Content filtering
-   - RTK compression (tool results)
    - Format to OpenAI schema
    │
    ▼
@@ -309,18 +311,12 @@ SolidJS + Astro dashboard for monitoring and management.
    }
    │
    ▼
-6. RTK Compression
-   - Compresses tool result
-   - Reduces token usage
-   - Maintains semantic meaning
-   │
-   ▼
-7. Qwen Continues
-   - Processes compressed result
+6. Qwen Continues
+   - Processes tool result
    - Generates final response
    │
    ▼
-8. Echo Detection
+7. Echo Detection
    - Checks if response echoes tool result
    - Filters verbatim echoes
    - Returns clean response
@@ -415,63 +411,6 @@ Response: "The file contains 100 lines of code." ← ECHO (filtered)
 Response: "Based on the analysis, the file has 100 lines." ← OK (rephrased)
 ```
 
-### RTK Compression
-
-**Purpose**: Reduce token usage by compressing tool results while preserving semantic meaning.
-
-**Compression Strategies**:
-
-1. **Git Diff Compression**
-
-   ```
-   Input: 1000 lines of git diff
-   Output: [compressed git diff: 47 files changed, +892 -234]
-   Savings: ~95%
-   ```
-
-2. **JSON Array Compression**
-
-   ```
-   Input: [{"id":1,...}, {"id":2,...}, ... 100 items]
-   Output: [JSON array: 100 items, sample: {"id":1,...}]
-   Savings: ~80%
-   ```
-
-3. **File Listing Compression**
-
-   ```
-   Input: 500 lines of ls -la output
-   Output: [directory listing: 500 entries, 23 directories, 477 files]
-   Savings: ~90%
-   ```
-
-4. **Log Compression**
-   ```
-   Input: 2000 lines of logs
-   Output: [log output: 2000 lines, 23 errors, 156 warnings]
-   Savings: ~95%
-   ```
-
-**Compression Pipeline**:
-
-```
-1. Detect Content Type
-   - Check for git diff markers
-   - Check for JSON structure
-   - Check for file listing patterns
-   - Check for log patterns
-
-2. Apply Compression
-   - Extract key information
-   - Generate summary
-   - Preserve sample data
-
-3. Validate Compression
-   - Ensure semantic preservation
-   - Check compression ratio
-   - Fallback to passthrough if needed
-```
-
 ### Streaming Pipeline
 
 **Purpose**: Process and stream responses in real-time with minimal latency.
@@ -493,12 +432,7 @@ Qwen Response Stream
          │
          ▼
 ┌─────────────────┐
-│ Content Filter  │ Remove sensitive data
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ RTK Compressor  │ Compress tool results
+ │ Content Filter  │ Remove sensitive data
 └────────┬────────┘
          │
          ▼
@@ -518,7 +452,7 @@ Qwen Response Stream
 **Optimizations**:
 
 - **Chunk Buffering**: Accumulate small chunks for efficiency
-- **Parallel Processing**: Filter and compress in parallel
+- **Parallel Processing**: Filter and transform in parallel
 - **Backpressure Handling**: Respect client consumption rate
 - **Memory Management**: Stream processing, no full buffering
 
@@ -536,11 +470,11 @@ Qwen Response Stream
 
 ### Frontend
 
-| Technology     | Purpose               | Version |
-| -------------- | --------------------- | ------- |
-| **SolidJS**    | Reactive UI           | Latest  |
-| **Astro**      | Static site generator | Latest  |
-| **TypeScript** | Type safety           | 5.7+    |
+| Technology       | Purpose                   | Notes                 |
+| ---------------- | ------------------------- | --------------------- |
+| **Vanilla HTML** | Page structure            | Template literals     |
+| **Vanilla CSS**  | Styling                   | Claymorphism design   |
+| **Vanilla JS**   | Interactivity             | SSE, DOM manipulation |
 
 ### Why These Choices?
 
@@ -557,13 +491,6 @@ Qwen Response Stream
 - Multi-browser support
 - Excellent API for web scraping
 - Active development
-
-**SolidJS**:
-
-- Reactive without virtual DOM
-- Excellent performance
-- TypeScript-first
-- Small bundle size
 
 **TypeScript**:
 
@@ -628,25 +555,7 @@ Qwen Response Stream
 - May miss some echoes
 - Complex to implement correctly
 
-### 4. RTK Compression
-
-**Decision**: Compress tool results to reduce token usage.
-
-**Rationale**:
-
-- Tool results can be very large
-- Compression saves 20-40% tokens
-- Preserves semantic meaning
-- Transparent to the client
-
-**Tradeoffs**:
-
-- Adds processing overhead
-- May lose some details
-- Requires content type detection
-- Compression quality varies
-
-### 5. Configuration System
+### 4. Configuration System
 
 **Decision**: Three-tier configuration (env → config.json → defaults).
 
@@ -889,7 +798,7 @@ The dashboard provides:
 
 - Improve session reuse
 - Optimize browser resource usage
-- Add more compression strategies
+- Improve content filtering strategies
 
 **Long-term**:
 
