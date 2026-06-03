@@ -1,4 +1,6 @@
 
+import { config } from '../services/configService.ts';
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const LOG_LEVELS: Record<LogLevel, number> = {
@@ -9,10 +11,11 @@ const LOG_LEVELS: Record<LogLevel, number> = {
 };
 
 function getMinLevel(): number {
-  if (process.env.LOG_LEVEL && process.env.LOG_LEVEL in LOG_LEVELS) {
-    return LOG_LEVELS[process.env.LOG_LEVEL as LogLevel];
+  const logLevel = config.get('LOG_LEVEL', 'info');
+  if (logLevel && logLevel in LOG_LEVELS) {
+    return LOG_LEVELS[logLevel as LogLevel];
   }
-  if (process.env.DEBUG) return LOG_LEVELS.debug;
+  if (config.get('DEBUG')) return LOG_LEVELS.debug;
   return LOG_LEVELS.info;
 }
 
@@ -26,7 +29,7 @@ interface LogEntry {
 
 function formatEntry(entry: LogEntry): string {
   // In production/JSON mode, emit strict JSON lines
-  if (process.env.LOG_FORMAT === 'json') {
+  if (config.get('LOG_FORMAT', 'text') === 'json') {
     return JSON.stringify(entry);
   }
   // Human-readable default: [LEVEL] [context] message + optional data

@@ -3,7 +3,6 @@ const CONCURRENCY = parseInt(process.env.CONCURRENCY || '10', 10);
 const REQUESTS = parseInt(process.env.REQUESTS || '100', 10);
 const ENDPOINT = process.env.ENDPOINT || '/health';
 
-let completed = 0;
 let errors = 0;
 let latencies: number[] = [];
 
@@ -24,8 +23,6 @@ async function makeRequest(_id: number): Promise<void> {
     if (!res.ok) errors++;
   } catch (_e) {
     errors++;
-  } finally {
-    completed++;
   }
 }
 

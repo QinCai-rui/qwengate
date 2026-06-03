@@ -1,3 +1,5 @@
+import { config } from '../services/configService.ts';
+
 /**
  * Retry utility with configurable max attempts, exponential backoff,
  * per-attempt timeout, and circuit breaker pattern.
@@ -248,29 +250,33 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 export function getRetryConfigFromEnv(): Required<RetryConfig> {
   const envConfig: RetryConfig = {};
 
-  if (process.env.RETRY_MAX_ATTEMPTS !== undefined) {
-    envConfig.maxRetries = parseInt(process.env.RETRY_MAX_ATTEMPTS, 10);
+  const maxAttempts = config.get('RETRY_MAX_ATTEMPTS', '3');
+  if (maxAttempts !== undefined) {
+    envConfig.maxRetries = parseInt(maxAttempts, 10);
     if (isNaN(envConfig.maxRetries) || envConfig.maxRetries < 0) {
       envConfig.maxRetries = DEFAULT_CONFIG.maxRetries;
     }
   }
 
-  if (process.env.RETRY_BASE_DELAY_MS !== undefined) {
-    envConfig.baseDelayMs = parseInt(process.env.RETRY_BASE_DELAY_MS, 10);
+  const baseDelay = config.get('RETRY_BASE_DELAY_MS', '1000');
+  if (baseDelay !== undefined) {
+    envConfig.baseDelayMs = parseInt(baseDelay, 10);
     if (isNaN(envConfig.baseDelayMs) || envConfig.baseDelayMs < 0) {
       envConfig.baseDelayMs = DEFAULT_CONFIG.baseDelayMs;
     }
   }
 
-  if (process.env.RETRY_MAX_DELAY_MS !== undefined) {
-    envConfig.maxDelayMs = parseInt(process.env.RETRY_MAX_DELAY_MS, 10);
+  const maxDelay = config.get('RETRY_MAX_DELAY_MS', '30000');
+  if (maxDelay !== undefined) {
+    envConfig.maxDelayMs = parseInt(maxDelay, 10);
     if (isNaN(envConfig.maxDelayMs) || envConfig.maxDelayMs < 0) {
       envConfig.maxDelayMs = DEFAULT_CONFIG.maxDelayMs;
     }
   }
 
-  if (process.env.RETRY_BACKOFF_MULTIPLIER !== undefined) {
-    envConfig.backoffMultiplier = parseFloat(process.env.RETRY_BACKOFF_MULTIPLIER);
+  const backoffMultiplier = config.get('RETRY_BACKOFF_MULTIPLIER', '2');
+  if (backoffMultiplier !== undefined) {
+    envConfig.backoffMultiplier = parseFloat(backoffMultiplier);
     if (isNaN(envConfig.backoffMultiplier) || envConfig.backoffMultiplier <= 0) {
       envConfig.backoffMultiplier = DEFAULT_CONFIG.backoffMultiplier;
     }

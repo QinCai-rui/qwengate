@@ -1,0 +1,157 @@
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+export interface ConfigSchema {
+  PORT: string;
+  HOST: string;
+  API_KEY: string;
+  BROWSER: string;
+  DASHBOARD: string;
+  ASTRO_PORT: string;
+  TOOL_CALLING: string;
+  CLEAN_OUTPUT: string;
+  CONTENT_FILTER: string;
+  STREAMING: string;
+  NON_STREAMING: string;
+  MAX_TOOL_CALLS_PER_RESPONSE: string;
+  ECHO_DETECTOR: string;
+  ECHO_JACCARD_THRESHOLD: string;
+  ECHO_MIN_LINE_LENGTH: string;
+  ECHO_MIN_UNIQUE_SHINGLES: string;
+  QWEN_FETCH_TIMEOUT_MS: string;
+  AUTH_TOKEN_MAX_AGE_MS: string;
+  AUTH_REFRESH_BEFORE_MS: string;
+  DELETE_SESSION: string;
+  RATE_LIMIT_COOLDOWN_MS: string;
+  DEBUG: string;
+  DEBUG_STREAM: string;
+  LOG_LEVEL: string;
+  LOG_FORMAT: string;
+  LOG_MAX_ENTRIES: string;
+  RETRY_ENABLED: string;
+  RETRY_MAX_ATTEMPTS: string;
+  RETRY_BASE_DELAY_MS: string;
+  RETRY_MAX_DELAY_MS: string;
+  RETRY_BACKOFF_MULTIPLIER: string;
+}
+
+export const DEFAULT_CONFIG: ConfigSchema = {
+  PORT: '26405',
+  HOST: 'localhost',
+  API_KEY: '',
+  BROWSER: 'chromium',
+  DASHBOARD: 'true',
+  ASTRO_PORT: '4321',
+  TOOL_CALLING: 'true',
+  CLEAN_OUTPUT: 'true',
+  CONTENT_FILTER: 'true',
+  STREAMING: '',
+  NON_STREAMING: '',
+  MAX_TOOL_CALLS_PER_RESPONSE: '3',
+  ECHO_DETECTOR: 'true',
+  ECHO_JACCARD_THRESHOLD: '0.9',
+  ECHO_MIN_LINE_LENGTH: '20',
+  ECHO_MIN_UNIQUE_SHINGLES: '8',
+  QWEN_FETCH_TIMEOUT_MS: '30000',
+  AUTH_TOKEN_MAX_AGE_MS: '28800000',
+  AUTH_REFRESH_BEFORE_MS: '300000',
+  DELETE_SESSION: 'true',
+  RATE_LIMIT_COOLDOWN_MS: '120000',
+  DEBUG: '',
+  DEBUG_STREAM: '',
+  LOG_LEVEL: 'info',
+  LOG_FORMAT: 'json',
+  LOG_MAX_ENTRIES: '20',
+  RETRY_ENABLED: 'true',
+  RETRY_MAX_ATTEMPTS: '3',
+  RETRY_BASE_DELAY_MS: '1000',
+  RETRY_MAX_DELAY_MS: '30000',
+  RETRY_BACKOFF_MULTIPLIER: '2',
+};
+
+const CONFIG_KEYS = new Set<string>(Object.keys(DEFAULT_CONFIG));
+
+export function isValidKey(key: string): key is keyof ConfigSchema {
+  return CONFIG_KEYS.has(key);
+}
+
+function getConfigFilePath(): string {
+  const cwd = typeof process !== 'undefined' && typeof process.cwd === 'function'
+    ? process.cwd()
+    : '.';
+  return resolve(cwd, 'config.json');
+}
+
+export class ConfigService {
+  private _data: Partial<ConfigSchema> = {};
+  private _filePath: string;
+
+  constructor(filePath?: string) {
+    // Allow injecting file path for testing
+    this._filePath = filePath ?? getConfigFilePath();
+    this.load();
+  }
+
+  load(): void {
+    const filePath = this._filePath;
+    if (existsSync(filePath)) {
+      try {
+        const raw = readFileSync(filePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+
+        // Only accept known keys
+        const clean: Partial<ConfigSchema> = {};
+        for (const key of Object.keys(DEFAULT_CONFIG) as (keyof ConfigSchema)[]) {
+          if (typeof parsed[key] === 'string') {
+            clean[key] = parsed[key];
+          }
+        }
+        this._data = clean;
+      } catch {
+        // Bad JSON or read failure → use defaults
+        this._data = {};
+      }
+    } else {
+      // File missing → create it with defaults
+      this._data = {};
+      try {
+        writeFileSync(filePath, JSON.stringify(DEFAULT_CONFIG, null, 2) + '\n', 'utf-8');
+      } catch {
+        // If we can't write (e.g. readonly fs in test), just keep empty _data
+      }
+    }
+  }
+
+  get<K extends keyof ConfigSchema>(key: K, defaultValue?: string): string {
+    const envVal = process.env[key];
+    if (envVal !== undefined) return envVal;
+
+    if (this._data[key] !== undefined) return this._data[key]!;
+
+    if (defaultValue !== undefined) return defaultValue;
+
+    return DEFAULT_CONFIG[key];
+  }
+
+  set<K extends keyof ConfigSchema>(key: K, value: string): void {
+    this._data[key] = value;
+  }
+
+  getAll(): ConfigSchema {
+    const result = {} as ConfigSchema;
+    for (const key of Object.keys(DEFAULT_CONFIG) as (keyof ConfigSchema)[]) {
+      result[key] = process.env[key] ?? this._data[key] ?? DEFAULT_CONFIG[key];
+    }
+    return result;
+  }
+
+  save(): void {
+    writeFileSync(this._filePath, JSON.stringify(this._data, null, 2) + '\n', 'utf-8');
+  }
+
+  reset(): void {
+    this.load();
+  }
+}
+
+export const config = new ConfigService();

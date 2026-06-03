@@ -1,8 +1,9 @@
 import { v4 as uuidv4 } from 'uuid';
-import { getBasicHeaders, type BasicHeaders } from './playwright.ts';
+import { getBasicHeaders } from './playwright.ts';
 import { pickAccount, incrementInFlight, decrementInFlight, incrementTotalRequests, getAccountByEmail } from './auth.ts';
 import { createNetworkEntry, recordResponse, completeEntry, errorEntry } from './networkDebug.ts';
 import { logStore } from './logStore.js';
+import { config } from './configService.ts';
 
 interface PoolEntry {
   chatId: string;
@@ -78,7 +79,6 @@ export class SessionPool {
       };
       this.activeSessions.add(chatId);
       this.activeCount++;
-      const emailLabel = entry.accountEmail ? ` (${entry.accountEmail.split('@')[0]})` : '';
       logStore.log('info', 'pool', 'Session acquired' + (entry.accountEmail ? ': ' + entry.accountEmail.split('@')[0] : ''));
       return entry;
     } catch (err) {
@@ -150,7 +150,7 @@ export class SessionPool {
 
   async deleteSession(chatId: string, cachedHeaders?: { cookie: string; userAgent: string }, accountEmail?: string): Promise<void> {
     if (process.env.TEST_MOCK_PLAYWRIGHT) return;
-    if (process.env.DELETE_SESSION === 'false') {
+    if (config.get('DELETE_SESSION', 'true') === 'false') {
       return;
     }
 

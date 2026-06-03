@@ -1,6 +1,20 @@
-import test from 'node:test';
+import test, { describe } from 'node:test';
 import assert from 'node:assert';
 import { commonPrefixLen, getNewContent } from './chat.ts';
+
+function streamChunks(text: string): string[] {
+  const tokens = text.match(/\S+\s*/g) || [];
+  const chunks: string[] = [];
+  const pattern = [2, 4, 3, 5, 2];
+  let i = 0, pi = 0;
+  while (i < tokens.length) {
+    const size = Math.min(pattern[pi % pattern.length], tokens.length - i);
+    chunks.push(tokens.slice(i, i + size).join(''));
+    i += size;
+    pi++;
+  }
+  return chunks;
+}
 
 test('commonPrefixLen detects cumulative chunks', () => {
   const prev = 'Hello world';
@@ -69,4 +83,98 @@ test('commonPrefixLen handles partial overlap', () => {
   assert.strictEqual(commonPrefixLen('abcdef', 'abcxyz'), 3);
   assert.strictEqual(commonPrefixLen('abc', 'xyz'), 0);
   assert.strictEqual(commonPrefixLen('abc', 'abcdef'), 3);
+});
+
+describe('streaming delta simulation', () => {
+  test('streaming: snapshot diffing extracts only new content across chunks', () => {
+    const text = 'The quick brown fox jumps over the lazy dog and then runs across the open field towards the setting sun';
+    const chunks = streamChunks(text);
+    let snapshot = '';
+    const emitted: string[] = [];
+
+    for (const chunk of chunks) {
+      const delta = getNewContent(chunk, snapshot);
+      if (delta.length > 0) {
+        emitted.push(delta);
+        snapshot = chunk;
+      }
+    }
+
+    const reconstructed = emitted.join('');
+    assert.strictEqual(reconstructed, text, 'deltas should reconstruct the full text exactly');
+  });
+
+  test('streaming: cumulative chunks are correctly deduplicated', () => {
+    const words = ['Hello', ' ', 'world', ', ', 'this', ' ', 'is', ' ', 'streaming', ' ', 'text', ' ', 'with', ' ', 'more', ' ', 'words'];
+    const cumulativeChunks: string[] = [];
+    for (let i = 0; i < words.length; i++) {
+      cumulativeChunks.push(words.slice(0, i + 1).join(''));
+    }
+
+    let snapshot = '';
+    const deltas: string[] = [];
+
+    for (const chunk of cumulativeChunks) {
+      const delta = getNewContent(chunk, snapshot);
+      if (delta.length > 0) {
+        deltas.push(delta);
+        snapshot = chunk;
+      }
+    }
+
+    const result = deltas.join('');
+    assert.strictEqual(result, words.join(''), 'cumulative chunks should produce each word exactly once');
+    for (let i = 0; i < cumulativeChunks.length; i++) {
+      if (i === 0) {
+        assert.strictEqual(deltas[i], cumulativeChunks[i], 'first delta is full first chunk');
+      } else if (deltas[i]) {
+        const expectedDelta = cumulativeChunks[i].slice(cumulativeChunks[i - 1].length);
+        assert.strictEqual(deltas[i], expectedDelta, `delta ${i} should be the new suffix`);
+      }
+    }
+  });
+
+  test('streaming: empty chunks produce no deltas', () => {
+    const snapshot = 'some existing content';
+    const emptyChunks = ['', '', '', ''];
+    const deltas: string[] = [];
+
+    let currentSnapshot = snapshot;
+    for (const chunk of emptyChunks) {
+      const delta = getNewContent(chunk, currentSnapshot);
+      if (delta.length > 0) {
+        deltas.push(delta);
+        currentSnapshot = chunk;
+      }
+    }
+
+    assert.strictEqual(deltas.length, 0, 'empty chunks should produce zero deltas');
+    assert.strictEqual(currentSnapshot, snapshot, 'snapshot should remain unchanged');
+  });
+
+  test('streaming: rapid small chunks still produce correct output', () => {
+    const text = 'one two three four five six seven eight nine ten';
+    const words = text.split(/(\s+)/);
+    const smallChunks: string[] = [];
+    for (let i = 0; i < words.length; i += 2) {
+      smallChunks.push(words.slice(0, i + 1).join(''));
+    }
+    if (smallChunks[smallChunks.length - 1] !== text) {
+      smallChunks.push(text);
+    }
+
+    let snapshot = '';
+    const deltas: string[] = [];
+
+    for (const chunk of smallChunks) {
+      const delta = getNewContent(chunk, snapshot);
+      if (delta.length > 0) {
+        deltas.push(delta);
+        snapshot = chunk;
+      }
+    }
+
+    const result = deltas.join('');
+    assert.strictEqual(result, text, 'small chunks should reconstruct the full text');
+  });
 });

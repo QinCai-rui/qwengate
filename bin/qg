@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# qg — Qwen Gate CLI entry point
-# Resolves to the project root and delegates to src/cli.ts via tsx
+# qg — Qwen Gate CLI
 set -euo pipefail
 
 SOURCE="${BASH_SOURCE[0]}"
@@ -12,4 +11,12 @@ done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-exec npx tsx "$PROJECT_ROOT/src/cli.ts" "$@"
+# Try tsx first (dev), fall back to dist/index.js (built)
+if command -v npx &>/dev/null; then
+  exec npx tsx "$PROJECT_ROOT/src/cli.ts" "$@"
+elif [ -f "$PROJECT_ROOT/dist/index.js" ]; then
+  exec node "$PROJECT_ROOT/dist/index.js" "$@"
+else
+  echo "Error: Qwen Gate not built. Run 'npm run build' or 'npx tsx src/cli.ts $*'" >&2
+  exit 1
+fi

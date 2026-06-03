@@ -1,117 +1,156 @@
 #!/usr/bin/env node
-/**
- * qg - Qwen Gate CLI
- * 
- * Commands:
- *   qg                    Start the gateway server
- *   qg login <email>      Authenticate account
- *   qg restart            Restart the gateway server
- *   qg --help             Show this help
- */
 
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { login as performLogin } from './login.js';
+import { login as performLogin } from './login.ts';
 
-const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const SERVER_ENTRY = resolve(__dirname, 'index.ts');
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SERVER_ENTRY = resolve(__dirname, 'index.tsx');
+const DIST_ENTRY = resolve(__dirname, '..', 'dist', 'index.js');
+
+function log(msg: string) { console.log(`[qg] ${msg}`); }
+function err(msg: string) { console.error(`[qg] ${msg}`); }
 
 function showHelp() {
-  const port = process.env.PORT || '26405';
-  console.log(`
-qg — Qwen Gate CLI
-
-Usage:
-  qg                    Start the gateway server
-  qg start              Start the gateway server
-  qg login <email>      Authenticate a Qwen account via browser
-  qg restart            Restart the gateway server
-  qg --help, -h         Show this help
-
-Server starts on http://localhost:${port}
-Dashboard: http://localhost:${port}/log
-`.trim());
+  log('');
+  log('Qwen Gate — OpenAI-compatible gateway for Qwen AI');
+  log('');
+  log('USAGE');
+  log('  qg [command] [options]');
+  log('');
+  log('COMMANDS');
+  log('  start          Start the API server (default)');
+  log('  login <email>  Authenticate a Qwen account via browser');
+  log('  restart        Restart the running server');
+  log('  status         Check if the server is running');
+  log('  help           Show this help message');
+  log('');
+  log('OPTIONS');
+  log('  --port <n>     Override port (default: from config or 26405)');
+  log('  --browser <e>  Browser engine: chromium, firefox, chrome, edge');
+  log('  --host <addr>  Bind address (default: from config or localhost)');
+  log('');
+  log('EXAMPLES');
+  log('  qg                    Start the server');
+  log('  qg login user@ex.com  Login a Qwen account');
+  log('  qg start --port 8080  Start on port 8080');
+  log('  qg restart            Restart the server');
+  log('  qg status             Check server status');
+  log('  qg help               Show this message');
+  log('');
 }
 
-async function startServer() {
-  const server = spawn('tsx', [SERVER_ENTRY], {
+function findEntry(): string {
+  if (SERVER_ENTRY.endsWith('.tsx')) return SERVER_ENTRY;
+  if (DIST_ENTRY.endsWith('.js')) return DIST_ENTRY;
+  return SERVER_ENTRY;
+}
+
+async function startServer(args: string[]) {
+  const portIdx = args.indexOf('--port');
+  const browserIdx = args.indexOf('--browser');
+  const hostIdx = args.indexOf('--host');
+
+  const extraArgs: string[] = [];
+  if (portIdx !== -1 && args[portIdx + 1]) extraArgs.push('--port', args[portIdx + 1]);
+  if (browserIdx !== -1 && args[browserIdx + 1]) extraArgs.push('--browser', args[browserIdx + 1]);
+  if (hostIdx !== -1 && args[hostIdx + 1]) extraArgs.push('--host', args[hostIdx + 1]);
+
+  const entry = findEntry();
+  const runner = entry.endsWith('.tsx') ? 'tsx' : 'node';
+
+  log(`Starting server (${runner} ${entry})...`);
+  if (extraArgs.length) log(`Extra args: ${extraArgs.join(' ')}`);
+
+  const server = spawn(runner, [entry, ...extraArgs], {
     stdio: 'inherit',
     shell: true,
   });
 
-  server.on('error', (err) => {
-    console.error('[qg] Failed to start server:', err.message);
-    process.exit(1);
-  });
-
-  server.on('exit', (code) => {
-    process.exit(code ?? 0);
-  });
+  server.on('error', (e) => { err(`Failed to start: ${e.message}`); process.exit(1); });
+  server.on('exit', (code) => process.exit(code ?? 0));
 }
 
 async function handleLogin(email: string) {
   if (!email || !email.includes('@')) {
-    console.error('Error: Please provide a valid email address');
-    console.error('Usage: qg login <user@example.com>');
+    err('Please provide a valid email address');
+    err('Usage: qg login <user@example.com>');
     process.exit(1);
   }
+  log(`Authenticating ${email}...`);
   await performLogin(email);
+  log('Login complete. You can now use this account with Qwen Gate.');
+}
+
+async function checkStatus() {
+  const port = process.env.PORT || '26405';
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/v1/models`);
+    if (res.ok) {
+      log(`Server is running on port ${port} (PID: ${process.ppid})`);
+      return;
+    }
+  } catch {
+    // Server not running
+  }
+  err('Server is not running');
+  process.exit(1);
 }
 
 async function restartServer() {
-  
-  const isWindows = process.platform === 'win32';
-  const killCmd = isWindows 
-    ? `taskkill /F /IM tsx.exe 2>nul || true`
-    : `pkill -f "tsx.*index.ts" 2>/dev/null || true`;
-  
+  const isWin = process.platform === 'win32';
+  const killCmd = isWin
+    ? 'taskkill /F /IM tsx.exe 2>nul; taskkill /F /IM node.exe 2>nul || exit 0'
+    : 'pkill -f "tsx.*index.ts" 2>/dev/null; pkill -f "node.*dist/index.js" 2>/dev/null; exit 0';
+
+  log('Stopping server...');
   await new Promise<void>((resolve) => {
-    const killer = spawn(killCmd, { shell: true, stdio: 'ignore' });
-    killer.on('close', () => resolve());
+    const p = spawn(killCmd, { shell: true, stdio: 'ignore' });
+    p.on('close', () => resolve());
   });
-  
-  await new Promise((r) => setTimeout(r, 500));
-  await startServer();
+
+  await new Promise((r) => setTimeout(r, 1000));
+  log('Starting server...');
+  await startServer([]);
 }
 
 async function main() {
   const args = process.argv.slice(2);
-  
-  if (args.includes('--help') || args.includes('-h') || args.length === 0) {
+  const command = args.find((a) => !a.startsWith('--')) || 'start';
+
+  if (command === 'help' || args.includes('--help') || args.includes('-h')) {
     showHelp();
     process.exit(0);
   }
-  
-  const [command] = args;
-  
+
   switch (command) {
-    case 'login':
-      await handleLogin(args[0]);
+    case 'login': {
+      // args = ['login', '<email>'] or ['login']
+      const email = args[args.indexOf('login') + 1];
+      await handleLogin(email);
       break;
+    }
     case 'restart':
       await restartServer();
+      break;
+    case 'status':
+      await checkStatus();
       break;
     case 'start':
     case 'run':
     case 'server':
-      await startServer();
+      await startServer(args);
       break;
     default:
-      if (command && !command.startsWith('-')) {
-        console.error(`[qg] Unknown command: ${command}`);
-        console.error('Run `qg --help` for available commands');
-        process.exit(1);
-      }
-      await startServer();
+      err(`Unknown command: ${command}`);
+      err('Run `qg help` for available commands');
+      process.exit(1);
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((err) => {
-    console.error('[qg] Fatal error:', err);
-    process.exit(1);
-  });
+if (process.argv[1] && fileURLToPath(import.meta.url).endsWith('cli.ts')) {
+  main().catch((e) => { err(`Fatal: ${e.message}`); process.exit(1); });
 }
 
 export { startServer, handleLogin, restartServer };

@@ -7,19 +7,17 @@
  * and optional file persistence for operational events (auth, circuit breaker,
  * session pool, streaming failures, etc.).
  */
-
 import { appendFileSync, mkdirSync } from 'fs';
 import { resolve } from "path";
-
+import { recordModelError as _recordModelError, recordModelSuccess as _recordModelSuccess, getModelHealth as _getModelHealth, resetModelHealth as _resetModelHealth, getAllModelHealth as _getAllModelHealth } from './modelHealth.ts';
+import { config } from './configService.ts';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
-
 const LOG_LEVEL_RANK: Record<LogLevel, number> = {
   debug: 0,
   info: 1,
   warn: 2,
   error: 3,
 };
-
 export interface SystemLogEntry {
   id: string;
   timestamp: string;
@@ -28,14 +26,12 @@ export interface SystemLogEntry {
   message: string;
   metadata?: Record<string, unknown>;
 }
-
 export interface SystemLogFilter {
   minLevel?: LogLevel;
   category?: string;
   since?: string;
   limit?: number;
 }
-
 export interface LogEntry {
   id: string;
   timestamp: string;
@@ -104,12 +100,10 @@ export interface LogEntry {
   amplificationRatio?: number;
   amplificationTriggeredInput?: string;
 }
-
-// Production-safe limits: 500 entries @ ~2KB avg = ~1MB memory, safe for long-running servers
-const MAX_ENTRIES = 500;
+const MAX_ENTRIES = parseInt(config.get('LOG_MAX_ENTRIES', '20'), 10);
 const MAX_CHUNKS_PER_ENTRY = 100;
-const MAX_SYSTEM_ENTRIES = 1000;
-
+const MAX_SYSTEM_ENTRIES = 200;
+const MAX_FIELD_LENGTH = 10240;
 class LogStore {
   private entries: LogEntry[] = [];
   private entryMap: Map<string, LogEntry> = new Map();
@@ -120,7 +114,6 @@ class LogStore {
   private requestLogPath: string | null = null;
   private systemIdCounter = 0;
   private serverStartTime = Date.now();
-
   enablePersistence(dirPath: string): void {
     try {
       mkdirSync(dirPath, { recursive: true });
@@ -131,12 +124,6 @@ class LogStore {
       console.error(`[LogStore] Failed to enable persistence:`, err);
     }
   }
-
-  /**
-   * Persist a completed request entry to the request log file.
-   * Records both the raw Qwen output and the processed API output sent to the client.
-   * Call this once per request at the end of the chat completion handler.
-   */
   persistRequest(entry: LogEntry): void {
     if (!this.requestLogPath) return;
     try {
@@ -160,7 +147,6 @@ class LogStore {
       // Swallow write errors — logging must never break the request path
     }
   }
-
   log(level: LogLevel, category: string, message: string, metadata?: Record<string, unknown>): void {
     const entry: SystemLogEntry = {
       id: `sys-${++this.systemIdCounter}`,
@@ -172,13 +158,11 @@ class LogStore {
     };
     this.systemEntries.unshift(entry);
     if (this.systemEntries.length > MAX_SYSTEM_ENTRIES) this.systemEntries.pop();
-
     for (const listener of this.systemListeners) {
       try { listener(entry); } catch (err) {
         console.error('[LogStore] System log listener error:', err);
       }
     }
-
     if (this.persistencePath) {
       try {
         const line = JSON.stringify(entry) + '\n';
@@ -187,13 +171,11 @@ class LogStore {
         console.error('[LogStore] Failed to persist system log entry:', err);
       }
     }
-
     const prefix = `[${level.toUpperCase()}]`;
     const meta = metadata ? ` ${JSON.stringify(metadata)}` : '';
     if (level === 'error') console.error(`${prefix} [${category}] ${message}${meta}`);
     else if (level === 'warn') console.warn(`${prefix} [${category}] ${message}${meta}`);
   }
-
   debug(category: string, message: string, metadata?: Record<string, unknown>): void {
     this.log('debug', category, message, metadata);
   }
@@ -206,7 +188,6 @@ class LogStore {
   error(category: string, message: string, metadata?: Record<string, unknown>): void {
     this.log('error', category, message, metadata);
   }
-
   getSystemLogs(filter?: SystemLogFilter): SystemLogEntry[] {
     let result = this.systemEntries;
     if (filter?.minLevel) {
@@ -221,12 +202,10 @@ class LogStore {
     }
     return result.slice(0, filter?.limit ?? 100);
   }
-
   subscribeSystem(listener: (entry: SystemLogEntry) => void): () => void {
     this.systemListeners.add(listener);
     return () => { this.systemListeners.delete(listener); };
   }
-
   createEntry(id: string, model: string, stream: boolean, requestId?: string, accountEmail?: string): LogEntry {
     const entry: LogEntry = {
       id,
@@ -274,7 +253,6 @@ class LogStore {
     }
     return entry;
   }
-
   updateEntry(id: string, updater: (entry: LogEntry) => void): void {
     const entry = this.entryMap.get(id);
     if (!entry) return;
@@ -283,16 +261,19 @@ class LogStore {
       listener(entry);
     }
   }
-
   addRawChunk(id: string, chunk: string): void {
     this.updateEntry(id, entry => {
       if (entry.qwenRawChunks.length < MAX_CHUNKS_PER_ENTRY) {
         entry.qwenRawChunks.push(chunk);
       }
-      entry.rawFullContent += chunk;
+      if (entry.rawFullContent.length < MAX_FIELD_LENGTH) {
+        entry.rawFullContent += chunk;
+        if (entry.rawFullContent.length > MAX_FIELD_LENGTH) {
+          entry.rawFullContent = entry.rawFullContent.substring(0, MAX_FIELD_LENGTH) + '... [truncated]';
+        }
+      }
     });
   }
-
   /** Record an amplification event when output vastly exceeds input */
   recordAmplificationEvent(logId: string, ratio: number, triggeringInput: string): void {
     this.updateEntry(logId, entry => {
@@ -302,120 +283,62 @@ class LogStore {
         : triggeringInput;
     });
   }
-
   /** Append content that was actually sent to the client (after all processing) */
   addProcessedOutput(id: string, content: string): void {
     this.updateEntry(id, entry => {
-      entry.processedApiOutput += content;
+      if (entry.processedApiOutput.length < MAX_FIELD_LENGTH) {
+        entry.processedApiOutput += content;
+        if (entry.processedApiOutput.length > MAX_FIELD_LENGTH) {
+          entry.processedApiOutput = entry.processedApiOutput.substring(0, MAX_FIELD_LENGTH) + '... [truncated]';
+        }
+      }
     });
   }
-
   getEntry(id: string): LogEntry | undefined {
     return this.entryMap.get(id);
   }
-
   addError(id: string, error: string): void {
     this.updateEntry(id, entry => {
       entry.errors.push(error);
     });
   }
-
   getRecent(count = 20): LogEntry[] {
     return this.entries.slice(0, count);
   }
-
   getAll(): LogEntry[] {
     return this.entries;
   }
-
   setNetworkTiming(id: string, timing: LogEntry['networkTiming']): void {
     this.updateEntry(id, entry => {
       entry.networkTiming = timing;
     });
   }
-
   // SSE listener management
   subscribe(listener: (entry: LogEntry) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-
   // Uptime in seconds since server start
   getUptimeSeconds(): number {
     return Math.floor((Date.now() - this.serverStartTime) / 1000);
   }
-
-  private modelErrorCounts: Map<string, number> = new Map();
-  private modelSuccessCounts: Map<string, number> = new Map();
-  private readonly MODEL_HEALTH_WINDOW_MS = 5 * 60 * 1000; // 5 minute sliding window
-  private modelHealthTimestamps: Map<string, number> = new Map();
-
   recordModelError(model: string): void {
-    const count = this.modelErrorCounts.get(model) || 0;
-    this.modelErrorCounts.set(model, count + 1);
-    this.modelHealthTimestamps.set(model, Date.now());
+    _recordModelError(model);
   }
-
   recordModelSuccess(model: string): void {
-    const count = this.modelSuccessCounts.get(model) || 0;
-    this.modelSuccessCounts.set(model, count + 1);
-    this.modelHealthTimestamps.set(model, Date.now());
+    _recordModelSuccess(model);
   }
-
-  /**
-   * Get health metrics for a model within the sliding window
-   */
   getModelHealth(model: string): { errors: number; successes: number; errorRate: number; isHealthy: boolean } {
-    const now = Date.now();
-    const lastCheck = this.modelHealthTimestamps.get(model);
-    
-    // Expire metrics outside the health window
-    if (lastCheck && now - lastCheck > this.MODEL_HEALTH_WINDOW_MS) {
-      this.modelErrorCounts.delete(model);
-      this.modelSuccessCounts.delete(model);
-      this.modelHealthTimestamps.delete(model);
-      return { errors: 0, successes: 0, errorRate: 0, isHealthy: true };
-    }
-
-    const errors = this.modelErrorCounts.get(model) || 0;
-    const successes = this.modelSuccessCounts.get(model) || 0;
-    const total = errors + successes;
-    const errorRate = total > 0 ? errors / total : 0;
-    const errorThreshold = 0.3; // 30% error rate triggers degradation
-
-    return {
-      errors,
-      successes,
-      errorRate,
-      isHealthy: errorRate < errorThreshold
-    };
+    return _getModelHealth(model);
   }
-
-  /**
-   * Reset health metrics for a model (useful for testing or manual recovery)
-   */
   resetModelHealth(model: string): void {
-    this.modelErrorCounts.delete(model);
-    this.modelSuccessCounts.delete(model);
-    this.modelHealthTimestamps.delete(model);
+    _resetModelHealth(model);
   }
-
   getAllModelHealth(): Record<string, { successCount: number; errorCount: number; lastActivity: string }> {
-    const result: Record<string, { successCount: number; errorCount: number; lastActivity: string }> = {};
-    const allModels = new Set([...this.modelErrorCounts.keys(), ...this.modelSuccessCounts.keys()]);
-    for (const model of allModels) {
-      result[model] = {
-        successCount: this.modelSuccessCounts.get(model) || 0,
-        errorCount: this.modelErrorCounts.get(model) || 0,
-        lastActivity: this.modelHealthTimestamps.get(model) ? new Date(this.modelHealthTimestamps.get(model)!).toISOString() : '',
-      };
-    }
-    return result;
+    return _getAllModelHealth();
   }
-
   private toolCallValidationFailures = 0;
   private hallucinatedToolNames = 0;
-
   /**
    * Increment counter for tool call validation failures
    * (e.g., JSON parse errors, schema mismatches, guard rejections)
@@ -423,7 +346,6 @@ class LogStore {
   recordToolCallValidationFailure(): void {
     this.toolCallValidationFailures++;
   }
-
   /**
    * Increment counter for hallucinated tool names
    * (e.g., model invents tool not in available_tools registry)
@@ -431,7 +353,6 @@ class LogStore {
   recordHallucinatedToolName(): void {
     this.hallucinatedToolNames++;
   }
-
   /**
    * Get tool discipline metrics for observability/Prometheus export
    */
@@ -444,7 +365,6 @@ class LogStore {
       hallucinatedToolNames: this.hallucinatedToolNames,
     };
   }
-
   /**
    * Reset tool discipline metrics (useful for testing or manual recovery)
    */
@@ -453,5 +373,4 @@ class LogStore {
     this.hallucinatedToolNames = 0;
   }
 }
-
 export const logStore = new LogStore();

@@ -15,7 +15,7 @@ TODO.md
 /graphify-out
 .vault
 .opencode
-logs/
+#logs/
 output-problems/
 .backup
 .claude-flow
@@ -23,8 +23,9 @@ output-problems/
 .aislop
 .obsidian-vault
 .open-mem
-docs
-.output-bugs
+#docs
+#output-bugs
+.gitnexus
 # open-mem: Auto-generated folder context files.
 # Uncomment to exclude from version control (recommended for large projects):
 # **/AGENTS.md

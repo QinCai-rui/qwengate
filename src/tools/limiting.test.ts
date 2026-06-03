@@ -10,6 +10,20 @@ import assert from 'node:assert';
  * 3. StreamingToolParser respects the limit
  */
 
+function streamChunks(text: string): string[] {
+  const tokens = text.match(/\S+\s*/g) || [];
+  const chunks: string[] = [];
+  const pattern = [2, 4, 3, 5, 2];
+  let i = 0, pi = 0;
+  while (i < tokens.length) {
+    const size = Math.min(pattern[pi % pattern.length], tokens.length - i);
+    chunks.push(tokens.slice(i, i + size).join(''));
+    i += size;
+    pi++;
+  }
+  return chunks;
+}
+
 // ─── truncateToolResult (from chat.ts) ──────────────────────────────────────
 
 /**
@@ -102,4 +116,47 @@ test('MAX_TOOL_CALLS_PER_RESPONSE: zero or negative falls back to 2', () => {
     assert.strictEqual(fallback, 2, `should fallback for ${bad}`);
   }
   process.env.MAX_TOOL_CALLS_PER_RESPONSE = saved;
+});
+
+// ─── Streaming chunk truncation ──────────────────────────────────────────────
+
+test('streaming: truncateToolResult on accumulated chunks produces same result as block', () => {
+  const longString = 'word '.repeat(2000);
+  const chunks = streamChunks(longString);
+  const accumulated = chunks.join('');
+  const streamingResult = truncateToolResult(accumulated, 200);
+  const blockResult = truncateToolResult(longString, 200);
+  assert.strictEqual(streamingResult, blockResult,
+    'streaming-accumulated truncation must match block truncation');
+});
+
+test('streaming: short content passes through unchanged when accumulated from chunks', () => {
+  const shortText = 'The quick brown fox jumps over the lazy dog.';
+  const chunks = streamChunks(shortText);
+  const accumulated = chunks.join('');
+  const result = truncateToolResult(accumulated, 4096);
+  assert.strictEqual(result, shortText,
+    'short content must pass through unchanged');
+});
+
+test('streaming: truncation marker present in accumulated streaming output', () => {
+  const text = 'data '.repeat(3000);
+  const chunks = streamChunks(text);
+  const accumulated = chunks.join('');
+  const result = truncateToolResult(accumulated, 200);
+  assert.ok(result.includes('[truncated'),
+    `truncation marker missing from streaming output: "${result.slice(0, 100)}..."`);
+});
+
+test('streaming: head and tail preserved in accumulated streaming output', () => {
+  const text = 'abcdefghij '.repeat(1000);
+  const chunks = streamChunks(text);
+  const accumulated = chunks.join('');
+  const result = truncateToolResult(accumulated, 200);
+  const head = accumulated.slice(0, 90);
+  const tail = accumulated.slice(-90);
+  assert.ok(result.includes(head.slice(0, 20)),
+    'first characters (head) must be preserved');
+  assert.ok(result.includes(tail.slice(-20)),
+    'last characters (tail) must be preserved');
 });

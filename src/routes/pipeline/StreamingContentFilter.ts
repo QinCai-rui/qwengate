@@ -16,7 +16,7 @@
  *     // emit any remaining content
  */
 
-import { filterContent, stripToolCallArtifacts, type FilterResult } from "../../utils/contentFilter.ts";
+import { filterContent, stripToolCallArtifacts } from "../../utils/contentFilter.ts";
 
 export interface StreamFilterResult {
   /** New clean content delta since last feed() call */

@@ -77,7 +77,8 @@ function notifyListeners(entry: NetworkDebugEntry): void {
     try {
       listener(entry);
     } catch (_error) {
-      // Silently ignore listener errors to prevent breaking the main flow
+      // intentional: listener errors must not break the main flow
+      console.error('[NetworkDebug] Listener error:', _error);
     }
   }
 }

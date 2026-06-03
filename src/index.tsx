@@ -8,12 +8,12 @@ import * as dotenv from 'dotenv';
 import { initPlaywright, BrowserType, getQwenHeaders, closePlaywright, getActivePage } from './services/playwright.ts';
 import { initAuth, getAccountStats, getAccountCount, getAvailableCount, reloadAccounts } from './services/auth.ts';
 import { accountsRouter } from './routes/accounts.ts';
+import { configRouter } from './routes/config.ts';
 import { sessionPool } from './services/sessionPool.ts';
-import { networkInterfaces } from 'os';
 import { resolve } from 'path';
 import crypto from 'crypto';
 import { logStore } from './services/logStore.ts';
-import { logHtml as logHtmlTemplate } from './routes/logPage.ts';
+import { config } from './services/configService.ts';
 import { startAutoCleanup, stopAutoCleanup } from './middleware/rateLimit.ts';
 
 // Compare two strings in timing-constant fashion to prevent timing attacks on API key auth.
@@ -34,23 +34,12 @@ function safeCompare(a: string, b: string): boolean {
   }
 }
 
-// Escape a string for safe embedding in a JS single-quoted string literal
-function escapeJSString(str: string): string {
-  return str
-    .replace(/\\/g, '\\\\')
-    .replace(/'/g, "\\'")
-    .replace(/\n/g, '\\n')
-    .replace(/\r/g, '\\r')
-    .replace(/\u2028/g, '\\u2028')
-    .replace(/\u2029/g, '\\u2029');
-}
-
-// Inject API_KEY into dashboard HTML for client-side auth
-const logHtml = logHtmlTemplate.replace(
-  '<script>',
-  `<script>\nwindow.API_KEY = '${escapeJSString(process.env.API_KEY || '')}';`
-);
 import { debugNetworkApp } from './routes/debugNetwork.ts';
+import { overviewHtml } from './routes/dashboard/overview.ts';
+import { logsHtml } from './routes/dashboard/logs.ts';
+import { accountsHtml } from './routes/dashboard/accounts.ts';
+import { networkHtml } from './routes/dashboard/network.ts';
+import { settingsHtml } from './routes/dashboard/settings.ts';
 
 dotenv.config({ path: resolve(process.cwd(), '.env') });
 
@@ -101,28 +90,16 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 app.use('*', cors());
 
-// Helper to get local network IPs
-function getNetworkAddress() {
-  const interfaces = networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]!) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-  return null;
-}
 
 // API Key protection middleware
 app.use('/v1/*', async (c, next) => {
-  const apiKey = process.env.API_KEY;
+  const apiKey = config.get('API_KEY');
   if (!apiKey) return await next();
   return bearerAuth({ token: apiKey })(c, next);
 });
 
 app.use('/log*', async (c, next) => {
-  const apiKey = process.env.API_KEY;
+  const apiKey = config.get('API_KEY');
   if (!apiKey) return await next();
   // SSE endpoint: EventSource cannot send custom headers, accept token as query param
   if (c.req.path === '/log/stream') {
@@ -134,18 +111,22 @@ app.use('/log*', async (c, next) => {
   return bearerAuth({ token: apiKey })(c, next);
 });
 
-app.get('/dashboard', async (c) => {
-  const apiKey = process.env.API_KEY;
-  if (apiKey) {
-    const authHeader = c.req.header('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ') || !safeCompare(authHeader.slice(7), apiKey)) {
-      return c.json({ error: 'Unauthorized' }, 401);
-    }
-  }
-  return c.html(logHtml);
-});
+// Serve individual dashboard pages per route
+const serveHtml = (html: string) => (c: any) => {
+  const apiKey = config.get('API_KEY');
+  const output = apiKey
+    ? html.replace('<script>', `<script>\nwindow.API_KEY = '${apiKey.replace(/'/g, "\\'")}';\n`)
+    : html;
+  return c.html(output);
+};
+app.get('/dashboard', serveHtml(overviewHtml));
+app.get('/dashboard/logs', serveHtml(logsHtml));
+app.get('/dashboard/accounts', serveHtml(accountsHtml));
+app.get('/dashboard/network', serveHtml(networkHtml));
+app.get('/dashboard/settings', serveHtml(settingsHtml));
 
-app.get('/', (c) => c.redirect('/log'));
+// Root redirect
+app.get('/', (c) => c.redirect('/dashboard'));
 
 // Basic health check
 app.get('/health', (c) => {
@@ -172,7 +153,7 @@ app.get('/pool/stats', (c) => {
 });
 
 app.post('/admin/accounts/reload', async (c) => {
-  const apiKey = process.env.API_KEY;
+  const apiKey = config.get('API_KEY');
   if (apiKey) {
     const authHeader = c.req.header('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ') || !safeCompare(authHeader.slice(7), apiKey)) {
@@ -190,7 +171,7 @@ app.post('/admin/accounts/reload', async (c) => {
 });
 
 app.get('/system/logs', (c) => {
-  const apiKey = process.env.API_KEY;
+  const apiKey = config.get('API_KEY');
   if (apiKey) {
     const authHeader = c.req.header('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ') || !safeCompare(authHeader.slice(7), apiKey)) {
@@ -204,7 +185,7 @@ app.get('/system/logs', (c) => {
 });
 
 app.get('/metrics/model-health', (c) => {
-  const apiKey = process.env.API_KEY;
+  const apiKey = config.get('API_KEY');
   if (apiKey) {
     const authHeader = c.req.header('authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ') || !safeCompare(authHeader.slice(7), apiKey)) {
@@ -214,9 +195,7 @@ app.get('/metrics/model-health', (c) => {
   return c.json(logStore.getAllModelHealth());
 });
 
-app.get('/log', (c) => {
-  return c.html(logHtml);
-});
+app.get('/log', (c) => c.redirect('/dashboard/logs'));
 
 app.get('/log/json', (c) => {
   return c.json(logStore.getRecent(10));
@@ -228,7 +207,6 @@ app.get('/log/stream', (c) => {
       start(controller) {
         const encoder = new TextEncoder();
         let alive = true;
-
         const safeEnqueue = (data: string): boolean => {
           if (!alive) return false;
           try {
@@ -252,7 +230,7 @@ app.get('/log/stream', (c) => {
         }, 15000);
         heartbeat.unref();
 
-        // Subscribe to new log entries
+        // Subscribe to all log updates — frontend deduplicates by ID
         const unsub = logStore.subscribe((entry) => {
           if (!safeEnqueue(`data: ${JSON.stringify(entry)}\n\n`)) {
             unsub();
@@ -290,11 +268,23 @@ app.route('/debug/network', debugNetworkApp);
 
 // Account CRUD API — protected by bearer auth
 app.use('/api/accounts*', async (c, next) => {
-  const apiKey = process.env.API_KEY;
+  const apiKey = config.get('API_KEY');
   if (!apiKey) return await next();
   return bearerAuth({ token: apiKey })(c, next);
 });
 app.route('/api/accounts', accountsRouter);
+
+// Config API
+if (config.get('API_KEY')) {
+  configRouter.use('*', async (c, next) => {
+    const auth = c.req.header('Authorization');
+    if (!auth || auth !== `Bearer ${config.get('API_KEY')}`) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+    await next();
+  });
+}
+app.route('/api/config', configRouter);
 
 // 10MB request body limit on all chat endpoints — MUST be registered before the route handler
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
@@ -321,6 +311,8 @@ app.get('/v1/models', async (c) => {
   }
 });
 
+
+
 // Initialize playwright when server starts
 import { fileURLToPath } from 'url';
 
@@ -329,17 +321,32 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const browserArg = process.argv.find(arg => arg.startsWith('--browser='));
   if (browserArg) {
     browserType = browserArg.split('=')[1] as BrowserType;
-  } else if (process.env.BROWSER) {
-    browserType = process.env.BROWSER as BrowserType;
+  } else if (config.get('BROWSER')) {
+    browserType = config.get('BROWSER') as BrowserType;
   }
 
   // Enable log persistence — writes system logs and request-level raw/processed logs to disk
   logStore.enablePersistence(resolve(process.cwd(), 'logs'));
 
-  const port = parseInt(process.env.PORT || '26405', 10) || 26405;
-  console.log(`📌 PORT from .env: ${process.env.PORT || '(not set — using default 26405)'}`);
+  const port = parseInt(config.get('PORT'), 10) || 26405;
+
+  // Show banner immediately on startup
+  console.log('\x1bc\x1b[3J');
+  console.log(
+`  ▄█████▄ ██     ██ ██████ ███  ██    ▄████  ▄████▄ ██████ ██████
+  ██ ▄ ██ ██ ▄█▄ ██ ██▄▄   ██ ▀▄██   ██  ▄▄▄ ██▄▄██   ██   ██▄▄
+  ▀█████▀  ▀██▀██▀  ██▄▄▄▄ ██   ██    ▀███▀  ██  ██   ██   ██▄▄▄▄
+       ▀▀
+`);
+  console.log('  Starting Qwen Gate...');
 
   initPlaywright(true, browserType).then(async () => {
+    try {
+      await initAuth();
+    } catch (err: any) {
+      console.log('  [WARN] initAuth failed: ' + err.message);
+    }
+
     serverInstance = serve({
       fetch: app.fetch,
       port,
@@ -350,42 +357,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       },
     });
     logStore.log('info', 'server', 'Server started on port ' + port);
-    console.log(`🚀 Server listening on http://localhost:${port}`);
-
-    console.log('⏳ Authenticating accounts in background...');
-    try {
-      await initAuth();
-    } catch (err: any) {
-      console.warn('[Startup] initAuth failed:', err.message);
-    }
-
-    const accountStats = getAccountStats();
-    const totalAccounts = accountStats.length;
-    const authenticatedAccounts = accountStats.filter(a => a.authenticated).length;
-    const throttledAccounts = accountStats.filter(a => a.throttled).length;
-
-    console.log('');
-    console.log('═══════════════════════════════════════════════════════');
-    console.log('  🔐 Account Status');
-    console.log('═══════════════════════════════════════════════════════');
-    if (totalAccounts === 0) {
-      console.log('  ⚠️  No accounts loaded. Add accounts via /accounts or accounts.json');
-    } else {
-      console.log(`  📊 Total: ${totalAccounts} | ✅ Authenticated: ${authenticatedAccounts} | ❌ Not authed: ${totalAccounts - authenticatedAccounts} | ⏸ Throttled: ${throttledAccounts}`);
-      console.log('  ───────────────────────────────────────────────────');
-      for (const acct of accountStats) {
-        const status = acct.authenticated
-          ? (acct.throttled ? `⏸ throttled (${Math.ceil(acct.throttledRemainingMs / 1000)}s)` : '✅ ready')
-          : '❌ not authenticated';
-        const expiresIn = acct.authenticated
-          ? ` | token: ${Math.ceil(acct.tokenExpiresInMs / 60000)}min`
-          : '';
-        const reqs = acct.totalRequests > 0 ? ` | reqs: ${acct.totalRequests}` : '';
-        console.log(`  ${acct.authenticated ? '●' : '○'} ${acct.email}  —  ${status}${expiresIn}${reqs}`);
-      }
-    }
-    console.log('═══════════════════════════════════════════════════════');
-    console.log('');
+    console.log('\x1b[F\x1b[2K\x1b[F\x1b[2K');
+    console.log(
+`  API  →  http://localhost:${port}/v1
+  Web  →  http://localhost:${port}/dashboard
+`);
 
     startAutoCleanup();
 
@@ -400,7 +376,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       disablePersonalization().catch(err => console.warn('[Startup] disablePersonalization failed:', err.message)),
     ]);
 
-    console.log('✅ Background initialization complete');
   }).catch((err: any) => {
     console.error('Failed to initialize playwright:', err);
     process.exit(1);

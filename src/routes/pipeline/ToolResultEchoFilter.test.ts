@@ -8,6 +8,45 @@ import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { ToolResultEchoFilter } from './ToolResultEchoFilter.ts';
 
+function streamChunks(text: string): string[] {
+  const tokens = text.match(/\S+\s*/g) || [];
+  const chunks: string[] = [];
+  const pattern = [2, 4, 3, 5, 2];
+  let i = 0, pi = 0;
+  while (i < tokens.length) {
+    const size = Math.min(pattern[pi % pattern.length], tokens.length - i);
+    chunks.push(tokens.slice(i, i + size).join(''));
+    i += size;
+    pi++;
+  }
+  return chunks;
+}
+
+function streamFilterText(text: string, filter: ToolResultEchoFilter): string {
+  const chunks = streamChunks(text);
+  let accumulated = '';
+  let lastSnapshot = '';
+  for (const chunk of chunks) {
+    accumulated += chunk;
+    const filtered = filter.filterText(accumulated);
+    const delta = filtered.slice(lastSnapshot.length);
+    if (delta) {
+      lastSnapshot = filtered;
+    }
+  }
+  return lastSnapshot;
+}
+
+function streamIsEcho(text: string, filter: ToolResultEchoFilter): boolean {
+  const chunks = streamChunks(text);
+  let accumulated = '';
+  for (const chunk of chunks) {
+    accumulated += chunk;
+    if (filter.isEcho(accumulated)) return true;
+  }
+  return false;
+}
+
 describe('ToolResultEchoFilter', () => {
   describe('constructor', () => {
     it('should accept empty tool results array', () => {
@@ -235,6 +274,48 @@ describe('ToolResultEchoFilter', () => {
       const similarity = (filter as any).jaccardSimilarity(tokens1, tokens2);
       // Intersection: {c, d} = 2, Union: {a,b,c,d,e,f} = 6
       assert.ok(Math.abs(similarity - (2 / 6)) < 0.01);
+    });
+  });
+
+  describe('streaming chunk simulation', () => {
+    it('streaming isEcho detects verbatim echo across chunks', () => {
+      const toolResult = 'function hello() {\n  console.log("world");\n}';
+      const filter = new ToolResultEchoFilter([toolResult]);
+      assert.equal(streamIsEcho('function hello() {', filter), true);
+    });
+
+    it('streaming isEcho returns false for original content across chunks', () => {
+      const toolResult = 'Tool result content here';
+      const filter = new ToolResultEchoFilter([toolResult]);
+      assert.equal(streamIsEcho('This is completely different content', filter), false);
+    });
+
+    it('streaming filterText removes echoed lines from chunked input', () => {
+      const toolResult = 'Line 1: Hello\nLine 2: World\nLine 3: Test';
+      const filter = new ToolResultEchoFilter([toolResult]);
+      const input = 'Line 1: Hello\nThis is original\nLine 2: World\nMore original content';
+      const result = streamFilterText(input, filter);
+      assert.ok(!result.includes('Line 1: Hello'));
+      assert.ok(!result.includes('Line 2: World'));
+      assert.ok(result.includes('This is original'));
+      assert.ok(result.includes('More original content'));
+    });
+
+    it('streaming filterText preserves original content across chunks', () => {
+      const toolResult = 'Tool output here';
+      const filter = new ToolResultEchoFilter([toolResult]);
+      const input = 'Completely different content\nWith multiple lines\nAll original';
+      const result = streamFilterText(input, filter);
+      assert.equal(result, filter.filterText(input));
+    });
+
+    it('streaming filterText matches block filterText result', () => {
+      const toolResult = 'Echo line 1\nEcho line 2\nEcho line 3';
+      const filter = new ToolResultEchoFilter([toolResult]);
+      const input = 'Original\nEcho line 1\nEcho line 2\nEcho line 3\nMore original';
+      const blockResult = filter.filterText(input);
+      const streamResult = streamFilterText(input, filter);
+      assert.equal(streamResult, blockResult);
     });
   });
 });

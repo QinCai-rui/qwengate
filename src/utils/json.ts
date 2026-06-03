@@ -56,7 +56,9 @@ export function robustParseJSON(str: string): any {
 
   try {
     return JSON.parse(trimmed);
-  } catch {} // expected — fall through to progressive repair below
+  } catch {
+    // non-blocking: fall through to progressive repair below
+  }
 
   const firstBrace = trimmed.indexOf('{');
   if (firstBrace === -1) return null;
@@ -65,7 +67,9 @@ export function robustParseJSON(str: string): any {
 
   try {
     return JSON.parse(jsonPart);
-  } catch {} // expected — fall through to aggressive repair heuristics below
+  } catch {
+    // non-blocking: fall through to aggressive repair heuristics below
+  }
 
 
   // 0. Fix unquoted property names (e.g., arguments instead of "arguments")
