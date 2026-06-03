@@ -1,23 +1,65 @@
+# Dependencies and build
 node_modules/
 dist/
-qwen_profile/
+
+# Environment files
 .env
 .env.local
+.env.*.local
+
+# Logs
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/*.jsonl
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Testing and coverage
 coverage/
 .cache/
+playwright-report/
+
+# IDE and editor
 .kilo
+.kilo/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Runtime and browser automation
 qwen_profile/
+browser-profile/
+
+# Agent and AI tool workspaces
 .omo
-.agent-screenshots
-TODO.md
-/graphify-out
+.omo/
+.agents/
+.agent-screenshots/
+.claude/
+.claude-flow/
+.commandcode/
+.regent/
+
+# Analysis and documentation tools
 .vault
 .opencode
-#logs/
-output-problems/
+.gitnexus/
+.aislop/
+graphify-out/
+output-bugs/
+
+# Backup and temporary files
+.backup/
 .backup
+*.bak
+*.tmp
+TODO.md
 .claude-flow
 .codeboarding
 .aislop
