@@ -73,6 +73,7 @@ export function stripToolCallArtifacts(text: string): string {
   const unmatchedOpenIdx = text.search(/<tool_result(?:\s[^>]*)?>/);
   if (unmatchedOpenIdx !== -1) { text = text.substring(0, unmatchedOpenIdx); }
   text = text.replace(/<\/tool_result\s*>/g, '');
+  text = text.replace(/<\/[\s\S]*?tool_result\s*>/g, '');
   text = text.replace(/<\/tool(?:_result)?/g, '');
   text = text.replace(/\n?<tool_result(?:\s[^>]*)?$/g, '');
   text = text.replace(/\n?<tool_res(?:ult?)?(?:\s[^>]*)?$/g, '');
