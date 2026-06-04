@@ -579,5 +579,5 @@ Sessions are automatically managed per-account using CloakBrowser browser contex
 For questions or issues:
 
 - **Documentation**: [README.md](../README.md)
-- **Issues**: [GitHub Issues](https://github.com/yourusername/qwen-gate/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/qwen-gate/discussions)
+- **Issues**: [GitHub Issues](https://github.com/youssefvdel/qwen-gate/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/youssefvdel/qwen-gate/discussions)

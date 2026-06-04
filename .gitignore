@@ -50,10 +50,13 @@ sessions/
 .regent/
 .aislop/
 .gitnexus/
-.opencode
-.codeboarding
-.vault
+.opencode/
+.codeboarding/
+.vault/
 .kilocode/
+
+# Sensitive session data
+scripts/discovery-output*.json
 
 # Analysis and documentation tools
 graphify-out/

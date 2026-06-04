@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-06-04
 
 ### Added
 - **Dashboard Web Interface**: Complete vanilla HTML/JS dashboard with 5 pages (overview, logs, accounts, network, settings)
@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **12-Hour Time Format**: All timestamps now display in 12-hour AM/PM format
 - **100% Width Layout**: Dashboard pages use full available width
 - **CLI Tool `qg`**: Command-line interface for account management (login, list, remove)
-- **One-Command Install Script**: `curl -sSL https://raw.githubusercontent.com/yourusername/qwen-gate/main/install.sh | bash`
+- **One-Command Install Script**: `curl -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.sh | bash`
 - **Network Debug Page**: View outbound API calls with expandable detail panels
 - **System Logs Panel**: Real-time system logs in overview dashboard
 - **Session Pool Dashboard**: Live session utilization bar and model health table
@@ -71,6 +71,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Package.json with core dependencies
 - Basic README with project description
 
-[0.2.0]: https://github.com/yourusername/qwen-gate/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/yourusername/qwen-gate/compare/v0.0.1...v0.1.0
-[0.0.1]: https://github.com/yourusername/qwen-gate/releases/tag/v0.0.1
+[0.2.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.0.1...v0.1.0
+[0.0.1]: https://github.com/youssefvdel/qwen-gate/releases/tag/v0.0.1
