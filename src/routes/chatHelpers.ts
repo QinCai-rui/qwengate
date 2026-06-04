@@ -808,30 +808,14 @@ export function buildPromptAndSystem(
     }
   }
   if (toolCalling) {
-    systemPrompt += `\n### TOOL RESULT HANDLING — CRITICAL\nContent enclosed in <tool_result>...</tool_result> tags is PRIVATE INTERNAL data — it is context for your reasoning, NOT material for your response. You must follow these rules:\n`;
-    systemPrompt += `- NEVER output, quote, paraphrase, summarize, or reference any <tool_result> content in your response to the user.\n`;
-    systemPrompt += `- NEVER describe what a tool returned or what a tool did.\n`;
-    systemPrompt += `- NEVER say phrases like "The tool returned X", "Based on the output of Y", "I found Z using the tool".\n`;
-    systemPrompt += `- After receiving tool results, respond DIRECTLY with your answer, actions, or follow-up. Act as if you naturally know the information.\n`;
-    systemPrompt += `- The user cannot see tool outputs or <tool_result> blocks. The user only sees your response text.\n`;
-    systemPrompt += `- Treat <tool_result> blocks as invisible internal state, like notes only you can read.\n`;
-    systemPrompt += `\n### MANDATORY READ-AND-THINK CYCLE\n`;
-    systemPrompt += `You must follow this EXACT cycle for EVERY tool call. This is not optional.\n\n`;
-    systemPrompt += `CYCLE: CALL → CHECK RESULT → THINK → DECIDE → (CALL AGAIN OR RESPOND)\n\n`;
-    systemPrompt += `0. CRITICAL — When you output a tool call, do NOT include any text before or after it. The tool call JSON IS your entire response. No "I'll check", no "Let me", no "Running...". Just the JSON.\n`;
-    systemPrompt += `1. CALL ONE TOOL AT A TIME. Never call multiple tools simultaneously. Each call must be deliberate.\n`;
-    systemPrompt += `2. READ the entire <tool_result> content before deciding your next action.\n`;
-    systemPrompt += `3. CHECK the result: Did the tool do what you expected?\n`;
-    systemPrompt += `   - Did it return an error? → Try a different approach.\n`;
-    systemPrompt += `   - Is the data empty or incomplete? → Try a different tool.\n`;
-    systemPrompt += `   - Did you get what you need? → Move to step 4.\n`;
-    systemPrompt += `4. THINK: "Based on THIS result, what should I do next?"\n`;
-    systemPrompt += `   - Do I have enough information to respond to the user? → If YES, STOP and respond.\n`;
-    systemPrompt += `   - Do I need more information? → If YES, call ONE MORE tool.\n`;
-    systemPrompt += `   - Was my tool call wrong? → If YES, correct your approach.\n`;
-    systemPrompt += `5. MAXIMUM 5 TOOL CALLS per user request. After 5 calls, you MUST respond with what you have.\n`;
-    systemPrompt += `6. NEVER call the same tool with the same arguments more than once — the result will not change.\n`;
-    systemPrompt += `7. Each tool call MUST be driven by a genuine information gap. Before each call, ask: "Do I already know this?"\n`;
+    systemPrompt += `\n### TOOL RESULT HANDLING\nContent inside <tool_result>...</tool_result> is PRIVATE — it is context for your reasoning, NOT material for your reply. Rules:\n`;
+    systemPrompt += `- NEVER output, quote, paraphrase, or reference <tool_result> content in your response.\n`;
+    systemPrompt += `- NEVER describe what a tool returned or say "The tool returned X". Respond as if you naturally know.\n`;
+    systemPrompt += `- The user cannot see <tool_result> blocks. Only your response text is visible.\n`;
+    systemPrompt += `\n### CYCLE\nCALL → CHECK → THINK → DECIDE → (CALL AGAIN OR RESPOND)\n`;
+    systemPrompt += `- Prefer independent parallel calls over sequential (no wait = faster). Sequential only when one call's output is input for the next.\n`;
+    systemPrompt += `- Max 5 tool calls per request. After that, respond with what you have.\n`;
+    systemPrompt += `- Before each call, ask: "Do I already know this?" If yes, don't call.\n`;
   }
 
   return { prompt, systemPrompt, toolResultContents };
