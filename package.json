@@ -1,7 +1,7 @@
 {
   "name": "qwen-gate",
   "version": "0.2.0",
-  "description": "OpenAI-compatible API gateway for Qwen models",
+  "description": "OpenAI-compatible API gateway for Qwen models — drop-in replacement for /v1/chat/completions with multi-account rotation, tool calling, streaming SSE, and web dashboard",
   "main": "index.js",
   "bin": {
     "qg": "./bin/qg",
@@ -21,7 +21,7 @@
     "qg": "tsx src/cli.ts",
     "qg:restart": "tsx src/cli.ts restart"
   },
-  "keywords": ["qwen", "api-gateway", "openai-compatible", "playwright", "hono", "typescript", "sse", "tool-calling", "multi-account"],
+  "keywords": ["qwen", "api-gateway", "openai-compatible", "playwright", "hono", "typescript", "sse", "tool-calling", "multi-account", "browser-automation", "proxy", "llm-gateway", "openai-proxy", "qwen-ai", "chat-completions", "function-calling"],
   "author": "Youssef Adel",
   "license": "MIT",
   "dependencies": {
