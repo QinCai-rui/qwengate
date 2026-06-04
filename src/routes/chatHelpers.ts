@@ -808,14 +808,8 @@ export function buildPromptAndSystem(
     }
   }
   if (toolCalling) {
-    systemPrompt += `\n### TOOL RESULT HANDLING\nContent inside <tool_result>...</tool_result> is PRIVATE — it is context for your reasoning, NOT material for your reply. Rules:\n`;
-    systemPrompt += `- NEVER output, quote, paraphrase, or reference <tool_result> content in your response.\n`;
-    systemPrompt += `- NEVER describe what a tool returned or say "The tool returned X". Respond as if you naturally know.\n`;
-    systemPrompt += `- The user cannot see <tool_result> blocks. Only your response text is visible.\n`;
-    systemPrompt += `\n### CYCLE\nCALL → CHECK → THINK → DECIDE → (CALL AGAIN OR RESPOND)\n`;
-    systemPrompt += `- Prefer independent parallel calls over sequential (no wait = faster). Sequential only when one call's output is input for the next.\n`;
-    systemPrompt += `- Max 5 tool calls per request. After that, respond with what you have.\n`;
-    systemPrompt += `- Before each call, ask: "Do I already know this?" If yes, don't call.\n`;
+    // All behavioral rules are in DEFAULT_SYSTEM_PROMPT (qwenModels.ts) — the real system prompt sent via Qwen's settings API.
+    // Only per-request dynamic content goes here: tool definitions, tool_choice directives.
   }
 
   return { prompt, systemPrompt, toolResultContents };
