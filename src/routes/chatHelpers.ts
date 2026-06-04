@@ -818,6 +818,7 @@ export function buildPromptAndSystem(
     systemPrompt += `\n### MANDATORY READ-AND-THINK CYCLE\n`;
     systemPrompt += `You must follow this EXACT cycle for EVERY tool call. This is not optional.\n\n`;
     systemPrompt += `CYCLE: CALL → CHECK RESULT → THINK → DECIDE → (CALL AGAIN OR RESPOND)\n\n`;
+    systemPrompt += `0. CRITICAL — When you output a tool call, do NOT include any text before or after it. The tool call JSON IS your entire response. No "I'll check", no "Let me", no "Running...". Just the JSON.\n`;
     systemPrompt += `1. CALL ONE TOOL AT A TIME. Never call multiple tools simultaneously. Each call must be deliberate.\n`;
     systemPrompt += `2. READ the entire <tool_result> content before deciding your next action.\n`;
     systemPrompt += `3. CHECK the result: Did the tool do what you expected?\n`;
