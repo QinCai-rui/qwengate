@@ -20,6 +20,7 @@ function showHelp() {
   log('');
   log('COMMANDS');
   log('  start          Start the API server (default)');
+  log('  update         Pull latest code and reinstall dependencies');
   log('  restart        Restart the running server');
   log('  status         Check if the server is running');
   log('  help           Show this help message');
@@ -31,6 +32,7 @@ function showHelp() {
   log('');
   log('EXAMPLES');
   log('  qg                    Start the server');
+  log('  qg update             Update to latest version');
   log('  qg start --port 8080  Start on port 8080');
   log('  qg restart            Restart the server');
   log('  qg status             Check server status');
@@ -71,6 +73,24 @@ async function startServer(args: string[]) {
 
   server.on('error', (e) => { err(`Failed to start: ${e.message}`); process.exit(1); });
   server.on('exit', (code) => process.exit(code ?? 0));
+}
+
+async function doUpdate() {
+  const repoDir = resolve(__dirname, '..');
+  const isWin = process.platform === 'win32';
+
+  log('Pulling latest code...');
+  const pull = spawn('git', ['pull', '--ff-only'], { cwd: repoDir, stdio: 'inherit', shell: true });
+  const pullCode = await new Promise<number | null>((r) => { pull.on('close', r); });
+  if (pullCode !== 0) { err('git pull failed'); process.exit(1); }
+
+  log('Reinstalling dependencies...');
+  const npmCmd = isWin ? 'npm.cmd' : 'npm';
+  const install = spawn(npmCmd, ['install'], { cwd: repoDir, stdio: 'inherit', shell: true });
+  const installCode = await new Promise<number | null>((r) => { install.on('close', r); });
+  if (installCode !== 0) { err('npm install failed'); process.exit(1); }
+
+  log('Update complete. Restart the server with: qg restart');
 }
 
 async function checkStatus() {
@@ -115,6 +135,9 @@ async function main() {
   }
 
   switch (command) {
+    case 'update':
+      await doUpdate();
+      break;
     case 'restart':
       await restartServer();
       break;

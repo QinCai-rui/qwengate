@@ -98,6 +98,25 @@ curl -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.s
 
 This clones the repo, installs dependencies, creates `config.json`, and symlinks the `qg` / `qwengate` / `qwen-gate` CLI commands.
 
+### Windows Install
+
+Open **PowerShell** (as administrator) and run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "curl.exe -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.ps1 | iex"
+```
+
+Or clone manually:
+
+```powershell
+git clone https://github.com/youssefvdel/qwen-gate.git
+cd qwen-gate
+copy config.example.jsonc config.json
+npm install
+```
+
+Then run `qg` to start the server.
+
 ### Manual Install
 
 ```bash
@@ -296,6 +315,7 @@ Usage: qg [command] [options]
 
 Commands:
   start          Start the API server (default)
+  update         Pull latest code and reinstall dependencies
   restart        Restart the running server
   status         Check if the server is running
   help           Show help message
@@ -310,12 +330,32 @@ Account management is done via the web dashboard → Accounts page.
 
 ## Updating
 
+### Via CLI (easiest)
+
 ```bash
-# Re-run the installer (pulls latest + re-installs)
+qg update
+```
+
+This runs `git pull --ff-only && npm install`. Then restart the server:
+
+```bash
+qg restart
+```
+
+### Manual
+
+```bash
+git pull && npm install && qg restart
+```
+
+### Re-run the installer
+
+```bash
+# Linux / macOS
 curl -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.sh | bash
 
-# Or manually
-git pull && npm install && qg restart
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -c "curl.exe -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.ps1 | iex"
 ```
 
 The server checks for new GitHub releases on startup and logs a warning in the dashboard when an update is available.
