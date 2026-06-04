@@ -26,8 +26,9 @@ Then open [http://localhost:26405/dashboard](http://localhost:26405/dashboard) t
 
 ## Features
 
+- **Free Qwen Models** — Use Qwen 3.7-Max, Qwen 3-Max, Qwen 3-Plus, and more for free in your existing tools. Point Claude Code, OpenCode, Qwen Code, Cursor, or any OpenAI-compatible client at Qwen Gate and use Qwen models without paying per-token.
 - **OpenAI-Compatible API** — Drop-in replacement for `/v1/chat/completions` and `/v1/models`. Works with existing OpenAI SDKs, curl, or any HTTP client.
-- **Multi-Account Rotation** — Configure multiple Qwen accounts. Requests are distributed via round-robin with automatic failover and cooldown tracking.
+- **Multi-Account Rotation** — Configure multiple Qwen accounts (3+ recommended). Requests are distributed via round-robin with automatic failover and cooldown tracking — cooldown limits become a non-issue.
 - **Session Pooling** — Browser sessions are pooled, reused, and autoscaled under load. No per-request login overhead.
 - **Tool Calling** — Full OpenAI-style function calling with JSON Schema validation, echo detection, and spam guards.
 - **Streaming SSE** — Server-Sent Events with heartbeat keep-alive and content filter integrity maintained across stream boundaries.
@@ -98,6 +99,23 @@ The server starts on [http://localhost:26405](http://localhost:26405).
 3. Click **Add Account** — the gateway handles login and session persistence
 
 ## Usage
+
+### Use with Any OpenAI-Compatible Client
+
+Qwen Gate exposes a standard OpenAI API — point any client at it:
+
+```bash
+# Claude Code — add to your CLAUDE.md or run:
+export ANTHROPIC_BASE_URL=http://localhost:26405/v1
+
+# OpenCode — set in your config:
+OPENAI_BASE_URL=http://localhost:26405/v1
+
+# Any OpenAI SDK — just change the base URL:
+openai.base_url = "http://localhost:26405/v1"
+```
+
+> **Tip:** Use `model: "qwen3.7-max"` for the latest Qwen model. Available models: `qwen3-max`, `qwen3.7-max`, `qwen3-plus`, `qwen-turbo`, `qwen3`.
 
 ### Chat Completion
 
