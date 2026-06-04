@@ -39,10 +39,11 @@ ok "Repository ready at $INSTALL_DIR"
 # ── Install dependencies ────────────────────────────────────────────
 
 info "Installing dependencies (this may take a minute)..."
-(cd "$INSTALL_DIR" && npm install) || fail "npm install failed — check Node.js/npm version"
+# Use --prefix and stdin redirect to work reliably in piped (curl | bash) context
+npm --prefix "$INSTALL_DIR" install --no-audit --no-fund </dev/null || fail "npm install failed — check Node.js/npm version"
 if [ ! -d "$INSTALL_DIR/node_modules" ] || [ -z "$(ls -A "$INSTALL_DIR/node_modules" 2>/dev/null)" ]; then
   info "Retrying npm install..."
-  (cd "$INSTALL_DIR" && npm install) || fail "npm install failed on retry"
+  npm --prefix "$INSTALL_DIR" install --no-audit --no-fund </dev/null || fail "npm install failed on retry"
 fi
 PACKAGE_COUNT=$(ls "$INSTALL_DIR/node_modules" 2>/dev/null | wc -l)
 ok "Dependencies installed ($PACKAGE_COUNT packages)"
