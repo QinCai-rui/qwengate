@@ -677,7 +677,7 @@ export function buildPromptAndSystem(
   messages: any[],
   body: any,
   availableTokens: number,
-  toolCalling: boolean,
+  _toolCalling: boolean,
 ): PromptBuildResult {
   let prompt = "";
   let systemPrompt = "";
@@ -807,11 +807,6 @@ export function buildPromptAndSystem(
       systemPrompt += `CRITICAL: You MUST call the tool "${forcedTool}" in this response.\n\n`;
     }
   }
-  if (toolCalling) {
-    // All behavioral rules are in DEFAULT_SYSTEM_PROMPT (qwenModels.ts) — the real system prompt sent via Qwen's settings API.
-    // Only per-request dynamic content goes here: tool definitions, tool_choice directives.
-  }
-
   return { prompt, systemPrompt, toolResultContents };
 }
 
