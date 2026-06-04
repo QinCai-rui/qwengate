@@ -20,7 +20,6 @@ import {
   getAccountStats,
   getAccountCount,
   getAvailableCount,
-  reloadAccounts,
   getAllAccountEmails,
 } from "./services/auth.ts";
 import { accountsRouter } from "./routes/accounts.ts";
