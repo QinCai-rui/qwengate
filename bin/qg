@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # qg — Qwen Gate CLI
-set -euo pipefail
+set -uo pipefail
 
 SOURCE="${BASH_SOURCE[0]}"
 while [ -L "$SOURCE" ]; do
@@ -11,12 +11,22 @@ done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# ── Ensure dependencies are installed ────────────────────────────────
+# npm is fast when everything is cached — this always ensures deps exist
+
+(cd "$PROJECT_ROOT" && npm install --no-audit --no-fund --silent) </dev/null || {
+  echo "[qg] npm install failed. Run 'npm install' manually in $PROJECT_ROOT" >&2
+  exit 1
+}
+
+# ── Run CLI ──────────────────────────────────────────────────────────
+
 # Try tsx first (dev), fall back to dist/index.js (built)
 if command -v npx &>/dev/null; then
   exec npx tsx "$PROJECT_ROOT/src/cli.ts" "$@"
 elif [ -f "$PROJECT_ROOT/dist/index.js" ]; then
   exec node "$PROJECT_ROOT/dist/index.js" "$@"
 else
-  echo "Error: Qwen Gate not built. Run 'npm run build' or 'npx tsx src/cli.ts $*'" >&2
+  echo "[qg] Error: Qwen Gate not built. Run 'npm run build' or 'npx tsx src/cli.ts $*'" >&2
   exit 1
 fi

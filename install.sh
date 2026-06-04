@@ -38,23 +38,30 @@ ok "Repository ready at $INSTALL_DIR"
 
 # ── Install dependencies ────────────────────────────────────────────
 
-info "Installing dependencies (this may take a minute)..."
-# Use --prefix and stdin redirect to work reliably in piped (curl | bash) context
-npm --prefix "$INSTALL_DIR" install --no-audit --no-fund </dev/null || fail "npm install failed — check Node.js/npm version"
-if [ ! -d "$INSTALL_DIR/node_modules" ] || [ -z "$(ls -A "$INSTALL_DIR/node_modules" 2>/dev/null)" ]; then
-  info "Retrying npm install..."
-  npm --prefix "$INSTALL_DIR" install --no-audit --no-fund </dev/null || fail "npm install failed on retry"
-fi
-PACKAGE_COUNT=$(ls "$INSTALL_DIR/node_modules" 2>/dev/null | wc -l)
-ok "Dependencies installed ($PACKAGE_COUNT packages)"
+info "Running npm install (this may take a minute)..."
+cd "$INSTALL_DIR" || fail "Cannot cd to $INSTALL_DIR"
 
-info "CloakBrowser binary will auto-download on first launch"
+# Clean install
+rm -rf node_modules 2>/dev/null
+npm install --no-audit --no-fund || {
+  info "First attempt failed, retrying..."
+  npm install --no-audit --no-fund || fail "npm install failed — check your network and Node.js/npm version"
+}
+
+# Verify installation
+if [ ! -d "node_modules" ] || [ -z "$(ls -A node_modules 2>/dev/null)" ]; then
+  fail "npm install completed but node_modules is empty"
+fi
+
+PACKAGE_COUNT=$(find node_modules -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+ok "npm install complete ($PACKAGE_COUNT packages)"
 
 # ── Configuration ──────────────────────────────────────────────────
 
-if [ ! -f "$INSTALL_DIR/config.json" ]; then
-  cp "$INSTALL_DIR/config.example.jsonc" "$INSTALL_DIR/config.json"
-  info "Created config.json from example — edit it before starting"
+if [ ! -f "config.json" ]; then
+  # Strip JSONC comments before writing to config.json
+  sed 's|//.*||' config.example.jsonc > config.json
+  info "Created config.json from example"
 else
   ok "config.json already exists"
 fi
@@ -75,6 +82,15 @@ if ! command -v qg &>/dev/null; then
   printf '  \033[1mexport PATH="%s:\$PATH"\033[0m\n\n' "$BIN_DIR"
 fi
 ok "CLI installed as 'qg', 'qwengate', 'qwen-gate'"
+
+# ── Verify installation ────────────────────────────────────────────
+
+info "Verifying installation..."
+if "$INSTALL_DIR/bin/qg" --help >/dev/null 2>&1; then
+  ok "Installation verified — qg is working"
+else
+  fail "Installation verification failed — try running 'npm install' manually in $INSTALL_DIR"
+fi
 
 # ── Done ───────────────────────────────────────────────────────────
 
