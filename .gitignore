@@ -62,8 +62,7 @@ scripts/discovery-output*.json
 graphify-out/
 output-bugs/
 
-# Static assets (generated/build artifacts)
-src/routes/dashboard/public/
+
 
 # Screenshots and media
 pics/
