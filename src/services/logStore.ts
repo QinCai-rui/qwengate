@@ -22,6 +22,7 @@ export interface LogEntry {
   id: string;
   timestamp: string;
   model: string;
+  turnId?: string;
   stream: boolean;
   accountEmail: string;
   level: import("./systemLogger.ts").LogLevel;

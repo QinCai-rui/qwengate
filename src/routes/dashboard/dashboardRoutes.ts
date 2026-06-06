@@ -223,7 +223,33 @@ export function registerDashboardRoutes(app: Hono): void {
   app.get("/metrics/model-health", modelHealthHandler);
 
   app.get("/log", (c) => c.redirect("/dashboard/logs"));
-  app.get("/log/json", (c) => c.json(logStore.getRecent(10)));
+  app.get("/log/json", (c) => {
+    const entries = logStore.getRecent(50);
+    const serialized = entries.map((e) => {
+      const dt = new Date(e.timestamp);
+      const datePart = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+      const timePart = `${String(dt.getHours()).padStart(2, "0")}-${String(dt.getMinutes()).padStart(2, "0")}-${String(dt.getSeconds()).padStart(2, "0")}`;
+      return {
+        id: e.id,
+        date: datePart,
+        time: timePart,
+        model: e.model,
+        turnId: e.turnId || "",
+        raw_output: e.rawFullContent || "",
+        processed_output: {
+          content: e.processedApiOutput || "",
+          tool_calls: (e.parsedToolCalls || []).map((tc) => {
+            let args: unknown = tc.args;
+            try { args = JSON.parse(tc.args); } catch { /* keep as string */ }
+            return { name: tc.name, arguments: args };
+          }),
+        },
+        chunks: (e.qwenRawChunks || []) as string[],
+        input: e.clientRequest || {},
+      };
+    });
+    return c.json(serialized);
+  });
   app.get("/log/stream", logStreamHandler);
   app.get("/metrics/uptime", (c) => c.json({ uptimeSeconds: logStore.getUptimeSeconds() }));
 }
