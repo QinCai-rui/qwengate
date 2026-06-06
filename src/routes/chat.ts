@@ -128,13 +128,24 @@ async function setupSession(
 
 export async function chatCompletions(c: Context) {
   const logId = uuidv4();
-  const parsed = await parseRequestBody(c);
-  const { body, isStream } = parsed;
-  logStore.createEntry(logId, body.model, isStream);
   try {
     const parsed = await parseRequestBody(c);
     const { body, isStream, toolCalling, cleanOutput, messages, contextCheck } =
       parsed;
+    logStore.createEntry(logId, body.model, isStream);
+    const logEntry = logStore.getEntry(logId);
+    if (logEntry) {
+      const lastMsg = messages.length > 0 ? (typeof messages[messages.length - 1].content === 'string' ? messages[messages.length - 1].content : JSON.stringify(messages[messages.length - 1].content)) : '';
+      logEntry.clientRequest = {
+        messageCount: messages.length,
+        roles: messages.map((m) => m.role),
+        hasTools: !!body.tools?.length,
+        toolNames: body.tools?.map((t: any) => t.function?.name || t.name) || [],
+        tool_choice: body.tool_choice ? (typeof body.tool_choice === "string" ? body.tool_choice : JSON.stringify(body.tool_choice)) : null,
+        lastMessage: lastMsg.substring(0, 300),
+        messages: messages.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
+      };
+    }
 
     if (!contextCheck.ok) {
       return c.json(
