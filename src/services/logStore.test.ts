@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { logStore } from './logStore';
 
-test('logStore createEntry emits valid JSON with required structured fields', () => {
-  const entry = logStore.createEntry(
+test('logStore createLogEntry emits valid JSON with required structured fields', () => {
+  const entry = logStore.createLogEntry(
     'test-123',
     'qwen3.5-plus',
     true,
@@ -36,8 +36,8 @@ test('logStore createEntry emits valid JSON with required structured fields', ()
   });
 });
 
-test('logStore createEntry uses id as request_id when not provided', () => {
-  const entry = logStore.createEntry('auto-req-789', 'qwen3.6-plus', false);
+test('logStore createLogEntry uses id as request_id when not provided', () => {
+  const entry = logStore.createLogEntry('auto-req-789', 'qwen3.6-plus', false);
   const jsonStr = JSON.stringify(entry);
   const parsed = JSON.parse(jsonStr);
   assert.strictEqual(parsed.request_id, 'auto-req-789');

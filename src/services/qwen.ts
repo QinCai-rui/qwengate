@@ -7,6 +7,13 @@ import { config } from './configService.ts';
 
 export { fetchQwenModels, disableNativeTools, disablePersonalization, setCustomInstruction, configureAccount, deleteAllChats } from './qwenModels.ts';
 
+// Shared URL constants for Qwen API
+export const QWEN_API_BASE = 'https://chat.qwen.ai';
+export const QWEN_CHAT_COMPLETIONS_URL = `${QWEN_API_BASE}/api/v2/chat/completions`;
+export const QWEN_SETTINGS_URL = `${QWEN_API_BASE}/api/v2/users/user/settings/update`;
+export const QWEN_CHATS_URL = `${QWEN_API_BASE}/api/v2/chats/`;
+export const QWEN_MODELS_URL = `${QWEN_API_BASE}/api/models`;
+
 export class RetryableQwenStreamError extends Error {
   readonly retryAfterMs: number;
   constructor(message: string, retryAfterMs: number) {
@@ -146,8 +153,8 @@ export async function createQwenStream(
   };
 
   const url = chatId
-    ? `https://chat.qwen.ai/api/v2/chat/completions?chat_id=${chatId}`
-    : 'https://chat.qwen.ai/api/v2/chat/completions';
+    ? `${QWEN_CHAT_COMPLETIONS_URL}?chat_id=${chatId}`
+    : QWEN_CHAT_COMPLETIONS_URL;
 
   const retryConfig = {
     maxRetries: Math.max(0, parseInt(config.get('RETRY_MAX_ATTEMPTS', '3'), 10)),
@@ -168,7 +175,7 @@ export async function createQwenStream(
       'accept-language': 'pt-BR,pt;q=0.9',
       'content-type': 'application/json',
       'cookie': reqHeaders['cookie'],
-      'origin': 'https://chat.qwen.ai',
+      'origin': QWEN_API_BASE,
       'referer': chatId ? `https://chat.qwen.ai/c/${chatId}` : 'https://chat.qwen.ai/',
       'sec-fetch-dest': 'empty',
       'sec-fetch-mode': 'cors',

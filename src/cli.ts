@@ -8,39 +8,40 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = resolve(__dirname, 'index.tsx');
 const DIST_ENTRY = resolve(__dirname, '..', 'dist', 'index.js');
 
+const out = (s: string) => process.stdout.write(s + '\n');
 function err(msg: string) { console.error(`[qg] ${msg}`); }
 
 function showHelp() {
-  log('');
-  log('Qwen Gate — OpenAI-compatible gateway for Qwen AI');
-  log('');
-  log('USAGE');
-  log('  qg [command] [options]');
-  log('');
-  log('COMMANDS');
-  log('  start          Start the API server (default)');
-  log('  update         Pull latest code and reinstall dependencies');
-  log('  restart        Restart the running server');
-  log('  status         Check if the server is running');
-  log('  help           Show this help message');
-  log('');
-  log('OPTIONS');
-  log('  --port <n>     Override port (default: from config or 26405)');
-  log('  --browser <e>  Browser engine: chromium, firefox, chrome, edge');
-  log('  --host <addr>  Bind address (default: from config or localhost)');
-  log('');
-  log('EXAMPLES');
-  log('  qg                    Start the server');
-  log('  qg update             Update to latest version');
-  log('  qg start --port 8080  Start on port 8080');
-  log('  qg restart            Restart the server');
-  log('  qg status             Check server status');
-  log('  qg help               Show this message');
-  log('');
-  log('ACCOUNT MANAGEMENT');
-  log('  Use the web dashboard at http://localhost:26405/dashboard/accounts');
-  log('  to add, remove, and manage your Qwen accounts.');
-  log('');
+  out('');
+  out('Qwen Gate — OpenAI-compatible gateway for Qwen AI');
+  out('');
+  out('USAGE');
+  out('  qg [command] [options]');
+  out('');
+  out('COMMANDS');
+  out('  start          Start the API server (default)');
+  out('  update         Pull latest code and reinstall dependencies');
+  out('  restart        Restart the running server');
+  out('  status         Check if the server is running');
+  out('  help           Show this help message');
+  out('');
+  out('OPTIONS');
+  out('  --port <n>     Override port (default: from config or 26405)');
+  out('  --browser <e>  Browser engine: chromium, firefox, chrome, edge');
+  out('  --host <addr>  Bind address (default: from config or localhost)');
+  out('');
+  out('EXAMPLES');
+  out('  qg                    Start the server');
+  out('  qg update             Update to latest version');
+  out('  qg start --port 8080  Start on port 8080');
+  out('  qg restart            Restart the server');
+  out('  qg status             Check server status');
+  out('  qg help               Show this message');
+  out('');
+  out('ACCOUNT MANAGEMENT');
+  out('  Use the web dashboard at http://localhost:26405/dashboard/accounts');
+  out('  to add, remove, and manage your Qwen accounts.');
+  out('');
 }
 
 function findEntry(): string {
@@ -62,8 +63,8 @@ async function startServer(args: string[]) {
   const entry = findEntry();
   const runner = entry.endsWith('.tsx') ? 'tsx' : 'node';
 
-  log(`Starting server (${runner} ${entry})...`);
-  if (extraArgs.length) log(`Extra args: ${extraArgs.join(' ')}`);
+  out(`Starting server (${runner} ${entry})...`);
+  if (extraArgs.length) out(`Extra args: ${extraArgs.join(' ')}`);
 
   const server = spawn(runner, [entry, ...extraArgs], {
     stdio: 'inherit',
@@ -78,18 +79,18 @@ async function doUpdate() {
   const repoDir = resolve(__dirname, '..');
   const isWin = process.platform === 'win32';
 
-  log('Pulling latest code...');
+  out('Pulling latest code...');
   const pull = spawn('git', ['pull', '--ff-only'], { cwd: repoDir, stdio: 'inherit', shell: true });
   const pullCode = await new Promise<number | null>((r) => { pull.on('close', r); });
   if (pullCode !== 0) { err('git pull failed'); process.exit(1); }
 
-  log('Reinstalling dependencies...');
+  out('Reinstalling dependencies...');
   const npmCmd = isWin ? 'npm.cmd' : 'npm';
   const install = spawn(npmCmd, ['install'], { cwd: repoDir, stdio: 'inherit', shell: true });
   const installCode = await new Promise<number | null>((r) => { install.on('close', r); });
   if (installCode !== 0) { err('npm install failed'); process.exit(1); }
 
-  log('Update complete. Restart the server with: qg restart');
+  out('Update complete. Restart the server with: qg restart');
 }
 
 async function checkStatus() {
@@ -97,7 +98,7 @@ async function checkStatus() {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/v1/models`);
     if (res.ok) {
-      log(`Server is running on port ${port}`);
+      out(`Server is running on port ${port}`);
       return;
     }
   } catch {
@@ -113,14 +114,14 @@ async function restartServer() {
     ? 'taskkill /F /IM tsx.exe 2>nul; taskkill /F /IM node.exe 2>nul || exit 0'
     : 'pkill -f "tsx.*index.ts" 2>/dev/null; pkill -f "node.*dist/index.js" 2>/dev/null; exit 0';
 
-  log('Stopping server...');
+  out('Stopping server...');
   await new Promise<void>((resolve) => {
     const p = spawn(killCmd, { shell: true, stdio: 'ignore' });
     p.on('close', () => resolve());
   });
 
   await new Promise((r) => setTimeout(r, 1000));
-  log('Starting server...');
+  out('Starting server...');
   await startServer([]);
 }
 
@@ -149,7 +150,7 @@ async function main() {
       await startServer(args);
       break;
     default:
-      log(`Starting server... (unknown command '${command}' — defaulting to start)`);
+      out(`Starting server... (unknown command '${command}' — defaulting to start)`);
       await startServer(args);
       break;
   }

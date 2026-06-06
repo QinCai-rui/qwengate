@@ -1,11 +1,9 @@
 /*
  * File: logStore.ts
- * In-memory log store — captures client requests and Qwen responses
+ * In-memory request log store — captures client requests and Qwen responses
  * for viewing at http://qwen-gate/log (SSE) and http://qwen-gate/log/json
  *
- * Also provides a system-level logger with levels, categories, filtering,
- * and optional file persistence for operational events (auth, circuit breaker,
- * session pool, streaming failures, etc.).
+ * System-level logging has been extracted to SystemLogger (systemLogger.ts).
  */
 import { appendFileSync, mkdirSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -17,34 +15,16 @@ import {
   getAllModelHealth as _getAllModelHealth,
 } from "./modelHealth.ts";
 import { config } from "./configService.ts";
-export type LogLevel = "debug" | "info" | "warn" | "error";
-const LOG_LEVEL_RANK: Record<LogLevel, number> = {
-  debug: 0,
-  info: 1,
-  warn: 2,
-  error: 3,
-};
-export interface SystemLogEntry {
-  id: string;
-  timestamp: string;
-  level: LogLevel;
-  category: string;
-  message: string;
-  metadata?: Record<string, unknown>;
-}
-export interface SystemLogFilter {
-  minLevel?: LogLevel;
-  category?: string;
-  since?: string;
-  limit?: number;
-}
+import { SystemLogger, __registerLogStore } from "./systemLogger.ts";
+export { logStore, SystemLogger } from "./systemLogger.ts";
+export type { LogLevel, SystemLogEntry, SystemLogFilter } from "./systemLogger.ts";
 export interface LogEntry {
   id: string;
   timestamp: string;
   model: string;
   stream: boolean;
   accountEmail: string;
-  level: LogLevel;
+  level: import("./systemLogger.ts").LogLevel;
   request_id: string;
   latency_ms: number | null;
   tokens: { prompt: number; completion: number; total: number } | null;
@@ -108,15 +88,11 @@ export interface LogEntry {
 }
 const MAX_ENTRIES = parseInt(config.get("MAX_LOGS", "50"), 10);
 const MAX_CHUNKS_PER_ENTRY = 100;
-const MAX_SYSTEM_ENTRIES = 200;
 const MAX_FIELD_LENGTH = 10240;
-class LogStore {
+export class RequestLogStore extends SystemLogger {
   private entries: LogEntry[] = [];
   private entryMap: Map<string, LogEntry> = new Map();
-  private systemEntries: SystemLogEntry[] = [];
   private listeners: Set<(entry: LogEntry) => void> = new Set();
-  private systemListeners: Set<(entry: SystemLogEntry) => void> = new Set();
-  private systemIdCounter = 0;
   private serverStartTime = Date.now();
   private requestLogDir: string | null = null;
   private requestDirMap: Map<string, string> = new Map();
@@ -173,80 +149,16 @@ class LogStore {
     }
   }
 
-  log(
-    level: LogLevel,
-    category: string,
-    message: string,
-    metadata?: Record<string, unknown>,
-  ): void {
-    const entry: SystemLogEntry = {
-      id: `sys-${++this.systemIdCounter}`,
-      timestamp: new Date().toISOString(),
-      level,
-      category,
-      message,
-      metadata,
-    };
-    this.systemEntries.unshift(entry);
-    if (this.systemEntries.length > MAX_SYSTEM_ENTRIES)
-      this.systemEntries.pop();
-    for (const listener of this.systemListeners) {
-      try {
-        listener(entry);
-      } catch (err) {
-        console.error("[LogStore] System log listener error:", err);
-      }
-    }
-  }
-  debug(
-    category: string,
-    message: string,
-    metadata?: Record<string, unknown>,
-  ): void {
-    this.log("debug", category, message, metadata);
-  }
-  info(
-    category: string,
-    message: string,
-    metadata?: Record<string, unknown>,
-  ): void {
-    this.log("info", category, message, metadata);
-  }
-  warn(
-    category: string,
-    message: string,
-    metadata?: Record<string, unknown>,
-  ): void {
-    this.log("warn", category, message, metadata);
-  }
-  error(
-    category: string,
-    message: string,
-    metadata?: Record<string, unknown>,
-  ): void {
-    this.log("error", category, message, metadata);
-  }
-  getSystemLogs(filter?: SystemLogFilter): SystemLogEntry[] {
-    let result = this.systemEntries;
-    if (filter?.minLevel) {
-      const minRank = LOG_LEVEL_RANK[filter.minLevel];
-      result = result.filter((e) => LOG_LEVEL_RANK[e.level] >= minRank);
-    }
-    if (filter?.category) {
-      result = result.filter((e) => e.category === filter.category);
-    }
-    if (filter?.since) {
-      result = result.filter((e) => e.timestamp >= filter.since!);
-    }
-    return result.slice(0, filter?.limit ?? 100);
-  }
-  subscribeSystem(listener: (entry: SystemLogEntry) => void): () => void {
-    this.systemListeners.add(listener);
-    return () => {
-      this.systemListeners.delete(listener);
-    };
-  }
   createEntry(
+    id: string,
+    model: string,
+    stream: boolean,
+    requestId?: string,
+    accountEmail?: string,
+  ): LogEntry {
+    return this.createLogEntry(id, model, stream, requestId, accountEmail);
+  }
+  createLogEntry(
     id: string,
     model: string,
     stream: boolean,
@@ -458,5 +370,24 @@ class LogStore {
     this.toolCallValidationFailures = 0;
     this.hallucinatedToolNames = 0;
   }
+  finalizeRequest(
+    id: string,
+    options: {
+      latencyMs: number;
+      tokens: { prompt: number; completion: number; total: number };
+      finishReason: string;
+    },
+  ): void {
+    this.updateEntry(id, (entry) => {
+      entry.latency_ms = options.latencyMs;
+      entry.tokens = options.tokens;
+      if (entry.finalResponse) {
+        entry.finalResponse.finishReason = options.finishReason;
+      }
+    });
+  }
 }
-export const logStore = new LogStore();
+
+const logStoreInstance = new RequestLogStore();
+__registerLogStore(logStoreInstance);
+

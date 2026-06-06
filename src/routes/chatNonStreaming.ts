@@ -140,7 +140,6 @@ export async function handleNonStreamingRequest(ctx: NonStreamingContext): Promi
                   const detection = detectCumulativeChunk(parserText, lastFullContent);
                   if (detection.cumulative) {
                     lastFullContent = parserText;
-                  } else if (detection.delta === '') {
                   } else {
                     lastFullContent += parserText;
                   }
@@ -243,16 +242,6 @@ export async function handleNonStreamingRequest(ctx: NonStreamingContext): Promi
       if (correctionPrompts.length > 0) entry.errors.push(...correctionPrompts);
     });
 
-    if (false) {
-      logDebug('OUTGOING RESPONSE', {
-        finish_reason: toolCallsOut.length ? 'tool_calls' : 'stop',
-        content: lastFullContent.length > 500 ? lastFullContent.substring(0, 500) + '...' : lastFullContent,
-        toolCalls: toolCallsOut.map((tc: any) => ({ name: tc.function?.name, args: tc.function?.arguments })),
-        toolCallCount: toolCallsOut.length,
-        usage,
-      });
-    }
-
     if (correctionPrompts.length > 0) {
       pendingCorrections.set(session.chatId, [...correctionPrompts]);
     }
@@ -274,10 +263,8 @@ export async function handleNonStreamingRequest(ctx: NonStreamingContext): Promi
       usage
     });
   } finally {
-    try { reader.cancel(); } catch {
-    }
-    try { reader.releaseLock(); } catch {
-    }
+    try { reader.cancel(); } catch { /* reader already cancelled */ }
+    try { reader.releaseLock(); } catch { /* reader already cancelled */ }
     if (!nonStreamReleased) {
       sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail);
     }

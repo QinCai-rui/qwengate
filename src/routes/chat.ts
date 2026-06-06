@@ -10,7 +10,6 @@ import { handleStreamingRequest } from "./chatStreaming.ts";
 import { handleNonStreamingRequest } from "./chatNonStreaming.ts";
 import {
   buildPromptAndSystem,
-  createLogEntry,
   handleImageModelFallback,
   getModelSpecs,
   acquireSessionWithCorrections,
@@ -38,24 +37,6 @@ export async function chatCompletions(c: Context) {
     const cleanOutput = config.get("CLEAN_OUTPUT", "true") !== "false";
 
     const messages = body.messages || [];
-    const lastMsg = messages.length > 0 ? messages[messages.length - 1] : null;
-    const lastMsgContent = lastMsg
-      ? Array.isArray(lastMsg.content)
-        ? lastMsg.content
-            .filter((p: any) => p.type === "text")
-            .map((p: any) => p.text)
-            .join(" ")
-        : String(lastMsg.content ?? "")
-      : "";
-
-    const logEntry = createLogEntry(
-      logId,
-      body,
-      isStream,
-      messages,
-      lastMsgContent,
-    );
-
     logIncomingRequest(body, isStream, messages);
 
     handleImageModelFallback(body, messages);
