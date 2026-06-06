@@ -83,6 +83,12 @@ export function stripToolCallArtifacts(text: string): string {
   text = text.replace(/\n?<to(?:ol?)?$/g, '');
   // Only strip trailing <t or < if preceded by tool_, tool, to_, etc — never standalone
   text = text.replace(/\n?(?:<to(?:o(?:l)?)?|<\S*?t)$/g, '');
+  // Strip legacy <invoke> XML format and broken artifacts (observed in logs)
+  text = text.replace(/<invoke\s+[^>]*\/?>/g, '');
+  text = text.replace(/<\/invoke[^>]*>/g, '');
+  text = text.replace(/<invoke>[\s\S]*?<\/invoke>/g, '');
+  text = text.replace(/<\/(?:<\s*\/?[a-z_][^>]*>)[^>]*>/g, '');
+  text = text.replace(/<\/(?=<[a-z_/])[^>]*>/g, '');
   text = text.replace(/Tool Response \([^)]+\):[^\n]*(?:\n(?!\s*(?:\n|$)|Tool Response\s*\(|{"name)[^\n]*)*/g, '');
   text = text.replace(/[a-z_][a-z_0-9]*(?:\.[a-z_][a-z_0-9]*)*"\s*,\s*"arguments"\s*:\s*\}/g, '');
   text = text.replace(/"arguments"\s*:\s*\}/g, '');
@@ -119,6 +125,10 @@ export function stripStreamingDelta(delta: string): string {
   cleaned = cleaned.replace(/,\s*"arguments"\s*:/g, '');
   cleaned = cleaned.replace(/(?:argumen|argument|arguments|param|parameter|parameters)":\s*/gi, '');
   cleaned = cleaned.replace(/Tool Response \([a-z_]+$/gm, '');
+  cleaned = cleaned.replace(/<invoke\s+[^>]*\/?>/g, '');
+  cleaned = cleaned.replace(/<\/invoke[^>]*>/g, '');
+  cleaned = cleaned.replace(/<\/(?:<\s*\/?[a-z_][^>]*>)[^>]*>/g, '');
+  cleaned = cleaned.replace(/<\/(?=<[a-z_/])[^>]*>/g, '');
   cleaned = cleaned.replace(/"[a-z_]+(?:\.[a-z_]+)*"\s*,\s*"(?:arguments|parameters)"?\s*:?/gi, '');
   cleaned = cleaned.replace(/"(?:argumen|argument|arguments|param|parameter|parameters|name)"?\s*:?\s*"?$/gm, '');
   cleaned = cleaned.replace(/"?\s*:\s*"[a-z_]+(?:\.[a-z_]+)*"?\s*,?\s*"?(?:arguments|parameters)?"?\s*:?$/gm, '');

@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { validateSingleToolCall } from "../tools/guard.ts";
 import type { ParsedToolCall } from "../tools/types.ts";
-import { config } from "../services/configService.ts";
 import { logStore } from "../services/logStore.ts";
 import { sessionPool } from "../services/sessionPool.ts";
 import { createQwenStream } from "../services/qwen.ts";

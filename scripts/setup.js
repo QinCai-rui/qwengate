@@ -110,7 +110,7 @@ async function main() {
 
   writeFileSync(CONFIG_PATH, JSON.stringify(newConfig, null, 2) + '\n');
   if (!useDefaults) console.log(`\n  ✅ Config saved to ${CONFIG_PATH}`);
-  console.log('\n  Run \`npm start\` to launch Qwen Gate.\n');
+  console.log('\n  Run `npm start` to launch Qwen Gate.\n');
 }
 
 main().catch((e) => {

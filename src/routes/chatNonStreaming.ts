@@ -15,7 +15,6 @@ import {
   ToolSpamGuard,
   pendingCorrections,
 } from './chatHelpers.ts';
-import { config } from '../services/configService.ts';
 import type { ParsedToolCall } from '../tools/types.ts';
 
 export interface NonStreamingContext {

@@ -8,7 +8,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = resolve(__dirname, 'index.tsx');
 const DIST_ENTRY = resolve(__dirname, '..', 'dist', 'index.js');
 
-function log(msg: string) { console.log(`[qg] ${msg}`); }
 function err(msg: string) { console.error(`[qg] ${msg}`); }
 
 function showHelp() {
