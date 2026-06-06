@@ -51,6 +51,127 @@ function removeTrailingCommas(json: string): string {
   return result;
 }
 
+/**
+ * Escape control characters in JSON strings and track brace/bracket depth.
+ * Returns the escaped string along with depth tracking information for balancing.
+ */
+function escapeControlChars(input: string): {
+  fixedJson: string;
+  openBraces: number;
+  openBrackets: number;
+  lastBalancedIndex: number;
+} {
+  let fixedJson = '';
+  let openBraces = 0;
+  let openBrackets = 0;
+  let inString = false;
+  let escaped = false;
+  let lastBalancedIndex = -1;
+
+  for (let i = 0; i < input.length; i++) {
+    const char = input[i];
+
+    if (escaped) {
+      const validEscapes = ['n', 'r', 't', 'u', '"', '\\', '/'];
+      if (validEscapes.includes(char)) {
+        if (char === 'u') {
+          const next4 = input.substring(i + 1, i + 5);
+          const isHex = /^[0-9a-fA-F]{4}$/.test(next4);
+          if (isHex) {
+            fixedJson += '\\' + char;
+          } else {
+            fixedJson += '\\\\' + char;
+          }
+        } else if (['n', 'r', 't'].includes(char)) {
+          const nextChar = input[i + 1] || '';
+          const isWinPath = /[a-zA-Z]:\\/i.test(input.substring(0, i)) || /[a-zA-Z]:\//i.test(input.substring(0, i));
+          if (isWinPath && /^[a-zA-Z0-9]/.test(nextChar)) {
+            fixedJson += '\\\\' + char;
+          } else {
+            fixedJson += '\\' + char;
+          }
+        } else {
+          fixedJson += '\\' + char;
+        }
+      } else {
+        fixedJson += '\\\\' + char;
+      }
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      fixedJson += char;
+      continue;
+    }
+
+    if (inString) {
+      // Escape literal control characters that are invalid in JSON strings
+      if (char === '\n') fixedJson += '\\n';
+      else if (char === '\r') fixedJson += '\\r';
+      else if (char === '\t') fixedJson += '\\t';
+      else if (char.charCodeAt(0) < 32) {
+        fixedJson += '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0');
+      }
+      else fixedJson += char;
+    } else {
+      fixedJson += char;
+      if (char === '{') openBraces++;
+      if (char === '}') openBraces--;
+      if (char === '[') openBrackets++;
+      if (char === ']') openBrackets--;
+
+      if (openBraces === 0 && openBrackets === 0 && i > 0) {
+        lastBalancedIndex = fixedJson.length - 1;
+      }
+    }
+  }
+
+  return { fixedJson, openBraces, openBrackets, lastBalancedIndex };
+}
+
+/**
+ * Balance unmatched braces/brackets by either truncating at the last balanced
+ * point or appending closing characters.
+ */
+function balanceBraces(
+  fixedJson: string,
+  openBraces: number,
+  openBrackets: number,
+  lastBalancedIndex: number,
+): string {
+  if (lastBalancedIndex !== -1 && (openBraces !== 0 || openBrackets !== 0 || fixedJson.length > lastBalancedIndex + 1)) {
+    return fixedJson.substring(0, lastBalancedIndex + 1);
+  }
+  if (openBraces > 0 || openBrackets > 0) {
+    let result = fixedJson;
+    if (openBrackets > 0) result += ']'.repeat(openBrackets);
+    if (openBraces > 0) result += '}'.repeat(openBraces);
+    return result;
+  }
+  return fixedJson;
+}
+
+/**
+ * Aggressive fallback repair: trim trailing comma, re-escape control chars,
+ * re-balance braces. Used when initial escaping + balancing fails to produce valid JSON.
+ */
+function aggressiveRepair(fixedJson: string): string {
+  let s = fixedJson.trim();
+  if (s.endsWith(',')) s = s.slice(0, -1);
+  const { fixedJson: aggFixed, openBraces, openBrackets } = escapeControlChars(s);
+  let result = aggFixed;
+  if (openBrackets > 0) result += ']'.repeat(openBrackets);
+  if (openBraces > 0) result += '}'.repeat(openBraces);
+  return result;
+}
+
 export function robustParseJSON(str: string): any {
   const trimmed = str.trim();
 
@@ -97,153 +218,16 @@ export function robustParseJSON(str: string): any {
     cleaned = cleaned.slice(0, -1).trim();
   }
 
-  // 2. Pre-process to escape control characters in strings and count braces
-  let fixedJson = '';
-  let openBraces = 0;
-  let openBrackets = 0;
-  let inString = false;
-  let escaped = false;
-  let lastBalancedIndex = -1;
-
-  for (let i = 0; i < cleaned.length; i++) {
-    const char = cleaned[i];
-    
-    if (escaped) {
-      const validEscapes = ['n', 'r', 't', 'u', '"', '\\', '/'];
-      if (validEscapes.includes(char)) {
-        if (char === 'u') {
-          const next4 = cleaned.substring(i + 1, i + 5);
-          const isHex = /^[0-9a-fA-F]{4}$/.test(next4);
-          if (isHex) {
-            fixedJson += '\\' + char;
-          } else {
-            fixedJson += '\\\\' + char;
-          }
-        } else if (['n', 'r', 't'].includes(char)) {
-          const nextChar = cleaned[i + 1] || '';
-          const isWinPath = /[a-zA-Z]:\\/i.test(cleaned.substring(0, i)) || /[a-zA-Z]:\//i.test(cleaned.substring(0, i));
-          if (isWinPath && /^[a-zA-Z0-9]/.test(nextChar)) {
-            fixedJson += '\\\\' + char;
-          } else {
-            fixedJson += '\\' + char;
-          }
-        } else {
-          fixedJson += '\\' + char;
-        }
-      } else {
-        fixedJson += '\\\\' + char;
-      }
-      escaped = false;
-      continue;
-    }
-    
-    if (char === '\\') {
-      escaped = true;
-      continue;
-    }
-    
-    if (char === '"') {
-      inString = !inString;
-      fixedJson += char;
-      continue;
-    }
-    
-    if (inString) {
-      // Escape literal control characters that are invalid in JSON strings
-      if (char === '\n') fixedJson += '\\n';
-      else if (char === '\r') fixedJson += '\\r';
-      else if (char === '\t') fixedJson += '\\t';
-      else if (char.charCodeAt(0) < 32) {
-        fixedJson += '\\u' + char.charCodeAt(0).toString(16).padStart(4, '0');
-      }
-      else fixedJson += char;
-    } else {
-      fixedJson += char;
-      if (char === '{') openBraces++;
-      if (char === '}') openBraces--;
-      if (char === '[') openBrackets++;
-      if (char === ']') openBrackets--;
-      
-      if (openBraces === 0 && openBrackets === 0 && i > 0) {
-        lastBalancedIndex = fixedJson.length - 1;
-      }
-    }
-  }
-
-  let tempJson = fixedJson;
-
-  // If we found a point where it was balanced and there is trailing noise or it didn't stay balanced
-  if (lastBalancedIndex !== -1 && (openBraces !== 0 || openBrackets !== 0 || fixedJson.length > lastBalancedIndex + 1)) {
-    tempJson = fixedJson.substring(0, lastBalancedIndex + 1);
-  } else if (openBraces > 0 || openBrackets > 0) {
-    // If it never balanced, attempt to close everything that is open
-    if (openBrackets > 0) tempJson += ']'.repeat(openBrackets);
-    if (openBraces > 0) tempJson += '}'.repeat(openBraces);
-  }
+  const { fixedJson, openBraces, openBrackets, lastBalancedIndex } = escapeControlChars(cleaned);
+  const tempJson = balanceBraces(fixedJson, openBraces, openBrackets, lastBalancedIndex);
 
   try {
     return JSON.parse(tempJson);
   } catch (e) {
-    // Still fails, try one more aggressive approach: remove trailing comma before closing
-    let aggressive = fixedJson.trim();
-    if (aggressive.endsWith(',')) aggressive = aggressive.slice(0, -1);
-    
-    // Recount for the aggressive version
-    let ob = 0, bk = 0, is = false, esc = false;
-    let aggFixed = '';
-    for (let i = 0; i < aggressive.length; i++) {
-      const char = aggressive[i];
-      if (esc) {
-        const validEscapes = ['n', 'r', 't', 'u', '"', '\\', '/'];
-        if (validEscapes.includes(char)) {
-          if (char === 'u') {
-            const next4 = aggressive.substring(i + 1, i + 5);
-            const isHex = /^[0-9a-fA-F]{4}$/.test(next4);
-            if (isHex) {
-              aggFixed += '\\' + char;
-            } else {
-              aggFixed += '\\\\' + char;
-            }
-          } else if (['n', 'r', 't'].includes(char)) {
-            const isWinPath = /[a-zA-Z]:\\/i.test(aggressive) || /[a-zA-Z]:\//i.test(aggressive);
-            const nextChar = aggressive[i + 1] || '';
-            if (isWinPath && /^[a-zA-Z0-9]/.test(nextChar)) {
-              aggFixed += '\\\\' + char;
-            } else {
-              aggFixed += '\\' + char;
-            }
-          } else {
-            aggFixed += '\\' + char;
-          }
-        } else {
-          aggFixed += '\\\\' + char;
-        }
-        esc = false;
-        continue;
-      }
-      if (char === '\\') { esc = true; continue; }
-      if (char === '"') { is = !is; aggFixed += char; continue; }
-      
-      if (is) {
-        if (char === '\n') aggFixed += '\\n';
-        else if (char === '\r') aggFixed += '\\r';
-        else if (char === '\t') aggFixed += '\\t';
-        else aggFixed += char;
-      } else {
-        aggFixed += char;
-        if (char === '{') ob++;
-        if (char === '}') ob--;
-        if (char === '[') bk++;
-        if (char === ']') bk--;
-      }
-    }
-    
-    if (bk > 0) aggFixed += ']'.repeat(bk);
-    if (ob > 0) aggFixed += '}'.repeat(ob);
-    
+    const repaired = aggressiveRepair(fixedJson);
     try {
-      return JSON.parse(aggFixed);
-    } catch (_e2) {
+      return JSON.parse(repaired);
+    } catch {
       throw e; // Throw original error if all fixes fail
     }
   }

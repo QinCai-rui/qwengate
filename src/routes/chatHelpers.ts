@@ -5,7 +5,8 @@ import { createQwenStream } from "../services/qwen.ts";
 import { modelRouter } from "../services/modelRouter.ts";
 import modelSpecs from "../models.json" with { type: "json" };
 import type { ModelSpec } from "../utils/types.ts";
-import { compressToolResult, safeTruncate, pendingCorrections } from "./chatHelpersCore.ts";
+import { safeTruncate, pendingCorrections } from "./chatHelpersCore.ts";
+import { compressToolResult } from "./compressToolResult.ts";
 
 // Re-export everything from core utilities
 export * from "./chatHelpersCore.ts";
@@ -174,9 +175,6 @@ export function logPromptToQwen(logEntry: any, systemPrompt: string, prompt: str
     preview: (systemPrompt.length > 500 ? systemPrompt.substring(0, 500) + "..." : systemPrompt) +
       "\n\n" + (prompt.length > 200 ? prompt.substring(0, 200) + "..." : prompt),
   };
-  if (false) {
-    // Debug logging intentionally disabled
-  }
 }
 
 export async function acquireSessionWithCorrections(
@@ -230,7 +228,5 @@ export async function createQwenStreamWithRetry(
 }
 
 export function logIncomingRequest(_body: any, _isStream: boolean, _messages: any[]): void {
-  if (false) {
-    // Debug logging intentionally disabled
-  }
+  // Debug logging intentionally disabled
 }

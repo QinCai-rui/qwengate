@@ -23,15 +23,19 @@ export interface RetryConfig {
   circuitBreaker?: CircuitBreaker;
 }
 
-const DEFAULT_CONFIG: Required<RetryConfig> = {
-  maxRetries: 3,
-  baseDelayMs: 500,
-  maxDelayMs: 10000,
-  backoffMultiplier: 2,
-  nonRetryableStatuses: [400, 401, 403, 404, 405, 409, 410, 411, 412, 413, 414, 415, 418],
-  attemptTimeoutMs: 30000,
-  circuitBreaker: undefined as unknown as CircuitBreaker,
-};
+function getDefaultRetryConfig(): Required<RetryConfig> {
+  return {
+    maxRetries: 3,
+    baseDelayMs: 500,
+    maxDelayMs: 10000,
+    backoffMultiplier: 2,
+    nonRetryableStatuses: [400, 401, 403, 404, 405, 409, 410, 411, 412, 413, 414, 415, 418],
+    attemptTimeoutMs: 30000,
+    circuitBreaker: undefined as never,
+  };
+}
+
+const DEFAULT_CONFIG: Required<RetryConfig> = getDefaultRetryConfig();
 
 export class NonRetryableError extends Error {
   constructor(message: string) {

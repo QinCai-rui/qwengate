@@ -54,6 +54,14 @@ async function qwenFetchWithDebug(
   return { response, debugId };
 }
 
+async function postQwenSettings(
+  email: string | undefined,
+  payload: Record<string, unknown>,
+): Promise<{ response: Response; debugId: string }> {
+  const { headers } = await getQwenHeaders(email);
+  return qwenFetchWithDebug(QWEN_SETTINGS_URL, 'POST', makeQwenSettingsHeaders(headers), 'settings', payload);
+}
+
 let cachedModels: any[] | null = null;
 let lastModelsFetch = 0;
 let nativeToolsDisabled = false;
@@ -67,7 +75,6 @@ export async function disableNativeTools(): Promise<void> {
   disablingNativeToolsInProgress = (async () => {
     let settingsDebugId: string | null = null;
     try {
-      const { headers } = await getQwenHeaders();
       const payload = {
         tools_enabled: {
           web_extractor: false, web_search_image: false, web_search: false,
@@ -77,11 +84,7 @@ export async function disableNativeTools(): Promise<void> {
         memory: { enable_memory: false, enable_history_memory: false },
         mcp: { 'code-interpreter': false, 'fire-crawl': false, 'amap': false, 'image-generation': false },
       };
-      const settingsHeaders = makeQwenSettingsHeaders(headers);
-      const { response, debugId } = await qwenFetchWithDebug(
-        QWEN_SETTINGS_URL,
-        'POST', settingsHeaders, 'settings', payload,
-      );
+      const { response, debugId } = await postQwenSettings(undefined, payload);
       settingsDebugId = debugId;
       if (!response.ok) {
         const text = await response.text();
@@ -105,16 +108,11 @@ export async function disablePersonalization(): Promise<void> {
     for (const email of accountsToProcess) {
       let settingsDebugId: string | null = null;
       try {
-        const { headers } = await getQwenHeaders(email);
         const payload = {
           memory: { enable_memory: false, enable_history_memory: false, memory_version_reminder: false },
           mcp: { 'code-interpreter': false, 'fire-crawl': false, 'amap': false, 'image-generation': false },
         };
-        const settingsHeaders = makeQwenSettingsHeaders(headers);
-        const { response, debugId } = await qwenFetchWithDebug(
-          QWEN_SETTINGS_URL,
-          'POST', settingsHeaders, 'settings', payload,
-        );
+        const { response, debugId } = await postQwenSettings(email, payload);
         settingsDebugId = debugId;
         if (!response.ok) {
           const text = await response.text();
@@ -145,18 +143,13 @@ export async function setCustomInstruction(instruction: string): Promise<void> {
     for (const email of accountsToProcess) {
       let settingsDebugId: string | null = null;
       try {
-        const { headers } = await getQwenHeaders(email);
         const payload = {
           personalization: {
             instruction: instruction,
             enable_for_new_chat: true,
           },
         };
-        const settingsHeaders = makeQwenSettingsHeaders(headers);
-        const { response, debugId } = await qwenFetchWithDebug(
-          QWEN_SETTINGS_URL,
-          'POST', settingsHeaders, 'settings', payload,
-        );
+        const { response, debugId } = await postQwenSettings(email, payload);
         settingsDebugId = debugId;
         if (!response.ok) {
           const text = await response.text();
@@ -178,7 +171,6 @@ export async function setCustomInstruction(instruction: string): Promise<void> {
 export async function configureAccount(email: string, instruction?: string): Promise<void> {
   let settingsDebugId: string | null = null;
   try {
-    const { headers } = await getQwenHeaders(email);
     const payload: Record<string, any> = {
       tools_enabled: {
         web_extractor: false, web_search_image: false, web_search: false,
@@ -197,11 +189,7 @@ export async function configureAccount(email: string, instruction?: string): Pro
         payload.personalization = { instruction: resolved, enable_for_new_chat: true };
       }
     }
-    const settingsHeaders = makeQwenSettingsHeaders(headers);
-    const { response, debugId } = await qwenFetchWithDebug(
-      QWEN_SETTINGS_URL,
-      'POST', settingsHeaders, 'settings', payload,
-    );
+    const { response, debugId } = await postQwenSettings(email, payload);
     settingsDebugId = debugId;
     if (response.ok) {
       logStore.log('info', 'account', `Account ${email} configured (tools off, memory off${instruction ? ', instruction set' : ''})`);

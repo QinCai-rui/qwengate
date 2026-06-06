@@ -175,6 +175,16 @@ export interface ContextWindowCheck {
  * @param modelName - Model name for error messaging
  * @param messages - Optional messages array for per-message overhead (5 tokens each)
  */
+function contextErrorResult(
+  totalEstimatedTokens: number,
+  maxContext: number,
+  maxOutput: number,
+  availableTokens: number,
+  message: string,
+): ContextWindowCheck {
+  return { ok: false, estimatedTotalTokens: totalEstimatedTokens, maxContext, maxOutput, availableTokens, message };
+}
+
 export function checkContextWindow(
   estimatedTokens: number,
   maxContext: number,
@@ -187,34 +197,24 @@ export function checkContextWindow(
   const totalEstimatedTokens = estimatedTokens + messageOverhead;
 
   if (totalEstimatedTokens > maxContext) {
-    return {
-      ok: false,
-      estimatedTotalTokens: totalEstimatedTokens,
-      maxContext,
-      maxOutput,
-      availableTokens,
-      message:
-        `Context window exceeded for model "${modelName}": ` +
-        `estimated ${totalEstimatedTokens} prompt tokens (including ${messageOverhead} message overhead) exceeds ` +
-        `the model's ${maxContext} context window. ` +
-        `Reduce your prompt length or switch to a model with a larger context window.`,
-    };
+    return contextErrorResult(
+      totalEstimatedTokens, maxContext, maxOutput, availableTokens,
+      `Context window exceeded for model "${modelName}": ` +
+      `estimated ${totalEstimatedTokens} prompt tokens (including ${messageOverhead} message overhead) exceeds ` +
+      `the model's ${maxContext} context window. ` +
+      `Reduce your prompt length or switch to a model with a larger context window.`,
+    );
   }
 
   if (totalEstimatedTokens > availableTokens) {
-    return {
-      ok: false,
-      estimatedTotalTokens: totalEstimatedTokens,
-      maxContext,
-      maxOutput,
-      availableTokens,
-      message:
-        `Prompt too long for model "${modelName}": ` +
-        `estimated ${totalEstimatedTokens} prompt tokens (including ${messageOverhead} message overhead) leaves ` +
-        `only ${maxContext - totalEstimatedTokens} tokens for the response, ` +
-        `but max output is limited to ${maxOutput}, leaving ${maxContext - totalEstimatedTokens} tokens for generation. ` +
-        `Reduce your prompt or increase available context.`,
-    };
+    return contextErrorResult(
+      totalEstimatedTokens, maxContext, maxOutput, availableTokens,
+      `Prompt too long for model "${modelName}": ` +
+      `estimated ${totalEstimatedTokens} prompt tokens (including ${messageOverhead} message overhead) leaves ` +
+      `only ${maxContext - totalEstimatedTokens} tokens for the response, ` +
+      `but max output is limited to ${maxOutput}, leaving ${maxContext - totalEstimatedTokens} tokens for generation. ` +
+      `Reduce your prompt or increase available context.`,
+    );
   }
 
   return {

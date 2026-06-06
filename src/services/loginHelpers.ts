@@ -9,6 +9,8 @@ import { getActivePage, getBrowser, createAccountContext } from './playwright.ts
 import type { AuthState } from './auth.ts';
 import { AUTH_TOKEN_MAX_AGE_MS, createAuthFetchTimeout, checkPlaywrightSession } from './auth.ts';
 
+const QWEN_CHAT_URL = 'https://chat.qwen.ai';
+
 export class LoginMutex {
   private queue: (() => void)[] = [];
   private locked = false;
@@ -50,8 +52,8 @@ export async function loginFreshViaBrowser(
 
     try {
       const currentUrl = page.url();
-      if (!currentUrl.startsWith('https://chat.qwen.ai')) {
-        await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded' });
+      if (!currentUrl.startsWith(QWEN_CHAT_URL)) {
+        await page.goto(QWEN_CHAT_URL, { waitUntil: 'domcontentloaded' });
       }
     } catch (err: any) {
       console.warn(`[Auth] Navigation check failed for ${email}: ${err.message}`);
@@ -80,7 +82,7 @@ export async function loginFreshViaBrowser(
         const timeoutId = setTimeout(() => controller.abort(), 30_000);
         let response: Response;
         try {
-          response = await fetch('https://chat.qwen.ai/api/v2/auths/signin', {
+          response = await fetch(`${QWEN_CHAT_URL}/api/v2/auths/signin`, {
             method: 'POST',
             headers: {
               'accept': 'application/json, text/plain, */*',
@@ -169,7 +171,7 @@ export async function loginFreshViaBrowser(
 export async function loginFreshViaFetch(email: string, hashedPassword: string): Promise<AuthState | null> {
   const { controller, cleanup: _cleanup } = createAuthFetchTimeout();
   try {
-    const response = await fetch('https://chat.qwen.ai/api/v2/auths/signin', {
+    const response = await fetch(`${QWEN_CHAT_URL}/api/v2/auths/signin`, {
       method: 'POST',
       headers: {
         'accept': 'application/json, text/plain, */*',
@@ -177,7 +179,7 @@ export async function loginFreshViaFetch(email: string, hashedPassword: string):
         'source': 'web',
         'Version': '0.2.57',
         'bx-v': '2.5.36',
-        'Referer': 'https://chat.qwen.ai/auth',
+        'Referer': `${QWEN_CHAT_URL}/auth`,
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
         'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
         'x-request-id': crypto.randomUUID(),
@@ -266,7 +268,7 @@ export async function loginViaTempContext(
     });
 
     try {
-      await page.goto('https://chat.qwen.ai/auth', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+      await page.goto(`${QWEN_CHAT_URL}/auth`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     } catch {
       // non-blocking
     }

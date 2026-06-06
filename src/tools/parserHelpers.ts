@@ -1,4 +1,33 @@
+import { v4 as uuidv4 } from 'uuid';
 import type { ParsedToolCall } from './types.ts';
+import { robustParseJSON } from '../utils/json.ts';
+
+export function processCharAt(buf: string, i: number): { newIndex: number; inString: boolean; foundEnd: boolean } {
+  const c = buf[i];
+  if (c === '\\') {
+    i++;
+    if (i >= buf.length) return { newIndex: i, inString: true, foundEnd: true };
+    if (buf[i] === 'u') {
+      if (i + 4 >= buf.length) return { newIndex: i, inString: true, foundEnd: true };
+      i += 4;
+    }
+    return { newIndex: i, inString: true, foundEnd: false };
+  }
+  if (c === '"') return { newIndex: i, inString: false, foundEnd: false };
+  return { newIndex: i, inString: true, foundEnd: false };
+}
+
+export function trackDepth(c: string, depth: number): { depth: number; inString: boolean; atRoot: boolean } {
+  switch (c) {
+    case '"': return { depth, inString: true, atRoot: false };
+    case '{': case '[': return { depth: depth + 1, inString: false, atRoot: false };
+    case '}': case ']': {
+      const newDepth = depth - 1;
+      return { depth: newDepth, inString: false, atRoot: newDepth === 0 };
+    }
+    default: return { depth, inString: false, atRoot: false };
+  }
+}
 
 export function findJsonEnd(buf: string): number {
   let i = 0;
@@ -11,15 +40,16 @@ export function findJsonEnd(buf: string): number {
   for (; i < buf.length; i++) {
     const c = buf[i];
     if (inString) {
-      if (c === '\\') { i++; if (i >= buf.length) return -1; if (buf[i] === 'u') { if (i + 4 >= buf.length) return -1; i += 4; } continue; }
-      if (c === '"') { inString = false; }
+      const result = processCharAt(buf, i);
+      i = result.newIndex;
+      inString = result.inString;
+      if (result.foundEnd) return -1;
       continue;
     }
-    switch (c) {
-      case '"': inString = true; break;
-      case '{': case '[': depth++; break;
-      case '}': case ']': depth--; if (depth === 0) return i + 1; break;
-    }
+    const result = trackDepth(c, depth);
+    depth = result.depth;
+    inString = result.inString;
+    if (result.atRoot) return i + 1;
   }
   return -1;
 }
@@ -93,4 +123,61 @@ export function compactBuffer(buffer: string, textEmissionBoundary: number, offs
     newBoundary = 0;
   }
   return { buffer: newBuffer, textEmissionBoundary: newBoundary };
+}
+
+export interface ExtractResult {
+  textContent: string;
+  toolCall: ParsedToolCall | null;
+  remaining: string;
+  shouldBreak: boolean;
+}
+
+export function findBalancedJsonEnd(s: string): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (escaped) { escaped = false; continue; }
+    if (c === '\\') { escaped = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === '{' || c === '[') depth++;
+    else if (c === '}' || c === ']') { depth--; if (depth === 0) return i + 1; }
+  }
+  return -1;
+}
+
+export function tryExtractToolCall(remaining: string): ExtractResult {
+  const nameIdx = remaining.indexOf('"name"');
+  if (nameIdx === -1) {
+    return { textContent: remaining, toolCall: null, remaining: '', shouldBreak: true };
+  }
+  const searchFrom = Math.max(0, nameIdx - 300);
+  const braceIdx = remaining.lastIndexOf('{', nameIdx);
+  if (braceIdx === -1 || braceIdx < searchFrom) {
+    return { textContent: remaining[0] || '', toolCall: null, remaining: remaining.substring(1), shouldBreak: false };
+  }
+  const textContent = braceIdx > 0 ? remaining.substring(0, braceIdx) : '';
+  const after = remaining.substring(braceIdx);
+  const jsonEnd = findBalancedJsonEnd(after);
+  if (jsonEnd === -1) {
+    return { textContent: remaining, toolCall: null, remaining: '', shouldBreak: true };
+  }
+  const jsonStr = after.substring(0, jsonEnd);
+  try {
+    const parsed = robustParseJSON(jsonStr);
+    if (!parsed || typeof parsed !== 'object') throw new Error('Invalid JSON');
+    let args = parsed.arguments;
+    if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
+    if (typeof args !== 'object' || Array.isArray(args)) args = {};
+    const toolCall: ParsedToolCall = {
+      id: 'call_' + uuidv4(),
+      name: parsed.name || '',
+      arguments: args || (() => { const { name: _name, ...rest } = parsed; return rest; })(),
+    };
+    return { textContent, toolCall, remaining: after.substring(jsonEnd), shouldBreak: false };
+  } catch {
+    return { textContent: jsonStr, toolCall: null, remaining: after.substring(jsonEnd), shouldBreak: false };
+  }
 }

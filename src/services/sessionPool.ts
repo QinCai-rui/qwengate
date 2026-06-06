@@ -4,6 +4,7 @@ import { pickAccount, incrementInFlight, decrementInFlight, incrementTotalReques
 import { createNetworkEntry, recordResponse, completeEntry, errorEntry } from './networkDebug.ts';
 import { logStore } from './logStore.js';
 import { config } from './configService.ts';
+import { QWEN_API_BASE } from './qwen.ts';
 
 interface PoolEntry {
   chatId: string;
@@ -157,7 +158,7 @@ export class SessionPool {
     const { cookie, userAgent } = cachedHeaders || await getBasicHeaders(accountEmail);
     const requestId = uuidv4();
     const debugEntry = createNetworkEntry({
-      url: `https://chat.qwen.ai/api/v2/chats/${chatId}`,
+      url: `${QWEN_API_BASE}/api/v2/chats/${chatId}`,
       method: 'DELETE',
       headers: { cookie, 'user-agent': userAgent, 'x-request-id': requestId },
       category: 'session-delete',
@@ -167,14 +168,14 @@ export class SessionPool {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
-      const response = await fetch(`https://chat.qwen.ai/api/v2/chats/${chatId}`, {
+      const response = await fetch(`${QWEN_API_BASE}/api/v2/chats/${chatId}`, {
         method: 'DELETE',
         signal: controller.signal,
         headers: {
           'accept': 'application/json, text/plain, */*',
           'content-type': 'application/json',
           'cookie': cookie,
-          'referer': 'https://chat.qwen.ai/',
+          'referer': `${QWEN_API_BASE}/`,
           'user-agent': userAgent,
           'x-request-id': requestId,
           'source': 'web',
@@ -232,7 +233,7 @@ export class SessionPool {
     }
 
     const debugEntry = createNetworkEntry({
-      url: 'https://chat.qwen.ai/api/v2/chats/new',
+      url: `${QWEN_API_BASE}/api/v2/chats/new`,
       method: 'POST',
       headers: fetchHeaders,
       body: {},
@@ -242,7 +243,7 @@ export class SessionPool {
 
     let response: Response;
     try {
-      response = await fetch('https://chat.qwen.ai/api/v2/chats/new', {
+      response = await fetch(`${QWEN_API_BASE}/api/v2/chats/new`, {
         method: 'POST',
         headers: fetchHeaders,
         body: JSON.stringify({}),

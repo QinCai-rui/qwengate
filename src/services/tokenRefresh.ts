@@ -12,12 +12,14 @@ export function needsRefresh(acct: AccountEntry): boolean {
   return acct.state.expiresAt - AUTH_REFRESH_BEFORE_MS < Date.now();
 }
 
+const QWEN_CHAT_URL = 'https://chat.qwen.ai';
+
 export async function tryRefreshToken(acct: AccountEntry): Promise<boolean> {
   if (!acct.state?.refreshToken) return false;
 
   const { controller, cleanup } = createAuthFetchTimeout();
   try {
-    const response = await fetch('https://chat.qwen.ai/api/v2/auths/refresh', {
+    const response = await fetch(`${QWEN_CHAT_URL}/api/v2/auths/refresh`, {
       method: 'POST',
       headers: {
         'accept': 'application/json, text/plain, */*',

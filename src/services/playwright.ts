@@ -5,6 +5,8 @@ import { getTokenWithAccount, pickAccount } from "./auth.ts";
 import { logStore } from './logStore.ts';
 export { getProfileDir, openBrowserProfile, refreshViaProfile, autoFillLogin } from './browserProfiles.ts';
 export type { LoginResult, BrowserProfileOptions } from './browserProfiles.ts';
+
+const QWEN_BASE_URL = 'https://chat.qwen.ai';
 export type BrowserType = 'chromium' | 'firefox' | 'webkit' | 'chrome' | 'edge';
 export interface AccountContext {
   context: BrowserContext;
@@ -180,9 +182,11 @@ export async function initPlaywright(headless = true, browserType: BrowserType =
   })().finally(() => { initInFlight = null; });
   return initInFlight;
 }
+function typedCast<T>(v: unknown): T { return v as T; }
+
 export async function createAccountContext(email: string, cookies?: Record<string, string>): Promise<AccountContext> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) {
-    return { context: null as unknown as BrowserContext, page: null as unknown as Page, lastRefresh: Date.now(), cookies: cookies || {}, headers: {} };
+    return { context: typedCast<BrowserContext>(null), page: typedCast<Page>(null), lastRefresh: Date.now(), cookies: cookies || {}, headers: {} };
   }
   const existing = accountContexts.get(email);
   if (existing) return existing;
@@ -315,12 +319,12 @@ export async function loginToQwen(email: string, password: string): Promise<bool
   const release = await uiMutex.acquire();
   try {
     const page = getActivePage()!;
-    validateQwenUrl('https://chat.qwen.ai/auth');
-    await page.goto('https://chat.qwen.ai/auth', { waitUntil: 'domcontentloaded' });
+    validateQwenUrl(`${QWEN_BASE_URL}/auth`);
+    await page.goto(`${QWEN_BASE_URL}/auth`, { waitUntil: 'domcontentloaded' });
     const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
     const result = await page.evaluate(async ({ email, password }) => {
       try {
-        const response = await fetch("https://chat.qwen.ai/api/v2/auths/signin", {
+        const response = await fetch(`${QWEN_BASE_URL}/api/v2/auths/signin`, {
           method: "POST",
           headers: {
             "accept": "application/json, text/plain, */*",
@@ -336,8 +340,8 @@ export async function loginToQwen(email: string, password: string): Promise<bool
       } catch (e: any) { return { ok: false, error: e.message }; }
     }, { email, password: hashedPassword });
     if (result.ok) {
-      validateQwenUrl('https://chat.qwen.ai/');
-      await page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded' });
+      validateQwenUrl(`${QWEN_BASE_URL}/`);
+      await page.goto(QWEN_BASE_URL, { waitUntil: 'domcontentloaded' });
       const isLogged = !(page.url().includes('auth') || page.url().includes('login'));
       if (isLogged) return true;
     }
@@ -348,7 +352,7 @@ export async function loginToQwen(email: string, password: string): Promise<bool
 async function captureBxHeaders(accCtx: AccountContext): Promise<void> {
   try {
     await accCtx.page.evaluate(async () => {
-      await fetch('https://chat.qwen.ai/api/v2/models', {
+      await fetch(`${QWEN_BASE_URL}/api/v2/models`, {
         method: 'GET',
         headers: { 'accept': 'application/json', 'source': 'web' },
       }).catch(() => {});

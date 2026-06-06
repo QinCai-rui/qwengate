@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { ParsedToolCall, ToolCallResult, ToolContext } from './types.ts';
 import { SchemaValidationError } from './schema.ts';
 import { registry } from './registry.ts';
-import { robustParseJSON } from '../utils/json.ts';
+import { tryExtractToolCall } from './parserHelpers.ts';
 
 const DEFAULT_MAX_CONCURRENCY = 10;
 const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
@@ -15,47 +15,13 @@ export function parseToolCallsFromContent(content: string): {
   let remaining = content;
   let textContent = '';
   while (true) {
-    const nameIdx = remaining.indexOf('"name"');
-    if (nameIdx === -1) { textContent += remaining; break; }
-    const searchFrom = Math.max(0, nameIdx - 300);
-    const braceIdx = remaining.lastIndexOf('{', nameIdx);
-    if (braceIdx === -1 || braceIdx < searchFrom) { textContent += remaining[0] || ''; remaining = remaining.substring(1); continue; }
-    if (braceIdx > 0) { textContent += remaining.substring(0, braceIdx); }
-    const after = remaining.substring(braceIdx);
-    const jsonEnd = findBalancedJsonEnd(after);
-    if (jsonEnd === -1) { textContent += remaining; break; }
-    const jsonStr = after.substring(0, jsonEnd);
-    try {
-      const parsed = robustParseJSON(jsonStr);
-      if (!parsed || typeof parsed !== 'object') throw new Error('Invalid JSON');
-      let args = parsed.arguments;
-      if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
-      if (typeof args !== 'object' || Array.isArray(args)) args = {};
-      toolCalls.push({
-        id: 'call_' + uuidv4(),
-        name: parsed.name || '',
-        arguments: args || (() => { const { name: _name, ...rest } = parsed; return rest; })(),
-      });
-    } catch { textContent += jsonStr; }
-    remaining = after.substring(jsonEnd);
+    const result = tryExtractToolCall(remaining);
+    textContent += result.textContent;
+    remaining = result.remaining;
+    if (result.shouldBreak) break;
+    if (result.toolCall) toolCalls.push(result.toolCall);
   }
   return { textContent, toolCalls };
-}
-
-function findBalancedJsonEnd(s: string): number {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (escaped) { escaped = false; continue; }
-    if (c === '\\') { escaped = true; continue; }
-    if (c === '"') { inString = !inString; continue; }
-    if (inString) continue;
-    if (c === '{' || c === '[') depth++;
-    else if (c === '}' || c === ']') { depth--; if (depth === 0) return i + 1; }
-  }
-  return -1;
 }
 
 async function executeSingleTool(

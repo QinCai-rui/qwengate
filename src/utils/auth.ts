@@ -1,0 +1,37 @@
+import crypto from "crypto";
+import { config } from "../services/configService.ts";
+
+// Compare two strings in timing-constant fashion to prevent timing attacks on API key auth.
+// Length mismatch is intentionally NOT early-returned to avoid leaking length information.
+export function safeCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  const maxLen = Math.max(bufA.length, bufB.length);
+  const padA = Buffer.alloc(maxLen, 0);
+  const padB = Buffer.alloc(maxLen, 0);
+  bufA.copy(padA, maxLen - bufA.length);
+  bufB.copy(padB, maxLen - bufB.length);
+  try {
+    return crypto.timingSafeEqual(padA, padB);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check API key authorization on a request.
+ * Returns a Response (401) if unauthorized, or undefined if authorized / no key configured.
+ */
+export function checkApiKeyAuth(c: any): Response | undefined {
+  const apiKey = config.get("API_KEY");
+  if (!apiKey) return undefined;
+  const authHeader = c.req.header("authorization");
+  if (
+    !authHeader ||
+    !authHeader.startsWith("Bearer ") ||
+    !safeCompare(authHeader.slice(7), apiKey)
+  ) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  return undefined;
+}

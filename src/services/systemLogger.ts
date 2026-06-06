@@ -107,6 +107,8 @@ export class SystemLogger {
 // Lazy singleton to avoid circular dependency with logStore.ts
 let _logStore: RequestLogStore | null = null;
 
+function typedCast<T>(v: unknown): T { return v as T; }
+
 /** @internal Called once from logStore.ts to register the singleton instance */
 export function __registerLogStore(store: RequestLogStore): void {
   _logStore = store;
@@ -119,14 +121,14 @@ export const logStore: RequestLogStore = new Proxy(
     get(_, prop) {
       if (!_logStore)
         throw new Error("logStore accessed before initialization");
-      const store = _logStore as unknown as Record<string | symbol, unknown>;
+      const store = typedCast<Record<string | symbol, unknown>>(_logStore);
       const v = store[prop];
       return typeof v === "function" ? v.bind(_logStore) : v;
     },
     set(_, prop, value) {
       if (!_logStore)
         throw new Error("logStore accessed before initialization");
-      const store = _logStore as unknown as Record<string | symbol, unknown>;
+      const store = typedCast<Record<string | symbol, unknown>>(_logStore);
       store[prop] = value;
       return true;
     },
