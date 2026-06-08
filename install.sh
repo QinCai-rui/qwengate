@@ -38,28 +38,33 @@ ok "Repository ready at $INSTALL_DIR"
 
 # ── Install dependencies ────────────────────────────────────────────
 
-info "Running npm install (this may take a minute)..."
+info "Installing dependencies in $DIR..."
 cd "$INSTALL_DIR" || fail "Cannot cd to $INSTALL_DIR"
 
-# Clean install
-rm -rf node_modules 2>/dev/null
-npm install --no-audit --no-fund || {
-  info "First attempt failed, retrying..."
-  npm install --no-audit --no-fund || fail "npm install failed — check your network and Node.js/npm version"
-}
-
-# Verify installation
+# If node_modules missing or empty, run install from scratch
 if [ ! -d "node_modules" ] || [ -z "$(ls -A node_modules 2>/dev/null)" ]; then
-  fail "npm install completed but node_modules is empty"
+  npm install --no-audit --no-fund 2>&1 | tail -5 || {
+    info "npm install failed — retrying with verbose output..."
+    npm install 2>&1 | tail -20 || fail "npm install failed. Check your network and run 'npm install' manually in $INSTALL_DIR"
+  }
+else
+  # Already installed — just update
+  npm install --no-audit --no-fund 2>&1 | tail -3
+fi
+
+if [ ! -d "node_modules" ] || [ -z "$(ls -A node_modules 2>/dev/null)" ]; then
+  fail "node_modules is empty. Run 'cd $INSTALL_DIR && npm install' manually."
 fi
 
 PACKAGE_COUNT=$(find node_modules -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
-ok "npm install complete ($PACKAGE_COUNT packages)"
+ok "$PACKAGE_COUNT packages installed in $DIR"
 
-# ── Build ───────────────────────────────────────────────────────────
+# ── Build (optional) ────────────────────────────────────────────────
 
-info "Running npm run build..."
-npm run build 2>/dev/null && ok "Build complete" || info "Skipping build (tsx will compile on the fly)"
+if command -v npx &>/dev/null; then
+  info "Verifying tsx is available..."
+  npx tsx --version >/dev/null 2>&1 && ok "tsx ready" || info "tsx not found — it will be installed on first 'qg' run"
+fi
 
 # ── Configuration ──────────────────────────────────────────────────
 
