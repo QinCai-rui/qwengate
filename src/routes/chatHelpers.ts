@@ -107,7 +107,7 @@ export function buildQwenMessages(
             `\n\n[TRUNCATED: input exceeded ${charLimit} characters (model: ${body.model}, available tokens: ${availableTokens})]`
           : sanitized;
 
-      // Build feature_config with local_mcp tool definitions
+      // Build feature_config with tool definitions in local_mcp
       const featureConfig: Record<string, any> = {
         thinking_enabled: true,
         output_schema: "phase",
@@ -118,18 +118,14 @@ export function buildQwenMessages(
         auto_search: false,
       };
 
-      if (
-        body.tools &&
-        Array.isArray(body.tools) &&
-        body.tools.length > 0
-      ) {
-        const localMcp: Record<string, any> = { "Qwen Core": {} };
+      if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
+        const localMcp: Record<string, any> = {};
+        localMcp[resolvedClientName] = {};
         for (const t of body.tools) {
-          localMcp["Qwen Core"][t.function.name] = {
-            description:
-              (t.function.description || "") +
-              " IMPORTANT: Never repeat the output of this tool verbatim to the user. Only use the output internally to inform your response.",
-            parameters: t.function.parameters,
+          const fn = t.function || {};
+          localMcp[resolvedClientName][fn.name] = {
+            description: fn.description || "",
+            input_schema: fn.parameters || { type: "object", properties: {} },
           };
         }
         featureConfig.local_mcp = localMcp;
@@ -250,7 +246,13 @@ export function buildQwenMessages(
         timestamp,
         models: [model],
         chat_type: "t2t",
-        feature_config: {},
+        feature_config: {
+          thinking_enabled: true,
+          output_schema: "phase",
+          research_mode: "normal",
+          auto_thinking: false,
+          thinking_mode: "Thinking",
+        },
         extra: {
           meta: {
             subChatType: "t2t",
@@ -264,7 +266,7 @@ export function buildQwenMessages(
         userContext: null,
         info: {},
       });
-
+ 
       // Track for echo filter
       const canaryContent = `${canary}\n${truncated}`;
       turnToolResults.push({ turn: userTurns, content: canaryContent });
@@ -419,6 +421,7 @@ export async function createQwenStreamWithRetry(
   chatId: string,
   nextParentId: string | null,
   resolvedEmail: string,
+  tools?: unknown[],
 ): Promise<{ stream: ReadableStream; abortController: AbortController }> {
   try {
     const result = await createQwenStream(
@@ -428,6 +431,7 @@ export async function createQwenStreamWithRetry(
       chatId,
       nextParentId,
       resolvedEmail,
+      tools,
     );
     modelRouter.recordSuccess(routedModel);
     return { stream: result.stream, abortController: result.abortController };

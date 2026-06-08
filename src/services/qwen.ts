@@ -106,7 +106,9 @@ export async function createQwenStream(
   modelId: string,
   chatId?: string,
   parentId?: string | null,
-  accountEmail?: string
+  accountEmail?: string,
+  tools?: unknown[],
+  toolChoice?: string
 ): Promise<QwenStreamResult> {
   const { headers: _headers } = await getQwenHeaders(accountEmail);
   const actualParentId: string | null = parentId !== undefined ? parentId : null;
@@ -156,7 +158,8 @@ export async function createQwenStream(
     model: model,
     parent_id: actualParentId,
     messages: qwenMessages,
-    timestamp: timestamp + 1
+    timestamp: timestamp + 1,
+    ...(tools?.length ? { tools, tool_choice: toolChoice || 'auto', parallel_tool_calls: true } : {})
   };
 
   const url = chatId
