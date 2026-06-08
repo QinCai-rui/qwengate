@@ -11,7 +11,7 @@ import {
   getAllAccountEmails,
   initAuth,
 } from "../../services/auth.ts";
-import { checkApiKeyAuth, safeCompare } from "../../utils/auth.ts";
+import { safeCompare } from "../../utils/auth.ts";
 import { projectPath } from "../../utils/paths.ts";
 import {
   deleteAllChats,
@@ -26,9 +26,6 @@ import { settingsHtml } from "./settings.ts";
 import { APP_VERSION } from "../../utils/version.ts";
 
 const serveHtml = (html: string) => (c: any) => {
-  const auth = checkApiKeyAuth(c);
-  if (auth) return auth;
-
   const scriptInjection = `<script>\nwindow.APP_VERSION = '${APP_VERSION}';\n`;
   const output = html.replace("<script>", scriptInjection);
   return c.html(output);
@@ -58,8 +55,6 @@ function healthHandler(c: any) {
 }
 
 async function accountsReloadHandler(c: any) {
-  const auth = checkApiKeyAuth(c);
-  if (auth) return auth;
 
   try {
     await initAuth(async (email) => {
@@ -75,8 +70,6 @@ async function accountsReloadHandler(c: any) {
 }
 
 async function deleteAllChatsHandler(c: any) {
-  const auth = checkApiKeyAuth(c);
-  if (auth) return auth;
 
   const emails = getAllAccountEmails();
   if (!emails || emails.length === 0)
@@ -171,8 +164,6 @@ function sanitizeLogEntry(entry: any): any {
 }
 
 function systemLogsHandler(c: any) {
-  const auth = checkApiKeyAuth(c);
-  if (auth) return auth;
 
   const limit = parseInt(c.req.query("limit") || "100", 10);
   const category = c.req.query("category");
@@ -182,14 +173,10 @@ function systemLogsHandler(c: any) {
 }
 
 function modelHealthHandler(c: any) {
-  const auth = checkApiKeyAuth(c);
-  if (auth) return auth;
   return c.json(logStore.getAllModelHealth());
 }
 
 function logStreamHandler(c: any) {
-  const auth = checkApiKeyAuth(c);
-  if (auth) return auth;
   return new Response(
     new ReadableStream({
       start(controller) {
@@ -251,8 +238,6 @@ function logStreamHandler(c: any) {
 }
 
 function logJsonHandler(c: any) {
-  const auth = checkApiKeyAuth(c);
-  if (auth) return auth;
   const entries = logStore.getRecent(50);
   const serialized = entries.map((e) => {
     const dt = new Date(e.timestamp);
@@ -307,13 +292,9 @@ export function registerDashboardRoutes(app: Hono): void {
   app.get("/", (c) => c.redirect("/dashboard"));
   app.get("/health", healthHandler);
   app.get("/accounts", (c) => {
-    const auth = checkApiKeyAuth(c);
-    if (auth) return auth;
     return c.json(getAccountStats());
   });
   app.get("/pool/stats", (c) => {
-    const auth = checkApiKeyAuth(c);
-    if (auth) return auth;
     return c.json(sessionPool.getStats());
   });
 
@@ -327,30 +308,14 @@ export function registerDashboardRoutes(app: Hono): void {
   app.get("/log/json", logJsonHandler);
   app.get("/log/stream", logStreamHandler);
   app.get("/metrics/uptime", (c) => {
-    const auth = checkApiKeyAuth(c);
-    if (auth) return auth;
     return c.json({ uptimeSeconds: logStore.getUptimeSeconds() });
   });
 
   app.get("/api/config", (c) => {
-    const apiKey = config.get("API_KEY");
-    if (apiKey) {
-      const authHeader = c.req.header("authorization");
-      if (!authHeader || !authHeader.startsWith("Bearer ") || !safeCompare(authHeader.slice(7), apiKey)) {
-        return c.json({ error: "unauthorized" }, 401);
-      }
-    }
     return c.json({ config: config.getAll() });
   });
 
   app.put("/api/config", async (c) => {
-    const apiKey = config.get("API_KEY");
-    if (apiKey) {
-      const authHeader = c.req.header("authorization");
-      if (!authHeader || !authHeader.startsWith("Bearer ") || !safeCompare(authHeader.slice(7), apiKey)) {
-        return c.json({ error: "unauthorized" }, 401);
-      }
-    }
     try {
       const body = await c.req.json();
       let changed = false;

@@ -20,10 +20,7 @@ function fmtTokens(tokens) {
 
 /* ── Fetch wrapper ── */
 function apiFetch(url) {
-  var key = getStoredApiKey();
-  return fetch(url, {
-    headers: key ? { 'Authorization': 'Bearer ' + key } : {}
-  }).then(function(r) {
+  return fetch(url).then(function(r) {
     if (!r.ok) return null;
     return r.json();
   }).catch(function() { return null; });
@@ -110,8 +107,6 @@ function setConnStatus(state) {
   setConnStatus('connecting');
   setTimeout(function() {
     var url = '/log/stream';
-    var key = getStoredApiKey();
-    if (key) url += (url.indexOf('?') > -1 ? '&' : '?') + 'token=' + encodeURIComponent(key);
     var es = new EventSource(url);
     es.onmessage = function(ev) {
       msgBuffer.push(ev.data);

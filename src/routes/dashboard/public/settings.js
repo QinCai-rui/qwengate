@@ -117,10 +117,7 @@ function onCheckboxChange(el) {
 /* ── Load ── */
 async function loadSettings() {
   try {
-    var headers = {};
-    var key = getStoredApiKey();
-    if (key) headers['Authorization'] = 'Bearer ' + key;
-    var res = await fetch('/api/config', { headers: headers });
+    var res = await fetch('/api/config');
     if (res.ok) {
       var data = await res.json();
       if (data && data.config) {
@@ -145,8 +142,6 @@ async function saveSettings() {
   var msgEl = document.getElementById('settingsMessage');
   try {
     var headers = { 'Content-Type': 'application/json' };
-    var key = getStoredApiKey();
-    if (key) headers['Authorization'] = 'Bearer ' + key;
     var res = await fetch('/api/config', {
       method: 'PUT',
       headers: headers,
@@ -205,10 +200,7 @@ async function executeDeleteAllChats() {
   var doneCount = 0;
   var errorCount = 0;
   try {
-    var headers = {};
-    var key = getStoredApiKey();
-    if (key) headers['Authorization'] = 'Bearer ' + key;
-    var res = await fetch('/dashboard/accounts/delete-all-chats', { method: 'POST', headers: headers });
+    var res = await fetch('/dashboard/accounts/delete-all-chats', { method: 'POST' });
     var reader = res.body.getReader();
     var decoder = new TextDecoder();
     var buffer = '';
