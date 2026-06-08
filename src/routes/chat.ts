@@ -9,7 +9,7 @@ import { checkContextWindow, estimateTokens } from "../utils/tokenEstimator.ts";
 import { handleStreamingRequest } from "./chatStreaming.ts";
 import { handleNonStreamingRequest } from "./chatNonStreaming.ts";
 import {
-  buildPromptAndSystem,
+  buildQwenMessages,
   handleImageModelFallback,
   getModelSpecs,
   acquireSessionWithCorrections,
@@ -75,38 +75,34 @@ async function setupSession(
   toolCalling: boolean,
   logId: string,
 ) {
-  const promptResult = buildPromptAndSystem(
+  const { qwenMessages: processedMessages, toolResultContents } = buildQwenMessages(
     messages,
     body,
     availableTokens,
     toolCalling,
   );
-  let prompt = promptResult.prompt;
-  let systemPrompt = promptResult.systemPrompt;
-  const toolResultContents = promptResult.toolResultContents;
 
   const isThinkingModel = !body.model.includes("no-thinking");
 
   const selectedAccount = pickAccount();
   const accountEmail = selectedAccount?.email;
 
-  let sessionResult = await acquireSessionWithCorrections(
+  const sessionResult = await acquireSessionWithCorrections(
     accountEmail,
-    systemPrompt,
-    prompt,
+    processedMessages,
   );
-  let { session, nextParentId, sessionHeaders, resolvedEmail } =
+  const { session, qwenMessages: sessionMessages, nextParentId, sessionHeaders, resolvedEmail } =
     sessionResult;
-  systemPrompt = sessionResult.systemPrompt;
-  let finalPrompt = sessionResult.finalPrompt;
+
   // Populate the account that served this request
   logStore.updateEntry(logId, (entry) => {
     entry.accountEmail = resolvedEmail;
   });
+
   const routedModel = await modelRouter.route(body.model);
   let { stream, abortController: qwenAbortController } =
     await createQwenStreamWithRetry(
-      finalPrompt,
+      sessionMessages,
       isThinkingModel,
       routedModel,
       session.chatId,
@@ -114,9 +110,26 @@ async function setupSession(
       resolvedEmail,
     );
 
+  // Build finalPrompt for logStore debug logging only
+  const finalPrompt = sessionMessages.map((m: any) => {
+    const content = typeof m.content === 'string'
+      ? m.content
+      : JSON.stringify(m.content ?? '');
+    return `${m.role}: ${content}`;
+  }).join('\n\n');
+  logStore.updateEntry(logId, (entry) => {
+    entry.promptToQwen = {
+      systemPromptLength: 0,
+      totalLength: finalPrompt.length,
+      preview: finalPrompt.length > 1000
+        ? finalPrompt.substring(0, 1000) + '...'
+        : finalPrompt,
+    };
+  });
+
   return {
     toolResultContents,
-    finalPrompt,
+    sessionMessages,
     session,
     nextParentId,
     sessionHeaders,
@@ -135,7 +148,8 @@ export async function chatCompletions(c: Context) {
     logStore.createEntry(logId, body.model, isStream);
     const logEntry = logStore.getEntry(logId);
     if (logEntry) {
-      const lastMsg = messages.length > 0 ? (typeof messages[messages.length - 1].content === 'string' ? messages[messages.length - 1].content : JSON.stringify(messages[messages.length - 1].content)) : '';
+      const rawContent = messages.length > 0 ? messages[messages.length - 1].content : '';
+      const lastMsg = typeof rawContent === 'string' ? rawContent : (rawContent !== undefined ? JSON.stringify(rawContent) : '');
       logEntry.clientRequest = {
         messageCount: messages.length,
         roles: messages.map((m) => m.role),
@@ -163,7 +177,7 @@ export async function chatCompletions(c: Context) {
       );
     }
 
-    const { toolResultContents, finalPrompt, session, nextParentId, sessionHeaders, resolvedEmail, stream, qwenAbortController } =
+    const { toolResultContents, sessionMessages, session, nextParentId, sessionHeaders, resolvedEmail, stream, qwenAbortController } =
       await setupSession(
         messages,
         body,
@@ -180,7 +194,6 @@ export async function chatCompletions(c: Context) {
         logId,
         completionId,
         body,
-        finalPrompt,
         session,
         stream,
         resolvedEmail,
@@ -197,7 +210,6 @@ export async function chatCompletions(c: Context) {
       logId,
       completionId,
       body,
-      finalPrompt,
       session,
       stream,
       qwenAbortController,

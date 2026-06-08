@@ -1,6 +1,6 @@
 import { Context } from 'hono';
 import { stream as honoStream } from 'hono/streaming';
-import type { OpenAIRequest } from '../utils/types.ts';
+import type { OpenAIRequest, Message } from '../utils/types.ts';
 import { StreamingToolParser } from '../tools/parser.ts';
 import { StreamingContentFilter } from './pipeline/StreamingContentFilter.ts';
 import { StreamingEchoFilter } from './pipeline/StreamingEchoFilter.ts';
@@ -30,7 +30,6 @@ export interface StreamingContext {
   logId: string;
   completionId: string;
   body: OpenAIRequest;
-  finalPrompt: string;
   session: { chatId: string; parentId: string | null; cachedHeaders: any; accountEmail?: string };
   stream: ReadableStream;
   qwenAbortController: AbortController;
@@ -42,8 +41,19 @@ export interface StreamingContext {
   toolResultContents: string[];
 }
 
+function buildPromptString(messages: Message[]): string {
+  return messages.map(m => {
+    const content = Array.isArray(m.content)
+      ? m.content.map((c: any) => c.text || JSON.stringify(c)).join('\n')
+      : String(m.content ?? '');
+    return `${m.role}: ${content}`;
+  }).join('\n\n');
+}
+
 export async function handleStreamingRequest(ctx: StreamingContext): Promise<Response> {
-  const { c, logId, completionId, body, finalPrompt, session, stream, qwenAbortController, resolvedEmail, sessionHeaders, toolCalling, cleanOutput, toolResultContents } = ctx;
+  const { c, logId, completionId, body, session, stream, qwenAbortController, resolvedEmail, sessionHeaders, toolCalling, cleanOutput, toolResultContents } = ctx;
+
+  const finalPrompt = buildPromptString(body.messages);
 
   c.header('Content-Type', 'text/event-stream');
   c.header('Cache-Control', 'no-cache');

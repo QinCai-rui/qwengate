@@ -47,29 +47,23 @@ export interface QwenMessage {
   fid: string;
   parentId: string | null;
   childrenIds: string[];
-  role: 'user' | 'assistant';
-  content: string;
+  role: 'user' | 'assistant' | 'function';
+  content: string | Record<string, unknown>;
   user_action: string;
-  files: any[];
+  files: unknown[];
   timestamp: number;
   models: string[];
   chat_type: string;
-  feature_config: {
-    thinking_enabled: boolean;
-    output_schema: string;
-    research_mode: string;
-    auto_thinking: boolean;
-    thinking_mode: string;
-    thinking_format: string;
-    auto_search: boolean;
-  };
-  extra: {
-    meta: {
-      subChatType: string;
-    };
-  };
+  feature_config: Record<string, unknown>;
+  extra: Record<string, unknown>;
   sub_chat_type: string;
   parent_id: string | null;
+  // Function-specific fields (only for role: 'function')
+  model?: string;
+  modelName?: string;
+  modelIdx?: number;
+  userContext?: unknown;
+  info?: Record<string, unknown>;
 }
 
 export interface QwenPayload {
@@ -107,7 +101,7 @@ const qwenCircuitBreaker = new CircuitBreaker('qwen-api', {
 });
 
 export async function createQwenStream(
-  prompt: string,
+  messages: QwenMessage[],
   enableThinking: boolean,
   modelId: string,
   chatId?: string,
@@ -117,8 +111,41 @@ export async function createQwenStream(
   const { headers: _headers } = await getQwenHeaders(accountEmail);
   const actualParentId: string | null = parentId !== undefined ? parentId : null;
   const timestamp = Math.floor(Date.now() / 1000);
-  const fid = uuidv4();
   const model = modelId.replace('-no-thinking', '');
+
+  // Ensure each message has required fields
+  const qwenMessages: QwenMessage[] = messages.map((msg, i) => ({
+    fid: msg.fid || uuidv4(),
+    parentId: msg.parentId || (i === 0 ? actualParentId : null),
+    childrenIds: msg.childrenIds || [],
+    role: msg.role,
+    content: msg.content,
+    user_action: msg.user_action || 'chat',
+    files: msg.files || [],
+    timestamp: msg.timestamp || timestamp,
+    models: msg.models || [model],
+    chat_type: msg.chat_type || 't2t',
+    feature_config: msg.feature_config || {
+      thinking_enabled: enableThinking,
+      output_schema: 'phase',
+      research_mode: 'normal',
+      auto_thinking: false,
+      thinking_mode: 'Thinking',
+      thinking_format: 'summary',
+      auto_search: false
+    },
+    extra: msg.extra || { meta: { subChatType: 't2t' } },
+    sub_chat_type: msg.sub_chat_type || 't2t',
+    parent_id: msg.parent_id ?? (i === 0 ? actualParentId : null),
+    // Function-specific fields
+    ...(msg.role === 'function' ? {
+      model: msg.model || model,
+      modelName: msg.modelName || modelId,
+      modelIdx: msg.modelIdx ?? 0,
+      userContext: msg.userContext ?? null,
+      info: msg.info || {},
+    } : {}),
+  }));
 
   const payload: QwenPayload = {
     stream: true,
@@ -128,36 +155,7 @@ export async function createQwenStream(
     chat_mode: 'normal',
     model: model,
     parent_id: actualParentId,
-    messages: [
-      {
-        fid: fid,
-        parentId: actualParentId,
-        childrenIds: [],
-        role: 'user',
-        content: prompt,
-        user_action: 'chat',
-        files: [],
-        timestamp: timestamp,
-        models: [model],
-        chat_type: 't2t',
-        feature_config: {
-          thinking_enabled: enableThinking,
-          output_schema: 'phase',
-          research_mode: 'normal',
-          auto_thinking: false,
-          thinking_mode: 'Thinking',
-          thinking_format: 'summary',
-          auto_search: false
-        },
-        extra: {
-          meta: {
-            subChatType: 't2t'
-          }
-        },
-        sub_chat_type: 't2t',
-        parent_id: actualParentId
-      }
-    ],
+    messages: qwenMessages,
     timestamp: timestamp + 1
   };
 

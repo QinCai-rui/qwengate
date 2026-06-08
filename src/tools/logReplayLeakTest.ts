@@ -21,8 +21,10 @@ const LEAK_PATTERNS: RegExp[] = [
   /<\/tool_result\s*>/,
   // JSON tool call/result artifacts
   /\{"name"\s*:/,
+  /\{"function"\s*:/,
   /"arguments"\s*:/,
   /\[{"type":"text","text":"/,
+  /Tool Response\s*\([^)]+\):/,
 ];
 
 function checkForLeaks(text: string): string[] {

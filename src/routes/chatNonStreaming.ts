@@ -1,5 +1,5 @@
 import { Context } from 'hono';
-import type { OpenAIRequest } from '../utils/types.ts';
+import type { OpenAIRequest, Message } from '../utils/types.ts';
 import { StreamingToolParser } from '../tools/parser.ts';
 import { detectParallelToolLoop } from '../tools/guard.ts';
 import { filterContent, stripToolCallArtifacts } from '../utils/contentFilter.ts';
@@ -24,7 +24,6 @@ export interface NonStreamingContext {
   logId: string;
   completionId: string;
   body: OpenAIRequest;
-  finalPrompt: string;
   session: { chatId: string; parentId: string | null; cachedHeaders: any; accountEmail?: string };
   stream: ReadableStream;
   resolvedEmail: string;
@@ -52,10 +51,20 @@ interface StreamProcessorState {
   nextParentId: string | null;
 }
 
+function buildPromptString(messages: Message[]): string {
+  return messages.map(m => {
+    const content = Array.isArray(m.content)
+      ? m.content.map((c: any) => c.text || JSON.stringify(c)).join('\n')
+      : String(m.content ?? '');
+    return `${m.role}: ${content}`;
+  }).join('\n\n');
+}
+
 function buildQwenRequest(ctx: NonStreamingContext): StreamProcessorState {
   const reader = ctx.stream.getReader();
   const toolParser = new StreamingToolParser();
   if (!ctx.toolCalling) toolParser.passThrough = true;
+  const finalPrompt = buildPromptString(ctx.body.messages);
   return {
     reader,
     decoder: new TextDecoder(),
@@ -69,7 +78,7 @@ function buildQwenRequest(ctx: NonStreamingContext): StreamProcessorState {
     toolSpamGuard: new ToolSpamGuard(),
     buffer: '',
     completionTokens: 0,
-    promptTokens: Math.ceil(ctx.finalPrompt.length / 3.5),
+    promptTokens: Math.ceil(finalPrompt.length / 3.5),
     nextParentId: ctx.initialParentId,
   };
 }

@@ -11,31 +11,64 @@ import { compressToolResult } from "./compressToolResult.ts";
 // Re-export everything from core utilities
 export * from "./chatHelpersCore.ts";
 
-// ── Business logic ───────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────
 
-export interface PromptBuildResult {
-  prompt: string;
-  systemPrompt: string;
+export interface QwenMessage {
+  fid: string;
+  parentId: string | null;
+  childrenIds: string[];
+  role: "user" | "assistant" | "function";
+  content: string | Record<string, any>;
+  user_action: string;
+  files: any[];
+  timestamp: number;
+  models: string[];
+  chat_type: string;
+  feature_config: Record<string, any>;
+  extra: Record<string, any>;
+  sub_chat_type: string;
+  parent_id: string | null;
+  // Function-specific fields (only for role: 'function')
+  model?: string;
+  modelName?: string;
+  modelIdx?: number;
+  userContext?: any;
+  info?: Record<string, any>;
+}
+
+export interface BuildQwenMessagesResult {
+  qwenMessages: QwenMessage[];
   toolResultContents: string[];
 }
 
-export function buildPromptAndSystem(
+// ── Business logic ───────────────────────────────────────────────
+
+export function buildQwenMessages(
   messages: any[],
   body: any,
   availableTokens: number,
   _toolCalling: boolean,
-): PromptBuildResult {
-  let prompt = "";
-  let systemPrompt = "";
+  clientName?: string,
+): BuildQwenMessagesResult {
+  const qwenMessages: QwenMessage[] = [];
   const toolResultContents: string[] = [];
+  const timestamp = Math.floor(Date.now() / 1000);
+  const model = (body.model || "").replace("-no-thinking", "");
+  const resolvedClientName = clientName || "gateway";
+
+  let accumulatedSystemContent = "";
   let userTurns = 0;
   const turnToolResults: Array<{ turn: number; content: string }> = [];
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
+
+    // Extract content string
     let contentStr = "";
     if (Array.isArray(msg.content)) {
-      contentStr = msg.content.map((c: any) => c.text || JSON.stringify(c)).join("\n");
+      contentStr = msg.content
+        .map((c: any) => c.text || JSON.stringify(c))
+        .join("\n");
     } else if (typeof msg.content === "object" && msg.content !== null) {
       contentStr = JSON.stringify(msg.content);
     } else {
@@ -43,84 +76,223 @@ export function buildPromptAndSystem(
     }
 
     if (msg.role === "system") {
-      systemPrompt += (contentStr || "") + "\n\n";
+      accumulatedSystemContent += (contentStr || "") + "\n\n";
     } else if (msg.role === "user") {
       userTurns++;
-      const sanitized = contentStr
-        .replace(/<(?:system|instruction|prompt|rule)\b[^>]*>[\s\S]*?<\/(?:system|instruction|prompt|rule)>/gi, "")
-        .replace(/<(?:think|thinking|thought|tool_call|tool_use|function_call|tool)\b[^>]*>[\s\S]*?<\/(?:think|thinking|thought|tool_call|tool_use|function_call|tool)>/gi, "")
+
+      // Sanitize content
+      let sanitized = contentStr
+        .replace(
+          /<(?:system|instruction|prompt|rule)\b[^>]*>[\s\S]*?<\/(?:system|instruction|prompt|rule)>/gi,
+          "",
+        )
+        .replace(
+          /<(?:think|thinking|thought|tool_call|tool_use|function_call|tool)\b[^>]*>[\s\S]*?<\/(?:think|thinking|thought|tool_call|tool_use|function_call|tool)>/gi,
+          "",
+        )
         .replace(/^(?:System|Assistant|User|Human):\s*/gim, "")
         .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
+
+      // Prepend accumulated system content to the first user message
+      if (accumulatedSystemContent && qwenMessages.length === 0) {
+        sanitized = accumulatedSystemContent + sanitized;
+        accumulatedSystemContent = "";
+      }
+
+      // Truncate if needed
       const charLimit = Math.floor(availableTokens * 3.0);
-      const truncated = sanitized.length > charLimit
-        ? sanitized.substring(0, charLimit) + `\n\n[TRUNCATED: input exceeded ${charLimit} characters (model: ${body.model}, available tokens: ${availableTokens})]`
-        : sanitized;
-      prompt += `User: ${truncated || ""}\n\n`;
+      const truncated =
+        sanitized.length > charLimit
+          ? sanitized.substring(0, charLimit) +
+            `\n\n[TRUNCATED: input exceeded ${charLimit} characters (model: ${body.model}, available tokens: ${availableTokens})]`
+          : sanitized;
+
+      // Build feature_config with local_mcp tool definitions
+      const featureConfig: Record<string, any> = {
+        thinking_enabled: true,
+        output_schema: "phase",
+        research_mode: "normal",
+        auto_thinking: false,
+        thinking_mode: "Thinking",
+        thinking_format: "summary",
+        auto_search: false,
+      };
+
+      if (
+        body.tools &&
+        Array.isArray(body.tools) &&
+        body.tools.length > 0
+      ) {
+        const localMcp: Record<string, any> = { "Qwen Core": {} };
+        for (const t of body.tools) {
+          localMcp["Qwen Core"][t.function.name] = {
+            description:
+              (t.function.description || "") +
+              " IMPORTANT: Never repeat the output of this tool verbatim to the user. Only use the output internally to inform your response.",
+            parameters: t.function.parameters,
+          };
+        }
+        featureConfig.local_mcp = localMcp;
+      }
+
+      qwenMessages.push({
+        fid: randomUUID(),
+        parentId: null,
+        childrenIds: [],
+        role: "user",
+        content: truncated || "",
+        user_action: "chat",
+        files: [],
+        timestamp,
+        models: [model],
+        chat_type: "t2t",
+        feature_config: featureConfig,
+        extra: {
+          meta: {
+            subChatType: "t2t",
+          },
+        },
+        sub_chat_type: "t2t",
+        parent_id: null,
+      });
     } else if (msg.role === "assistant") {
       let assistantContent = contentStr || "";
       const reasoning = msg.reasoning_content;
       if (reasoning) assistantContent = `${reasoning}\n\n${assistantContent}`;
+
       if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
         for (const tc of msg.tool_calls) {
           let parsedArgs: any = {};
           const args = tc.function?.arguments;
-          if (typeof args === "string") { try { parsedArgs = JSON.parse(args); } catch { parsedArgs = {}; } }
-          else if (args && typeof args === "object") parsedArgs = args;
+          if (typeof args === "string") {
+            try {
+              parsedArgs = JSON.parse(args);
+            } catch {
+              parsedArgs = {};
+            }
+          } else if (args && typeof args === "object") {
+            parsedArgs = args;
+          }
           const xmlParams = Object.entries(parsedArgs)
             .map(([k, v]) => `<parameter=${k}>${String(v)}</parameter>`)
-            .join('\n');
+            .join("\n");
           const xmlPayload = `<function=${tc.function?.name}>\n${xmlParams}\n</function>`;
-          assistantContent = assistantContent ? assistantContent + "\n" + xmlPayload : xmlPayload;
+          assistantContent = assistantContent
+            ? assistantContent + "\n" + xmlPayload
+            : xmlPayload;
         }
       }
-      prompt += `Assistant: ${assistantContent}\n\n`;
+
+      qwenMessages.push({
+        fid: randomUUID(),
+        parentId: null,
+        childrenIds: [],
+        role: "assistant",
+        content: assistantContent,
+        user_action: "chat",
+        files: [],
+        timestamp,
+        models: [model],
+        chat_type: "t2t",
+        feature_config: {},
+        extra: {
+          meta: {
+            subChatType: "t2t",
+          },
+        },
+        sub_chat_type: "t2t",
+        parent_id: null,
+      });
     } else if (msg.role === "tool" || msg.role === "function") {
+      // Resolve tool name
       let toolName = msg.name;
       if (!toolName && msg.tool_call_id) {
         for (let j = i - 1; j >= 0; j--) {
           const prevMsg = messages[j];
           if (prevMsg.role === "assistant" && prevMsg.tool_calls) {
-            const call = prevMsg.tool_calls.find((tc: any) => tc.id === msg.tool_call_id);
-            if (call) { toolName = call.function?.name; break; }
+            const call = prevMsg.tool_calls.find(
+              (tc: any) => tc.id === msg.tool_call_id,
+            );
+            if (call) {
+              toolName = call.function?.name;
+              break;
+            }
           }
         }
       }
+
       const truncated = compressToolResult(contentStr || "");
-      const callId = msg.tool_call_id || `anon_${i}`;
       const canary = `[tc-${randomUUID().substring(0, 8)}]`;
-      const inner = JSON.stringify({ success: true, stdout: truncated, stderr: "", command: toolName || "" });
-      const qwenResult = JSON.stringify([{ type: "text", text: `${canary}\n${inner}` }]);
-      prompt += `${qwenResult}\n\n`;
+
+      // Build function content: {clientName: [{toolName: result}]}
+      const inner = JSON.stringify({
+        success: true,
+        stdout: truncated,
+        stderr: "",
+        command: toolName || "",
+      });
+      const qwenResultStr = JSON.stringify([
+        { type: "text", text: `${canary}\n${inner}` },
+      ]);
+      const funcContent: Record<string, any> = {};
+      funcContent[resolvedClientName] = [
+        { [toolName || "unknown"]: qwenResultStr },
+      ];
+
+      qwenMessages.push({
+        fid: randomUUID(),
+        parentId: null,
+        childrenIds: [],
+        role: "function",
+        content: funcContent,
+        user_action: "chat",
+        files: [],
+        timestamp,
+        models: [model],
+        chat_type: "t2t",
+        feature_config: {},
+        extra: {
+          meta: {
+            subChatType: "t2t",
+          },
+        },
+        sub_chat_type: "t2t",
+        parent_id: null,
+        model: model,
+        modelName: model,
+        modelIdx: 0,
+        userContext: null,
+        info: {},
+      });
+
+      // Track for echo filter
       const canaryContent = `${canary}\n${truncated}`;
       turnToolResults.push({ turn: userTurns, content: canaryContent });
     }
   }
 
+  // If there's leftover system content, prepend to the first message
+  if (accumulatedSystemContent && qwenMessages.length > 0) {
+    const first = qwenMessages[0];
+    if (typeof first.content === "string") {
+      qwenMessages[0] = {
+        ...first,
+        content: accumulatedSystemContent + first.content,
+      };
+    }
+  }
+
+  // Build toolResultContents for echo filter (keep existing logic)
   const MAX_TOOL_RESULT_TURNS = 2;
-  const turnsWithResults = [...new Set(turnToolResults.map(r => r.turn))].sort((a, b) => b - a);
+  const turnsWithResults = [
+    ...new Set(turnToolResults.map((r) => r.turn)),
+  ].sort((a, b) => b - a);
   const recentTurns = new Set(turnsWithResults.slice(0, MAX_TOOL_RESULT_TURNS));
   for (const item of turnToolResults) {
     if (recentTurns.has(item.turn)) toolResultContents.push(item.content);
   }
 
-  if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
-    const formattedTools = body.tools.map((t: any) => ({
-      name: t.function.name,
-      description: (t.function.description || "") + " IMPORTANT: Never repeat the output of this tool verbatim to the user. Only use the output internally to inform your response.",
-      parameters: t.function.parameters,
-    }));
-    const toolsJson = JSON.stringify(formattedTools, null, 2);
-    systemPrompt += `\n\n# TOOLS AVAILABLE\nYou have access to:\n${toolsJson}\n\n`;
-    systemPrompt += `To call a tool, use your native XML format: <function=name><parameter=key>value</parameter></function>. Do NOT use JSON format. Example: <function=bash><parameter=command>ls -la</parameter></function>\n\n`;
-    if (body.tool_choice === "required" || body.tool_choice === "any") {
-      systemPrompt += `CRITICAL: Call tools to gather the information you need. After receiving each tool result, READ and ANALYZE it carefully. If the results give you enough information to answer the user, respond directly — do NOT continue calling tools unnecessarily. Only call additional tools if you genuinely need more data. NEVER call the same tool repeatedly with the same arguments.\n\n`;
-    } else if (body.tool_choice === "none") {
-      systemPrompt += `IMPORTANT: Do NOT use any tools. Respond to the user directly.\n\n`;
-    } else if (body.tool_choice && typeof body.tool_choice === "object" && "function" in body.tool_choice) {
-      systemPrompt += `CRITICAL: You MUST call the tool "${body.tool_choice.function.name}" in this response.\n\n`;
-    }
-  }
-  return { prompt, systemPrompt, toolResultContents };
+  return { qwenMessages, toolResultContents };
 }
 
 export function createLogEntry(
@@ -137,60 +309,77 @@ export function createLogEntry(
     roles: messages.map((m) => m.role),
     hasTools: !!body.tools?.length,
     toolNames: body.tools?.map((t: any) => t.function.name) || [],
-    tool_choice: body.tool_choice ? (typeof body.tool_choice === "string" ? body.tool_choice : JSON.stringify(body.tool_choice)) : null,
+    tool_choice: body.tool_choice
+      ? typeof body.tool_choice === "string"
+        ? body.tool_choice
+        : JSON.stringify(body.tool_choice)
+      : null,
     lastMessage: lastMsgContent ? safeTruncate(lastMsgContent, 300) : "",
     messages: messages.map(function (m: any) {
       var txt = Array.isArray(m.content)
-        ? m.content.filter(function (p: any) { return p.type === "text"; }).map(function (p: any) { return p.text; }).join(" ")
+        ? m.content
+            .filter(function (p: any) {
+              return p.type === "text";
+            })
+            .map(function (p: any) {
+              return p.text;
+            })
+            .join(" ")
         : String(m.content ?? "");
       return { role: m.role, content: txt };
     }),
   };
   const maxRequestBody = 4096;
   const rawBodyStr = JSON.stringify(body);
-  logEntry.rawRequestBody = rawBodyStr.length > maxRequestBody ? rawBodyStr.substring(0, maxRequestBody) + "... [truncated]" : rawBodyStr;
+  logEntry.rawRequestBody =
+    rawBodyStr.length > maxRequestBody
+      ? rawBodyStr.substring(0, maxRequestBody) + "... [truncated]"
+      : rawBodyStr;
   logStore.saveRequestInput(logId, body);
   return logEntry;
 }
 
 export function handleImageModelFallback(body: any, messages: any[]): void {
   const hasImages = messages.some(
-    (m) => Array.isArray(m.content) && m.content.some((c: any) => c.type === "image_url"),
+    (m) =>
+      Array.isArray(m.content) &&
+      m.content.some((c: any) => c.type === "image_url"),
   );
   if (hasImages) {
-    const modelId = (body.model as string).toLowerCase().replace(/\./g, "-").replace(/-no-thinking$/, "");
+    const modelId = (body.model as string)
+      .toLowerCase()
+      .replace(/\./g, "-")
+      .replace(/-no-thinking$/, "");
     const specs = (modelSpecs as Record<string, ModelSpec>)[modelId];
     const supportsImages = specs?.modalities.includes("image");
     if (!supportsImages) {
       const original = body.model;
-      body.model = "qwen3.6-plus" + (original.includes("-no-thinking") ? "-no-thinking" : "");
+      body.model =
+        "qwen3.6-plus" + (original.includes("-no-thinking") ? "-no-thinking" : "");
     }
   }
 }
 
-export function getModelSpecs(body: any): { maxContext: number; maxOutput: number } {
-  const modelId = (body.model as string).toLowerCase().replace(/\./g, "-").replace(/-no-thinking$/, "");
+export function getModelSpecs(
+  body: any,
+): { maxContext: number; maxOutput: number } {
+  const modelId = (body.model as string)
+    .toLowerCase()
+    .replace(/\./g, "-")
+    .replace(/-no-thinking$/, "");
   const specs = (modelSpecs as Record<string, ModelSpec>)[modelId];
-  return { maxContext: specs?.max_context || 250000, maxOutput: specs?.max_output || 65000 };
-}
-
-export function logPromptToQwen(logEntry: any, systemPrompt: string, prompt: string, finalPrompt: string): void {
-  logEntry.promptToQwen = {
-    systemPromptLength: systemPrompt.length,
-    totalLength: finalPrompt.length,
-    preview: (systemPrompt.length > 500 ? systemPrompt.substring(0, 500) + "..." : systemPrompt) +
-      "\n\n" + (prompt.length > 200 ? prompt.substring(0, 200) + "..." : prompt),
+  return {
+    maxContext: specs?.max_context || 250000,
+    maxOutput: specs?.max_output || 65000,
   };
 }
 
 export async function acquireSessionWithCorrections(
   accountEmail: string | undefined,
-  systemPrompt: string,
-  prompt: string,
+  qwenMessages: QwenMessage[],
 ): Promise<{
   session: any;
-  systemPrompt: string;
-  finalPrompt: string;
+  qwenMessages: QwenMessage[];
   nextParentId: string | null;
   sessionHeaders: any;
   resolvedEmail: string;
@@ -204,18 +393,27 @@ export async function acquireSessionWithCorrections(
     pendingCorrections.delete(session.chatId);
     if (accountEmail) pendingCorrections.delete(accountEmail);
     pendingCorrections.delete("__echo_retry__");
-    const correctionsBlock = prevCorrections.map((c: string, i: number) => `${i + 1}. ${c}`).join("\n");
-    systemPrompt += `\n### FEEDBACK FROM PREVIOUS TURN\nThe following issues were detected in your previous response. Address them now:\n${correctionsBlock}\n\n`;
+    const correctionsBlock = prevCorrections
+      .map((c: string, i: number) => `${i + 1}. ${c}`)
+      .join("\n");
+    const correctionText = `### FEEDBACK FROM PREVIOUS TURN\nThe following issues were detected in your previous response. Address them now:\n${correctionsBlock}\n\n`;
+
+    // Prepend correction text to the first message's content
+    qwenMessages = qwenMessages.map((m, idx) => {
+      if (idx === 0 && typeof m.content === "string") {
+        return { ...m, content: correctionText + m.content };
+      }
+      return m;
+    });
   }
-  const finalPrompt = systemPrompt ? `${systemPrompt}\n${prompt}` : prompt;
   const nextParentId: string | null = session.parentId;
   const sessionHeaders = session.cachedHeaders || {};
   const resolvedEmail = session.accountEmail || accountEmail || "";
-  return { session, systemPrompt, finalPrompt, nextParentId, sessionHeaders, resolvedEmail };
+  return { session, qwenMessages, nextParentId, sessionHeaders, resolvedEmail };
 }
 
 export async function createQwenStreamWithRetry(
-  finalPrompt: string,
+  qwenMessages: QwenMessage[],
   isThinkingModel: boolean,
   routedModel: string,
   chatId: string,
@@ -223,7 +421,14 @@ export async function createQwenStreamWithRetry(
   resolvedEmail: string,
 ): Promise<{ stream: ReadableStream; abortController: AbortController }> {
   try {
-    const result = await createQwenStream(finalPrompt, isThinkingModel, routedModel, chatId, nextParentId, resolvedEmail);
+    const result = await createQwenStream(
+      qwenMessages,
+      isThinkingModel,
+      routedModel,
+      chatId,
+      nextParentId,
+      resolvedEmail,
+    );
     modelRouter.recordSuccess(routedModel);
     return { stream: result.stream, abortController: result.abortController };
   } catch (err: any) {
@@ -233,6 +438,10 @@ export async function createQwenStreamWithRetry(
   }
 }
 
-export function logIncomingRequest(_body: any, _isStream: boolean, _messages: any[]): void {
+export function logIncomingRequest(
+  _body: any,
+  _isStream: boolean,
+  _messages: any[],
+): void {
   // Debug logging intentionally disabled
 }
