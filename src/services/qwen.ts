@@ -275,10 +275,24 @@ export async function createQwenStream(
           }
         });
         try {
+          const bodyStr = JSON.stringify(payload);
+          console.log('\n=== QWEN API REQUEST ===');
+          console.log(`URL: ${url}`);
+          console.log(`Payload size: ${bodyStr.length} bytes, ${payload.messages.length} message(s)`);
+          console.log(`Roles: ${payload.messages.map((m: any) => m.role).join(', ')}`);
+          if (payload.messages[0]?.content && typeof payload.messages[0].content === 'string') {
+            console.log(`Content preview: ${payload.messages[0].content.substring(0, 200)}...`);
+          }
+          if (payload.messages[0]?.content && typeof payload.messages[0].content === 'object') {
+            console.log(`Content keys: ${Object.keys(payload.messages[0].content).join(', ')}`);
+          }
           response = await fetch(url, {
             method: 'POST', headers: requestHeaders,
-            body: JSON.stringify(payload), signal: controller.signal,
+            body: bodyStr, signal: controller.signal,
           });
+          console.log(`=== QWEN API RESPONSE ===`);
+          console.log(`Status: ${response.status} ${response.statusText}`);
+          console.log(`Headers: content-type=${response.headers.get('content-type')}, content-length=${response.headers.get('content-length')}`);
         } finally { cleanup(); }
       } catch (fetchErr: unknown) {
         const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
