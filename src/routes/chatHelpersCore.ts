@@ -204,6 +204,12 @@ export function extractDeltaContent(
           if (vStr) { newThoughtIndex = thoughts.length; foundStr = true; }
         }
       }
+    } else if (delta.phase === "think") {
+      isThinkingChunk = true;
+      if (delta.content !== undefined) {
+        vStr = delta.content || "";
+        if (vStr) foundStr = true;
+      }
     } else if (delta.phase === "answer") {
       isThinkingChunk = false;
       if (delta.content !== undefined) {
