@@ -26,8 +26,10 @@ import { config } from '../../services/configService.ts';
 
 const SHINGLE_SIZE = 5;
 const JACCARD_THRESHOLD = parseFloat(config.get('ECHO_JACCARD_THRESHOLD', '0.9'));
-const MIN_LINE_LENGTH = parseInt(config.get('ECHO_MIN_LINE_LENGTH', '20'), 10);
+const MIN_LINE_LENGTH = parseInt(config.get('ECHO_MIN_LINE_LENGTH', '10'), 10);
 const MIN_UNIQUE_SHINGLES = parseInt(config.get('ECHO_MIN_UNIQUE_SHINGLES', '8'), 10);
+const ECHO_MIN_ALPHA_RATIO = parseFloat(config.get('ECHO_MIN_ALPHA_RATIO', '0.5'));
+const MIN_MATCHING_SHINGLES = parseInt(config.get('ECHO_MIN_MATCHING_SHINGLES', '15'), 10);
 const CANARY_PATTERN = /\[tc-[0-9a-f]{8}\]/;
 
 export interface StreamingEchoResult {
@@ -100,29 +102,43 @@ export class StreamingEchoFilter {
           matchedLine: line,
         };
       }
+
+      // Skip echo detection for non-natural-language lines (file paths, code, YAML structure)
+      // Also skip ASCII diagrams/flowcharts (e.g. A[text] -->|label| B[text])
+      if (/\[.*\]\s*(?:--|==)>|->\s*\|/.test(line) ||
+          (line.includes('|') && (line.match(/[\[\]|>]/g) || []).length >= 3)) continue;
+      const alphaChars = (line.match(/[a-zA-Z]/g) || []).length;
+      const alphaRatio = alphaChars / Math.max(line.length, 1);
+      if (alphaRatio < ECHO_MIN_ALPHA_RATIO) continue;
+
       const normalized = this.normalizeLine(line);
       if (normalized.length < MIN_LINE_LENGTH) continue;
 
       const shingles = this.computeShingles(normalized);
       if (shingles.size < MIN_UNIQUE_SHINGLES) continue;
       for (const fp of this.fingerprints) {
-        // Bidirectional containment: output→tool AND tool→output
-        // This prevents false positives when short output lines happen to share shingles
-        // with long tool result lines (common with natural language)
-        const outputToTool = this.shingleContainment(shingles, fp);
-        const toolToOutput = this.shingleContainment(fp, shingles);
+        // Compute actual intersection count + bidirectional containment
+        let intersection = 0;
+        for (const shingle of shingles) {
+          if (fp.has(shingle)) intersection++;
+        }
+        const outputToTool = intersection / shingles.size;
+        const toolToOutput = intersection / fp.size;
         const containment = Math.min(outputToTool, toolToOutput);
 
         if (containment > maxSimilarity) {
           maxSimilarity = containment;
           matchedLine = line;
         }
-        if (containment >= JACCARD_THRESHOLD) {
+        // Requires BOTH high containment AND significant absolute match count
+        // This prevents false positives on short lines (file paths, code fragments)
+        // where high ratio but small absolute overlap triggers incorrectly
+        if (containment >= JACCARD_THRESHOLD && intersection >= MIN_MATCHING_SHINGLES) {
           return {
             cleanDelta: '',
             echoDetected: true,
             similarity: containment,
-            reason: `Echo detected (${(containment * 100).toFixed(1)}% similarity)`,
+            reason: `Echo detected (${(containment * 100).toFixed(1)}% similarity, ${intersection} shingles)`,
             matchedLine,
           };
         }
@@ -202,5 +218,29 @@ export class StreamingEchoFilter {
       if (fingerprint.has(shingle)) intersection++;
     }
     return intersection / query.size;
+  }
+
+  /**
+   * Check a single line against fingerprints without modifying filter state.
+   * Used to check reasoning/thinking content for echo.
+   */
+  checkLine(line: string): { echoDetected: boolean } {
+    const normalized = this.normalizeLine(line);
+    if (normalized.length < MIN_LINE_LENGTH) return { echoDetected: false };
+    const shingles = this.computeShingles(normalized);
+    if (shingles.size < MIN_UNIQUE_SHINGLES) return { echoDetected: false };
+    for (const fp of this.fingerprints) {
+      let intersection = 0;
+      for (const shingle of shingles) {
+        if (fp.has(shingle)) intersection++;
+      }
+      const outputToTool = intersection / shingles.size;
+      const toolToOutput = intersection / fp.size;
+      const containment = Math.min(outputToTool, toolToOutput);
+      if (containment >= JACCARD_THRESHOLD && intersection >= MIN_MATCHING_SHINGLES) {
+        return { echoDetected: true };
+      }
+    }
+    return { echoDetected: false };
   }
 }

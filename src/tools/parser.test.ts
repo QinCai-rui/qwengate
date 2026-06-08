@@ -45,7 +45,7 @@ describe('StreamingToolParser flush leak vector', () => {
     assert.strictEqual(allToolCalls.length, 0);
   });
 
-  it('S2: flush drops JSON with name but no arguments as non-tool-call', () => {
+  it('S2: flat format (name + fields, no arguments) extracted as tool call', () => {
     const parser = new StreamingToolParser();
     const chunks = streamChunks('{"name": "search", "query": "hello"}');
     let allText = '';
@@ -58,8 +58,11 @@ describe('StreamingToolParser flush leak vector', () => {
     const flush = parser.flush();
     allText += flush.text;
     allToolCalls.push(...flush.toolCalls);
-    assert.strictEqual(allToolCalls.length, 0,
-      `Should not extract JSON without arguments: ${JSON.stringify(allToolCalls)}`);
+    // Qwen flat format: name + additional fields = tool call with rest as args
+    assert.strictEqual(allToolCalls.length, 1,
+      `Should extract flat-format tool call: ${JSON.stringify(allToolCalls)}`);
+    assert.strictEqual(allToolCalls[0].name, 'search');
+    assert.deepStrictEqual(allToolCalls[0].arguments, { query: 'hello' });
     assert.ok(!allText.includes('"search"'),
       `Tool name leaked as text: "${allText}"`);
   });
@@ -453,5 +456,24 @@ describe('StreamingToolParser flush leak vector', () => {
     // 'description' may legitimately appear in the text output but as a JSON key it should not
     assert.ok(!allText.includes('"description"'),
       `JSON key 'description' leaked as text: ${JSON.stringify(allText)}`);
+  });
+
+  it('S12: getEmittedToolCallCount survives flush (was being reset to 0)', () => {
+    const parser = new StreamingToolParser();
+    const chunks = streamChunks(
+      '{"name": "read", "arguments": {"filePath": "a.txt"}}\n' +
+      '{"name": "bash", "arguments": {"command": "ls"}}'
+    );
+    for (const chunk of chunks) parser.feed(chunk);
+    const beforeFlush = parser.getEmittedToolCallCount();
+    assert.strictEqual(beforeFlush, 2,
+      `Expected 2 before flush, got ${beforeFlush}`);
+    const flushResult = parser.flush();
+    const afterFlush = parser.getEmittedToolCallCount();
+    const total = beforeFlush + flushResult.toolCalls.length;
+    assert.strictEqual(afterFlush, 0,
+      `emittedCount reset to 0 after flush`);
+    assert.strictEqual(total, 2,
+      `Real total before flush + flush calls = ${total} (should be 2)`);
   });
 });

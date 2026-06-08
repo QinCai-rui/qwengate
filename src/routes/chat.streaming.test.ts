@@ -1,8 +1,9 @@
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { StreamingToolParser } from '../tools/parser.ts';
-import { stripStreamingDelta, filterContent } from '../utils/contentFilter.ts';
+import { stripStreamingDelta, filterContent, stripToolCallArtifacts } from '../utils/contentFilter.ts';
 import { ToolResultEchoFilter } from './pipeline/ToolResultEchoFilter.ts';
+import { logStore } from '../services/logStore.ts';
 
 // ─── Streaming simulation ──────────────────────────────────────────────
 
@@ -484,5 +485,301 @@ describe('Content filter with streaming', () => {
       `Thinking tag leaked through: "${filtered}"`);
     assert.ok(filtered.includes('The final count is 42.'),
       `Content was stripped: "${filtered}"`);
+  });
+});
+
+// ─── raw_output vs processed_output accumulation tests ────────────
+
+describe('raw_output vs processed_output accumulation (text-only streaming)', () => {
+
+  /**
+   * Simulates the text-only streaming path in processStreamData.
+   * For each chunk:
+   *   1. addRawChunk() stores the raw fragment
+   *   2. Content filter runs on FULL accumulated text
+   *   3. Snapshot-based delta extraction produces only new content
+   *   4. addProcessedOutput() stores the delta
+   *
+   * This reproduces the exact pattern in chatStreamingHelpers.ts:245-298
+   * but at the logStore level so we can assert on the final entry.
+   */
+  function simulateTextOnlyStream(
+    chunks: string[],
+    enableFiltering: boolean,
+    logStore: any,
+    logId: string,
+  ): void {
+    let lastFullContent = '';
+    let lastFilteredSnapshot = '';
+
+    for (const vStr of chunks) {
+      // Step 1: store raw chunk (same as chatStreamingHelpers.ts:189)
+      logStore.addRawChunk(logId, vStr);
+      lastFullContent += vStr;
+
+      // Step 2-3: content filter on full accumulated text (lines 245-264)
+      const baseFiltered = enableFiltering
+        ? filterContent(lastFullContent).cleanText
+        : lastFullContent;
+      const fullFilteredText = stripToolCallArtifacts(baseFiltered);
+      const echoFilteredText = fullFilteredText || null;
+      const cleanedText = echoFilteredText
+        ? echoFilteredText.replace(/<\/?(?:think|thinking|thought|tool_call|tool_use|function_call|tool)>/gi, '')
+        : null;
+
+      // Step 4: snapshot delta (lines 293-297, the text-only path)
+      if (cleanedText) {
+        const contentDelta = stripStreamingDelta(
+          cleanedText.substring(lastFilteredSnapshot.length),
+        );
+        lastFilteredSnapshot = cleanedText;
+        if (contentDelta) {
+          logStore.addProcessedOutput(logId, contentDelta);
+        }
+      }
+    }
+  }
+
+  it('accumulates complete processed output for text-only streaming (no tool calls)', () => {
+    // Exact chunks from the real bug log (2026-06-06_15-23-06.json)
+    // where processed_output.content only had the LAST line
+    const toolListingChunks = [
+      '- `bash',
+      '` — Execute shell',
+      ' commands\n-',
+      ' `read` —',
+      ' Read files and',
+      ' directories\n- `',
+      'write` — Write',
+      ' files\n- `',
+      'edit` — Edit',
+      ' files with exact string',
+      ' replacements\n',
+      '- `glob`',
+      ' — Find files by',
+      ' pattern\n- `',
+      'grep`',
+      ' — Search file contents',
+      ' by',
+      ' regex\n- `',
+      'task` — Launch',
+      ' subagents for complex',
+      ' tasks\n- `',
+      'webfetch` —',
+      ' Fetch and read',
+      ' web content\n-',
+      ' `todowrite',
+      '` — Manage task',
+      ' lists\n- `',
+      'question` — Ask',
+      ' user questions\n-',
+      ' `skill` —',
+      ' Load specialized skills\n',
+      '- `suggest`',
+      ' — S',
+      'uggest code review\n',
+      '- `k',
+      'ilo_local_recall`',
+      ' — Search/read',
+      ' past sessions\n-',
+      ' `background',
+      '_process` — Manage',
+      ' long-running processes',
+      '\n- `plan',
+      '_exit` — Signal',
+      ' planning complete',
+    ];
+
+    const expectedOutput = toolListingChunks.join('');
+    const logId = 'test-text-only-stream-001';
+    logStore.createEntry(logId, 'qwen3.7-max', true);
+    const entry = logStore.getEntry(logId);
+
+    assert.ok(entry, 'Entry must exist');
+    assert.equal(entry.rawFullContent, '',
+      'New entry starts with empty raw_full_content');
+
+    // Run simulation (content filtering DISABLED to match the bug scenario)
+    simulateTextOnlyStream(toolListingChunks, false, logStore, logId);
+    logStore.finalizeRequest(logId);
+
+    const finalEntry = logStore.getEntry(logId);
+    assert.ok(finalEntry, 'Entry must exist after finalize');
+
+    // RAW output should have ALL content
+    assert.equal(finalEntry.rawFullContent, expectedOutput,
+      'raw_output must have ALL chunks concatenated');
+
+    // PROCESSED output should have ALL content (no tool calls to strip)
+    assert.equal(finalEntry.processedApiOutput, expectedOutput,
+      `processed_output must match raw_output for text-only content.\n` +
+      `  raw:       ${JSON.stringify(finalEntry.rawFullContent.substring(0, 100))}...\n` +
+      `  processed: ${JSON.stringify(finalEntry.processedApiOutput.substring(0, 100))}...\n` +
+      `  full raw len:     ${finalEntry.rawFullContent.length}\n` +
+      `  full processed len: ${finalEntry.processedApiOutput.length}`);
+
+    // Verify no data leaked from processed (should be identical to raw)
+    assert.equal(finalEntry.processedApiOutput.length, expectedOutput.length,
+      `processed_output length ${finalEntry.processedApiOutput.length} must match raw ${expectedOutput.length}`);
+  });
+
+  it('strips tool call JSON from processed output while keeping surrounding text', () => {
+    // Realistic scenario: text, then tool call JSON, then more text
+    // The tool call artifacts should be stripped from processed output
+    // while both surrounding text fragments remain
+    const chunks = [
+      'I\'ll check the file first.',
+      '{"name": "read", "arguments": {"filePath": "/etc/hostname"}}',
+      ' The file contains the hostname.',
+    ];
+
+    const logId = 'test-tool-call-artifact-002';
+    logStore.createEntry(logId, 'qwen3.7-max', true);
+    simulateTextOnlyStream(chunks, true, logStore, logId);
+    logStore.finalizeRequest(logId);
+
+    const entry = logStore.getEntry(logId);
+    assert.ok(entry, 'Entry must exist');
+
+    // Raw has everything
+    assert.ok(entry.rawFullContent.includes('{"name": "read"'),
+      'raw_output must contain tool call JSON');
+
+    // Processed should strip tool call artifacts
+    assert.ok(!entry.processedApiOutput.includes('"name"'),
+      'processed_output must NOT contain tool call JSON');
+
+    // Surrounding text must survive
+    assert.ok(entry.processedApiOutput.includes("I'll check the file first."),
+      'processed_output must have text BEFORE tool call: "' +
+      entry.processedApiOutput.substring(0, 80) + '"');
+    assert.ok(entry.processedApiOutput.includes('The file contains the hostname.'),
+      'processed_output must have text AFTER tool call: "' +
+      entry.processedApiOutput.substring(0, 80) + '"');
+  });
+
+  it('produces empty processed output for pure tool call chunks', () => {
+    // Pure tool call JSON — only tool_name fits the description
+    const chunks = [
+      '{"name": "bash", "arguments": {"command": "ls -la"}}',
+    ];
+
+    const logId = 'test-pure-tool-call-003';
+    logStore.createEntry(logId, 'qwen3.7-max', true);
+    simulateTextOnlyStream(chunks, true, logStore, logId);
+    logStore.finalizeRequest(logId);
+
+    const entry = logStore.getEntry(logId);
+    assert.ok(entry, 'Entry must exist');
+
+    // Raw has the tool call
+    assert.ok(entry.rawFullContent.includes('"name": "bash"'),
+      'raw_output must contain tool call');
+
+    // Processed should be empty (entirely stripped as artifact)
+    assert.equal(entry.processedApiOutput, '',
+      'processed_output must be empty for pure tool call content');
+  });
+
+  it('handles content filtered as thinking (empty processed, non-empty raw)', () => {
+    // Scenario from contentFilter: all content classified as thinking
+    // e.g. "I am evaluating the file structure" → isThinkingLine matches
+    const thinkingContent = 'I am evaluating the file structure';
+
+    const logId = 'test-thinking-content-004';
+    logStore.createEntry(logId, 'qwen3.7-max', true);
+    simulateTextOnlyStream([thinkingContent], true, logStore, logId);
+    logStore.finalizeRequest(logId);
+
+    const entry = logStore.getEntry(logId);
+    assert.ok(entry, 'Entry must exist');
+
+    // Raw has the content
+    assert.ok(entry.rawFullContent.length > 0,
+      'raw_output must be non-empty');
+
+    // Processed may be empty if filter classified it as thinking
+    // This is expected behavior — tracking the known gap
+    console.log(`  thinking content → raw: ${entry.rawFullContent.length}B, processed: ${entry.processedApiOutput.length}B`);
+  });
+});
+
+// ─── < leak tests: bare < at end of line (split tag artifact) ─────
+
+describe('< leak — bare < at end of line (split tag artifact)', () => {
+
+  it('stripStreamingDelta strips bare < at end of line', () => {
+    // Real scenario from the log: content ends with < before a newline
+    // e.g. chunk boundary split a </tool_result> tag
+    const cases = [
+      { input: 'testing the edit\n<\nNow testing skill', desc: '< on own line' },
+      { input: 'testing the edit\n< \nNow testing skill', desc: '< with space on own line' },
+      { input: 'testing the edit\n<', desc: '< at end with trailing newline' },
+      { input: 'text before<\nmore text', desc: '< followed by newline inline' },
+      { input: '<\ntrailing', desc: '< at very start of string' },
+    ];
+    for (const { input, desc } of cases) {
+      const cleaned = stripStreamingDelta(input);
+      assert.ok(!cleaned.includes('<\n'),
+        `FAIL [${desc}]: <\\n leaked through\n  input:   ${JSON.stringify(input)}\n  cleaned: ${JSON.stringify(cleaned)}`);
+    }
+  });
+
+  it('stripStreamingDelta does NOT strip legitimate < in middle of line', () => {
+    // Must NOT strip < that's part of normal text
+    const legitimate = [
+      'x < 5 and y > 3',
+      'if (a < b) return;',
+      'template <typename T>',
+      '2 < 3 is true',
+    ];
+    for (const text of legitimate) {
+      const cleaned = stripStreamingDelta(text);
+      assert.ok(cleaned.includes('<'),
+        `Legitimate < stripped: "${text}" → "${cleaned}"`);
+    }
+  });
+
+  it('simulates real streaming scenario with bare < leakage', () => {
+    // Exact chunks from a real streaming scenario where a tool call
+    // boundary is split across chunks:
+    // chunk 1: "Now testing `edit` (requires a prior read...\n\n<\n"
+    // chunk 2: "Now testing `skill`...\n\n"
+    const chunks = [
+      'Now testing `edit` (requires a prior read',
+      ' of the target file).\n\n<\n',
+      'Now testing `skill`:\n\n',
+    ];
+
+    const logId = 'test-bare-leak-sim-001';
+    logStore.createEntry(logId, 'qwen3.7-max', true);
+
+    let accumulated = '';
+    let lastSnapshot = '';
+
+    for (const chunk of chunks) {
+      logStore.addRawChunk(logId, chunk);
+      accumulated += chunk;
+      const fullCleaned = stripStreamingDelta(accumulated);
+      const delta = fullCleaned.substring(lastSnapshot.length);
+      if (delta) {
+        lastSnapshot = fullCleaned;
+        logStore.addProcessedOutput(logId, delta);
+      }
+    }
+    logStore.finalizeRequest(logId);
+
+    const entry = logStore.getEntry(logId);
+    assert.ok(entry, 'Entry must exist');
+
+    // processed_output should NOT contain a bare <
+    assert.ok(!entry.processedApiOutput.includes('<\n'),
+      `processed_output contains leaked \<\\\n\: "${entry.processedApiOutput.substring(0, 200)}"`);
+
+    // The text before and after the < should be preserved
+    assert.ok(entry.processedApiOutput.includes('Now testing `edit`'),
+      `Text before leaked < was lost`);
+    assert.ok(entry.processedApiOutput.includes('Now testing `skill`'),
+      `Text after leaked < was lost`);
   });
 });

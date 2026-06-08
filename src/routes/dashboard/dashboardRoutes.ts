@@ -41,21 +41,6 @@ function dashboardStaticHandler(c: any) {
   return c.text(readFileSync(filePath, "utf-8"), 200, { "Content-Type": ext });
 }
 
-function dashboardLogFileHandler(c: any) {
-  const logDir = logStore.getRequestLogDir();
-  if (!logDir) return c.json({ error: "Request file logging not enabled" }, 503);
-  const ALLOWED_LOG_FILES = new Set(["input.json", "raw_output.txt", "processed_output.txt", "chunk_stream.txt"]);
-  const id = c.req.param("id");
-  const file = c.req.param("file");
-  if (!ALLOWED_LOG_FILES.has(file)) return c.json({ error: "Invalid file" }, 400);
-  if (!/^[a-zA-Z0-9_-]+$/.test(id)) return c.json({ error: "Invalid request ID" }, 400);
-  const filePath = resolve(logDir, "requests", id, file);
-  if (!existsSync(filePath)) return c.json({ error: "File not found" }, 404);
-  const content = readFileSync(filePath, "utf-8");
-  const contentType = file.endsWith(".json") ? "application/json" : "text/plain";
-  return c.text(content, 200, { "Content-Type": contentType });
-}
-
 function healthHandler(c: any) {
   const pwOk = getActivePage() !== null;
   return c.json(
@@ -209,7 +194,6 @@ export function registerDashboardRoutes(app: Hono): void {
   app.get("/dashboard/settings", serveHtml(settingsHtml));
 
   app.get("/dashboard/static/:file", dashboardStaticHandler);
-  app.get("/dashboard/logs/:id/:file", dashboardLogFileHandler);
 
   app.get("/", (c) => c.redirect("/dashboard"));
   app.get("/health", healthHandler);
@@ -233,6 +217,13 @@ export function registerDashboardRoutes(app: Hono): void {
         id: e.id,
         date: datePart,
         time: timePart,
+        timestamp: e.timestamp,
+        stream: e.stream,
+        accountEmail: e.accountEmail,
+        latency_ms: e.latency_ms,
+        tokens: e.tokens,
+        request_id: e.request_id,
+        errors: e.errors?.length > 0 ? e.errors : undefined,
         model: e.model,
         turnId: e.turnId || "",
         raw_output: e.rawFullContent || "",
@@ -245,7 +236,15 @@ export function registerDashboardRoutes(app: Hono): void {
           }),
         },
         chunks: (e.qwenRawChunks || []) as string[],
-        input: e.clientRequest || {},
+        finalResponse: e.finalResponse || undefined,
+        remainingText: e.remainingText || undefined,
+        promptToQwen: e.promptToQwen || undefined,
+        rawRequestBody: e.rawRequestBody || undefined,
+        networkTiming: e.networkTiming || undefined,
+        amplificationRatio: e.amplificationRatio,
+        amplificationTriggeredInput: e.amplificationTriggeredInput || undefined,
+        input: e.input || undefined,
+        client_request: e.clientRequest || {},
       };
     });
     return c.json(serialized);

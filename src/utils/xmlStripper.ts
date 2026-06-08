@@ -83,10 +83,14 @@ export function stripToolCallArtifacts(text: string): string {
   text = text.replace(/\n?<to(?:ol?)?$/g, '');
   // Only strip trailing <t or < if preceded by tool_, tool, to_, etc — never standalone
   text = text.replace(/\n?(?:<to(?:o(?:l)?)?|<\S*?t)$/g, '');
+  text = text.replace(/^<\s*$/gm, '');  // lone < on its own line (split tag artifact)
   // Strip legacy <invoke> XML format and broken artifacts (observed in logs)
   text = text.replace(/<invoke\s+[^>]*\/?>/g, '');
   text = text.replace(/<\/invoke[^>]*>/g, '');
   text = text.replace(/<invoke>[\s\S]*?<\/invoke>/g, '');
+  // Strip <tool_call> XML wrapping (Qwen flat format)
+  text = text.replace(/<tool_call[\s\S]*?<\/tool_call>/g, '');
+  text = text.replace(/<\/?tool_call[^>]*>/g, '');
   text = text.replace(/<\/(?:<\s*\/?[a-z_][^>]*>)[^>]*>/g, '');
   text = text.replace(/<\/(?=<[a-z_/])[^>]*>/g, '');
   text = text.replace(/Tool Response \([^)]+\):[^\n]*(?:\n(?!\s*(?:\n|$)|Tool Response\s*\(|{"name)[^\n]*)*/g, '');
@@ -119,6 +123,7 @@ export function stripStreamingDelta(delta: string): string {
   cleaned = cleaned.replace(/<tool_result[^>]*>[\s\S]*?<\/tool_result>/g, '');
   cleaned = cleaned.replace(/\n?<tool(?:_[a-z]*)?$/g, '');
   cleaned = cleaned.replace(/\n?<t(?:o(?:o(?:l)?)?)?$/g, '');
+  cleaned = cleaned.replace(/\n?<\s*$/gm, '');  // bare < at end of line (split tag artifact)
   cleaned = cleaned.replace(/(?<!:)"[a-z_]+(?:\.[a-z_]+)*"(?=\s*,\s*"arguments")/g, '');
   cleaned = cleaned.replace(/[a-z_]+"\s*,\s*"(?:arguments|parameters|argumen|argu|param)/gi, '');
   cleaned = cleaned.replace(/"arguments"\s*:\s*\}/g, '');
@@ -127,14 +132,18 @@ export function stripStreamingDelta(delta: string): string {
   cleaned = cleaned.replace(/Tool Response \([a-z_]+$/gm, '');
   cleaned = cleaned.replace(/<invoke\s+[^>]*\/?>/g, '');
   cleaned = cleaned.replace(/<\/invoke[^>]*>/g, '');
+  cleaned = cleaned.replace(/<\/?tool_call[^>]*>/g, '');
+  cleaned = cleaned.replace(/(?:^|\s)_?(?:call|result|invoke)>/gm, '');  // split tag remnants: _call> _result> _invoke>
   cleaned = cleaned.replace(/<\/(?:<\s*\/?[a-z_][^>]*>)[^>]*>/g, '');
   cleaned = cleaned.replace(/<\/(?=<[a-z_/])[^>]*>/g, '');
+  cleaned = cleaned.replace(/<\/(?:[A-Z]\w*\s|$)/gm, '');  // </UppercaseWord or </ at end = split artifact
   cleaned = cleaned.replace(/"[a-z_]+(?:\.[a-z_]+)*"\s*,\s*"(?:arguments|parameters)"?\s*:?/gi, '');
-  cleaned = cleaned.replace(/"(?:argumen|argument|arguments|param|parameter|parameters|name)"?\s*:?\s*"?$/gm, '');
+  cleaned = cleaned.replace(/"(?:argumen|argument|arguments|param|parameter|parameters)"?\s*:?\s*"?$/gm, '');
   cleaned = cleaned.replace(/"?\s*:\s*"[a-z_]+(?:\.[a-z_]+)*"?\s*,?\s*"?(?:arguments|parameters)?"?\s*:?$/gm, '');
   cleaned = cleaned.replace(/^"?[a-z_]+(?:\.[a-z_]+)*"?\s*,\s*"?(?:arguments|parameters)/gm, '');
-  cleaned = cleaned.replace(/\{\s*"(?:name|function)"?\s*:\s*"?$/gm, '');
-  cleaned = cleaned.replace(/^"?(?:name|function)"?\s*:\s*"[a-z_]+/gm, '');
+  // Note: DO NOT strip `{"name"` or `"name": "tool"` from per-chunk safety net.
+  // These patterns used to exist but broke stripToolCallArtifacts on full text
+  // by removing the opening of tool call JSON, leaving orphaned fragments.
   return cleaned;
 }
 

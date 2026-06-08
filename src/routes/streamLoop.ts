@@ -152,12 +152,20 @@ export async function handlePostStreamCompletion(
     await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ content: upstreamError.message })]));
     await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({}, 'stop')]));
     await streamWriter.write('data: [DONE]\n\n');
+    logStore.updateEntry(logId, entry => { entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' }; entry.finalResponse.finishReason = 'upstream_error'; });
+    logStore.finalizeRequest(logId);
     return;
   }
 
+  const emittedToolCallCount = toolParser.getEmittedToolCallCount();
   const { text: remainingText, toolCalls: remainingToolCalls, thinking: remainingThinking } = toolParser.flush();
   if (remainingThinking) {
-    await writeReasoningEvent(streamWriter, completionId, model, remainingThinking);
+    const echoCheck = streamingEchoFilter.checkLine(remainingThinking);
+    if (echoCheck.echoDetected) {
+      console.warn(`[Echo in reasoning] Suppressed echo in thinking content`);
+    } else {
+      await writeReasoningEvent(streamWriter, completionId, model, remainingThinking);
+    }
   }
   if (remainingText) {
     streamState.lastFullContent += remainingText;
@@ -173,7 +181,12 @@ export async function handlePostStreamCompletion(
     const thinkDelta = getSnapshotDelta(flushThinking, streamState.lastThinkingSnapshot);
     if (thinkDelta) {
       streamState.lastThinkingSnapshot = flushThinking;
-      await writeReasoningEvent(streamWriter, completionId, model, thinkDelta);
+      const echoCheck = streamingEchoFilter.checkLine(thinkDelta);
+      if (!echoCheck.echoDetected) {
+        await writeReasoningEvent(streamWriter, completionId, model, thinkDelta);
+      } else {
+        console.warn(`[Echo in reasoning] Suppressed echo in filtered thinking`);
+      }
     }
   }
   if (flushCleaned) {
@@ -200,11 +213,11 @@ export async function handlePostStreamCompletion(
       });
       continue;
     }
-    await writeToolCallEvent(streamWriter, completionId, model, tc, toolParser.getEmittedToolCallCount() - remainingToolCalls.length + remainingToolCalls.indexOf(tc));
+    await writeToolCallEvent(streamWriter, completionId, model, tc, emittedToolCallCount + remainingToolCalls.indexOf(tc));
   }
 
   const usage = buildUsage(streamState.promptTokens, streamState.completionTokens, streamState.reasoningBuffer);
-  const finalFinishReason = toolParser.getEmittedToolCallCount() > 0 ? 'tool_calls' : 'stop';
+  const finalFinishReason = (emittedToolCallCount + remainingToolCalls.length) > 0 ? 'tool_calls' : 'stop';
 
   await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({}, finalFinishReason)],
     includeUsage ? undefined : { usage },
@@ -224,7 +237,7 @@ export async function handlePostStreamCompletion(
     if (streamState.lastFullContent) entry.remainingText = streamState.lastFullContent;
     entry.finalResponse = {
       finishReason: finalFinishReason || 'stop',
-      toolCallCount: toolParser.getEmittedToolCallCount(),
+      toolCallCount: emittedToolCallCount + remainingToolCalls.length,
       contentPreview: (streamState.lastFullContent || '').substring(0, 100),
     };
   });

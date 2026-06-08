@@ -27,6 +27,8 @@ import {
  * Log tool calls to logStore, validate each, and write SSE events.
  * Returns true if all tool calls passed validation.
  */
+const MAX_TOOL_CALLS_PER_TURN = 8;
+
 export async function handleToolCalls(
   toolCalls: any[],
   logId: string,
@@ -35,6 +37,16 @@ export async function handleToolCalls(
   model: string,
   toolParser: { getEmittedToolCallCount: () => number },
 ): Promise<boolean> {
+  if (toolCalls.length > MAX_TOOL_CALLS_PER_TURN) {
+    console.warn(`  [🛑 TOOL LIMIT] Truncating ${toolCalls.length} tool calls to first ${MAX_TOOL_CALLS_PER_TURN}`);
+    logStore.updateEntry(logId, entry => {
+      entry.errors.push(
+        `Note: Only the first ${MAX_TOOL_CALLS_PER_TURN} tool calls will be executed. Remaining ${toolCalls.length - MAX_TOOL_CALLS_PER_TURN} calls were dropped.`,
+      );
+    });
+    toolCalls = toolCalls.slice(0, MAX_TOOL_CALLS_PER_TURN);
+  }
+
   logStore.updateEntry(logId, entry => {
     for (const tc of toolCalls) {
       entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
@@ -263,16 +275,22 @@ export async function processStreamData(
   }
   const echoFilteredText = fullFilteredText || null;
 
-  if (parserThinking) {
-    await writeReasoningEvent(streamWriter, completionId, model, parserThinking);
-  }
-  if (filteredThinking) {
-    const thinkingDelta = getSnapshotDelta(filteredThinking, state.lastThinkingSnapshot);
-    state.lastThinkingSnapshot = filteredThinking;
-    if (thinkingDelta) {
-      await writeReasoningEvent(streamWriter, completionId, model, thinkingDelta);
-    }
-  }
+      if (parserThinking) {
+        const echoCheck = streamingEchoFilter.checkLine(parserThinking);
+        if (!echoCheck.echoDetected) {
+          await writeReasoningEvent(streamWriter, completionId, model, parserThinking);
+        }
+      }
+      if (filteredThinking) {
+        const thinkingDelta = getSnapshotDelta(filteredThinking, state.lastThinkingSnapshot);
+        state.lastThinkingSnapshot = filteredThinking;
+        if (thinkingDelta) {
+          const echoCheck = streamingEchoFilter.checkLine(thinkingDelta);
+          if (!echoCheck.echoDetected) {
+            await writeReasoningEvent(streamWriter, completionId, model, thinkingDelta);
+          }
+        }
+      }
 
   const pendingText = (toolCalls.length > 0 && echoFilteredText) ? echoFilteredText : null;
   const cleanedText = pendingText
@@ -287,6 +305,13 @@ export async function processStreamData(
       if (contentDelta) {
         await writeContentDelta(streamWriter, completionId, model, contentDelta, ampState, logId, resolvedEmail, state.lastRawContent, state.lastVStrRaw, logStore);
       }
+    }
+  } else if (cleanedText) {
+    // Text-only content (no tool calls): write content delta to SSE + logStore
+    const contentDelta = stripStreamingDelta(getSnapshotDelta(cleanedText, state.lastFilteredSnapshot));
+    state.lastFilteredSnapshot = cleanedText;
+    if (contentDelta) {
+      await writeContentDelta(streamWriter, completionId, model, contentDelta, ampState, logId, resolvedEmail, state.lastRawContent, state.lastVStrRaw, logStore);
     }
   }
 

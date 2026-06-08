@@ -366,3 +366,148 @@ test("REAL-15: plain text unchanged by pipeline", () => {
   const result = streamPipeline(chunks);
   assert.strictEqual(result, "Hello world!");
 });
+
+// ── TEST 16: Qwen flat-format tool calls (name + fields, no arguments) ──
+test("REAL-16: flat-format tool calls extracted, XML wrapping stripped", () => {
+  // From logs/2026-06-06_18-18-21.json — Qwen outputs <tool_call> wrapping
+  // with {"name":"read","filePath":"..."} instead of nested arguments
+  const chunks = [
+    '<tool_call>\n{"name',
+    '":',
+    ' "read", "',
+    'filePath',
+    '": "/home/y',
+    'oussefvdel/',
+    'Projects/qwen-st',
+    'udio-2.',
+    '1.0/ts',
+    'config.json"}\n',
+    '</tool_call>\n<tool_call>\n',
+    '{"name": "',
+    'read", "filePath',
+    '": "/home/y',
+    'oussefvdel/',
+    'Projects/qwen-st',
+    'udio-2.',
+    '1.0/',
+    'forge.config.ts"}',
+    '\n</tool_call>\n<tool_call>',
+    '\n{"name":',
+    ' "read", "',
+    'filePath": "/home',
+    '/youssefvdel',
+    '/Projects/qwen',
+    '-studio-2',
+    '.1.0',
+    '/src"}\n</tool_call>',
+    '\n<tool_call>\n{"',
+    'name": "read',
+    '", "filePath":',
+    ' "/home/yousse',
+    'fvdel/Projects',
+    '/qwen-studio',
+    '-2.1',
+    '.0/qwen',
+    '-core"}\n</tool_call>',
+  ];
+  const result = streamPipeline(chunks);
+  // All tool call JSON + XML wrapping should be stripped from text
+  assert.ok(!result.includes('"name"'), `Tool names leaked: ${JSON.stringify(result)}`);
+  assert.ok(!result.includes('"filePath"'), `filePath leaked`);
+  assert.ok(!result.includes('<tool_call'), `<tool_call tag leaked: ${JSON.stringify(result)}`);
+  assert.ok(!result.includes('</tool_call'), `</tool_call tag leaked`);
+  assert.ok(result.length < 30, `Expected near-empty output, got ${result.length}B: ${JSON.stringify(result)}`);
+});
+
+// ── TEST 17: Flat format without XML wrapping, double-brace trailing ──
+test("REAL-17: flat-format + double braces stripped from text", () => {
+  // From logs/2026-06-06_18-30-32.json — Qwen outputs flat format with
+  // text prefix and double }} at end of each tool call
+  const chunks = [
+    'Let me dig deeper',
+    ' into the source code',
+    ' and dependencies.\n\n',
+    '{"',
+    'name": "read',
+    '", "',
+    'filePath": "/home',
+    '/youssefvdel',
+    '/Projects/qwen',
+    '-studio-2',
+    '.1.0',
+    '/src"}}\n{"',
+    'name": "read',
+    '", "filePath":',
+    ' "/home/yousse',
+    'fvdel/Projects',
+    '/qwen-studio',
+    '-2.1',
+    '.0/qwen',
+    '-core"}}\n{"',
+    'name": "read',
+    '", "filePath":',
+    ' "/home/yousse',
+    'fvdel/Projects',
+    '/qwen-studio',
+    '-2.1',
+    '.0/tsconfig',
+    '.json"}}\n{"',
+    'name": "read',
+    '", "filePath":',
+    ' "/home/yousse',
+    'fvdel/Projects',
+    '/qwen-studio',
+    '-2.1',
+    '.0/forge',
+    '.config.ts"}}\n',
+    '{"name": "',
+    'read", "filePath',
+    '": "/home/y',
+    'oussefvdel/',
+    'Projects/qwen-st',
+    'udio-2.',
+    '1.0/scripts',
+    '"}}',
+  ];
+  const result = streamPipeline(chunks);
+  // Text prefix should survive
+  assert.ok(result.startsWith("Let me dig deeper"),
+    `Text prefix lost: ${JSON.stringify(result)}`);
+  // Tool call JSON should be stripped
+  assert.ok(!result.includes('"name"'), `Tool names leaked: ${JSON.stringify(result)}`);
+  assert.ok(!result.includes('"filePath"'), `filePath leaked`);
+  // Extra trailing braces stripped
+  assert.ok(!result.includes('}}'), `Double braces leaked: ${JSON.stringify(result)}`);
+  assert.ok(result.length < 200,
+    `Expected ~80B output, got ${result.length}B: ${JSON.stringify(result)}`);
+});
+
+// ── TEST 18: 4 read tool calls consecutively — all stripped from text ──
+test("REAL-18: 4 consecutive read tool calls, OpenAI format, stripped cleanly", () => {
+  const chunks = [
+    '{"name": "read", "arguments": {"filePath": "/home/youssefvdel/Projects/qwen-studio-2.1.0/src/preload/index.ts"}}\n' +
+    '{"name": "read", "arguments": {"filePath": "/home/youssefvdel/Projects/qwen-studio-2.1.0/src/main/ipc-handlers.ts"}}\n' +
+    '{"name": "read", "arguments": {"filePath": "/home/youssefvdel/Projects/qwen-studio-2.1.0/src/main/window-manager.ts"}}\n' +
+    '{"name": "read", "arguments": {"filePath": "/home/youssefvdel/Projects/qwen-studio-2.1.0/src/main/mcp-config.ts"}}',
+  ];
+  const result = streamPipeline(chunks);
+  // All 4 tool calls should be stripped
+  assert.ok(!result.includes('"name"'), `Tool name leaked: ${JSON.stringify(result)}`);
+  assert.ok(!result.includes('"arguments"'), `arguments key leaked: ${JSON.stringify(result)}`);
+  assert.ok(!result.includes('"filePath"'), `filePath leaked: ${JSON.stringify(result)}`);
+  // No text fragments should survive (pure tool calls)
+  assert.strictEqual(result.replace(/\n/g, '').trim(), '',
+    `Pure tool calls should produce empty text, got: ${JSON.stringify(result)}`);
+});
+
+// ── TEST 19: Echo detection trigger — text before echo survives ─────
+test("REAL-19: echo detection trigger does not corrupt preceding text", () => {
+  const text = '### Security Analysis Report\n\nThe following vulnerabilities were identified in the specified files. Each includes the exact file path, line numbers, risk description, and a concrete code fix.\n\n---\n\n#### 1. Unvalidated `shell.openExternal` in IPC Handler\n- **File**: `src/main/ipc-handlers.ts`\n- **Lines**: 69-75\n- **Risk**: The `open_external_link` handler accepts a `url` string directly from the renderer and passes it to `shell.openExternal` without validation.';
+  const expectedOutput = text;
+  const result = streamPipeline([text]);
+  // No content should be stripped (it's plain text, no tool calls)
+  assert.strictEqual(result, expectedOutput,
+    `Plain text should survive pipeline unchanged.\n  expected: ${JSON.stringify(expectedOutput.substring(0, 100))}\n  got:      ${JSON.stringify(result.substring(0, 100))}`);
+  assert.ok(result.length > 300,
+    `Output too short: ${result.length}B`);
+});

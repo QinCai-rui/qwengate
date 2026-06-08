@@ -17,7 +17,7 @@ import {
 } from './chatHelpers.ts';
 import type { ParsedToolCall } from '../tools/types.ts';
 
-const MAX_TOOL_CALLS_PER_TURN = 15;
+const MAX_TOOL_CALLS_PER_TURN = 8;
 
 export interface NonStreamingContext {
   c: Context;
@@ -241,9 +241,10 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
         : state.lastFullContent,
     };
     entry.remainingText = state.lastFullContent;
-    entry.processedApiOutput = filteredContent;
     if (state.correctionPrompts.length > 0) entry.errors.push(...state.correctionPrompts);
   });
+
+  logStore.addProcessedOutput(logId, filteredContent);
 
   if (state.correctionPrompts.length > 0) {
     pendingCorrections.set(session.chatId, [...state.correctionPrompts]);
@@ -285,6 +286,7 @@ export async function handleNonStreamingRequest(ctx: NonStreamingContext): Promi
   const { session, sessionHeaders, resolvedEmail } = ctx;
   const state = buildQwenRequest(ctx);
   let nonStreamReleased = false;
+  let logFinalized = false;
 
   try {
     while (true) {
@@ -302,8 +304,11 @@ export async function handleNonStreamingRequest(ctx: NonStreamingContext): Promi
 
     nonStreamReleased = true;
     sessionPool.release(session.chatId, state.nextParentId, sessionHeaders, resolvedEmail);
-    return processContentChunks(state, ctx);
+    const result = await processContentChunks(state, ctx);
+    logFinalized = true;
+    return result;
   } finally {
+    if (!logFinalized) logStore.finalizeRequest(ctx.logId);
     try { state.reader.cancel(); } catch { /* reader already cancelled */ }
     try { state.reader.releaseLock(); } catch { /* reader already cancelled */ }
     if (!nonStreamReleased) {

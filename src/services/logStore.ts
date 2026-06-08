@@ -74,7 +74,6 @@ export interface LogEntry {
   };
   qwenRawChunks: string[];
   rawFullContent: string;
-  toolCallResults?: unknown[];
   parsedToolCalls: Array<{ name: string; args: string }>;
   remainingText: string;
   processedApiOutput: string;
@@ -162,12 +161,11 @@ export class RequestLogStore extends SystemLogger {
       },
       qwenRawChunks: [],
       rawFullContent: "",
-      toolCallResults: [],
       parsedToolCalls: [],
       remainingText: "",
       processedApiOutput: "",
       finalResponse: {
-        finishReason: "",
+        finishReason: "stop",
         toolCallCount: 0,
         contentPreview: "",
       },
@@ -359,6 +357,11 @@ export class RequestLogStore extends SystemLogger {
         time: timeStr,
         model: entry.model,
         turnId: entry.turnId || "",
+        stream: entry.stream,
+        accountEmail: entry.accountEmail,
+        latency_ms: entry.latency_ms,
+        tokens: entry.tokens,
+        request_id: entry.request_id,
         raw_output: entry.rawFullContent || "",
         processed_output: {
           content: entry.processedApiOutput || "",
@@ -370,6 +373,14 @@ export class RequestLogStore extends SystemLogger {
         },
         chunks: entry.qwenRawChunks || [],
         input: entry.clientRequest || {},
+        remainingText: entry.remainingText || "",
+        finalResponse: entry.finalResponse || null,
+        errors: entry.errors || [],
+        promptToQwen: entry.promptToQwen || null,
+        networkTiming: entry.networkTiming || null,
+        timestamp: entry.timestamp,
+        amplificationRatio: entry.amplificationRatio ?? null,
+        amplificationTriggeredInput: entry.amplificationTriggeredInput || null,
       };
       const fileName = `${dateStr}_${timeStr}.json`;
       writeFileSync(join(this.requestLogDir, fileName), JSON.stringify(payload, null, 2));

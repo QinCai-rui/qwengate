@@ -224,12 +224,20 @@ export interface ToolCallProcessingOptions {
   maxToolCalls: number;
 }
 
+const MAX_TOOL_CALLS_PER_TURN = 8;
+
 export function processToolCallsThroughGuard(
   toolCalls: any[],
   toolCallsOut: any[],
   options: ToolCallProcessingOptions,
 ): void {
   const { label, logParsed = false, logId, toolSpamGuard, correctionPrompts, maxToolCalls } = options;
+
+  if (toolCalls.length > MAX_TOOL_CALLS_PER_TURN) {
+    console.warn(`  [🛑 TOOL LIMIT${label ? " " + label : ""}] Truncating ${toolCalls.length} tool calls to first ${MAX_TOOL_CALLS_PER_TURN}`);
+    toolCalls = toolCalls.slice(0, MAX_TOOL_CALLS_PER_TURN);
+  }
+
   for (const tc of toolCalls) {
     const guard = validateSingleToolCall(tc);
     if (!guard.ok) {

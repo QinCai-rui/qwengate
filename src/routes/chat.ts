@@ -148,6 +148,8 @@ export async function chatCompletions(c: Context) {
     }
 
     if (!contextCheck.ok) {
+      logStore.updateEntry(logId, entry => { entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' }; entry.finalResponse.finishReason = 'context_window_exceeded'; });
+      logStore.finalizeRequest(logId);
       return c.json(
         {
           error: {
@@ -209,6 +211,8 @@ export async function chatCompletions(c: Context) {
   } catch (err: any) {
     console.error("Error in chatCompletions:", err);
     logStore.addError(logId, err.message || String(err));
+    logStore.updateEntry(logId, entry => { entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' }; entry.finalResponse.finishReason = 'error'; });
+    logStore.finalizeRequest(logId);
     const status = err.upstreamStatus || 500;
     return c.json({ error: { message: err.message } }, status);
   }

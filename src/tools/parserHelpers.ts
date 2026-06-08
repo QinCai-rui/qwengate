@@ -74,11 +74,17 @@ export function normalizeJsonNewlines(raw: string): string {
 
 export function looksLikeToolCall(jsonStr: string): boolean {
   const norm = jsonStr.replace(/\s+/g, '');
-  return norm.includes('"name"') && (
-    norm.includes('"arguments"') ||
-    norm.includes('"function"') ||
-    norm.includes('"parameters"')
-  );
+  if (!norm.includes('"name"')) return false;
+  // Standard format: name + arguments/function/parameters
+  if (norm.includes('"arguments"') || norm.includes('"function"') || norm.includes('"parameters"')) return true;
+  // Qwen flat format: {"name": "tool_name", "filePath": "/path", ...}
+  // After "name":"value", check if there's at least one more field (comma)
+  const nameMatch = norm.match(/"name"\s*:\s*"[^"]*"/);
+  if (nameMatch) {
+    const afterName = norm.substring(norm.indexOf(nameMatch[0]) + nameMatch[0].length);
+    return afterName.startsWith(',');
+  }
+  return false;
 }
 
 export function parseToolCall(parsed: Record<string, unknown>): ParsedToolCall | null {

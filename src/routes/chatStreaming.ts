@@ -15,6 +15,7 @@ import {
 import {
   cleanupImmediately,
 } from './cleanupHelpers.ts';
+import { logStore } from '../services/logStore.ts';
 import {
   type StreamProcessingState,
   type StreamProcessingCtx,
@@ -79,7 +80,14 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       const bufferRef = { text: '' };
       const loopResult = await runStreamLoop(c, reader, decoder, streamState, streamCtx, ampState, bufferRef);
 
-      if (loopResult.echoAborted) return;
+      if (loopResult.echoAborted) {
+        logStore.updateEntry(logId, entry => {
+          entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
+          entry.finalResponse.finishReason = 'stop';
+        });
+        logStore.finalizeRequest(logId);
+        return;
+      }
 
       await handlePostStreamCompletion(
         {
@@ -97,6 +105,11 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       streamReleased = true;
     } finally {
       if (!streamReleased) {
+        logStore.updateEntry(logId, entry => {
+          entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
+          entry.finalResponse.finishReason = entry.finalResponse.finishReason || 'stop';
+        });
+        logStore.finalizeRequest(ctx.logId);
         cleanupImmediately(streamReader, heartbeatInterval, session.chatId, ctx.initialParentId, sessionHeaders, resolvedEmail, sessionPool);
       }
     }

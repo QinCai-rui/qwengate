@@ -18,7 +18,8 @@ var SETTINGS_SECTIONS = [
       { value: 'auto', label: 'Auto (respect client)' },
       { value: 'stream', label: 'Always stream' },
       { value: 'non-stream', label: 'Never stream' }
-    ]}
+    ]},
+    { key: 'MAX_TOOL_CALLS_PER_RESPONSE', label: 'MAX_TOOL_CALLS_PER_RESPONSE', type: 'number' },
   ]},
   { title: 'Echo Detector', desc: 'Prevent tool-call and prompt echo leaks in output.', fields: [
     { key: 'ECHO_DETECTOR', label: 'ECHO_DETECTOR', type: 'checkbox' },
@@ -34,6 +35,14 @@ var SETTINGS_SECTIONS = [
   ]},
   { title: 'Rate Limiting', desc: 'Cooldowns and throttling to prevent account bans.', fields: [
     { key: 'RATE_LIMIT_COOLDOWN_MS', label: 'RATE_LIMIT_COOLDOWN_MS', type: 'number' }
+  ]},
+  { title: 'Retry & Startup', desc: 'Retry logic, backoff, and auto-open dashboard settings.', fields: [
+    { key: 'RETRY_ENABLED', label: 'RETRY_ENABLED', type: 'checkbox' },
+    { key: 'RETRY_MAX_ATTEMPTS', label: 'RETRY_MAX_ATTEMPTS', type: 'number' },
+    { key: 'RETRY_BASE_DELAY_MS', label: 'RETRY_BASE_DELAY_MS', type: 'number' },
+    { key: 'RETRY_MAX_DELAY_MS', label: 'RETRY_MAX_DELAY_MS', type: 'number' },
+    { key: 'RETRY_BACKOFF_MULTIPLIER', label: 'RETRY_BACKOFF_MULTIPLIER', type: 'number', step: '0.1' },
+    { key: 'OPEN_DASHBOARD_ON_START', label: 'OPEN_DASHBOARD_ON_START', type: 'checkbox' },
   ]},
   { title: 'Logging', desc: 'Per-request log storage and retention.', fields: [
     { key: 'SAVE_REQUEST_LOGS', label: 'SAVE_REQUEST_LOGS', type: 'checkbox' },
