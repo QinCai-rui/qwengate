@@ -2,6 +2,7 @@
 var uptimeSeconds = 0;
 var uptimeBase = 0;
 function updateUptime() {
+  if (uptimeBase === 0) return;
   var elapsed = uptimeSeconds + Math.floor((Date.now() - uptimeBase) / 1000);
   var str = fmtDuration(elapsed);
   setText('kpiUptime', str);

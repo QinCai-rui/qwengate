@@ -51,7 +51,7 @@ function healthHandler(c: any) {
       accounts: { total: getAccountCount(), available: getAvailableCount() },
       uptime: process.uptime(),
     },
-    pwOk ? 200 : 503,
+    200,
   );
 }
 
