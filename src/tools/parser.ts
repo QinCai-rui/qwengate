@@ -205,10 +205,9 @@ export class StreamingToolParser {
   }
 
   private xmlToolName(rawTag: string): string | null {
-    if (/^ToolRead$/i.test(rawTag)) return 'read';
-    const lower = rawTag.toLowerCase();
-    const known = ['bash', 'read', 'write', 'edit', 'grep', 'glob', 'task', 'question', 'webfetch', 'skill', 'todowrite'];
-    return known.includes(lower) ? lower : null;
+    const name = rawTag.toLowerCase();
+    if (name === 'toolread') return 'read';
+    return name || null;
   }
 
   private findNextSingleXmlStart(offset: number): number {
