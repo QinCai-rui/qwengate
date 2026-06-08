@@ -17,58 +17,7 @@ const TOOL_ECHO_PATTERNS: RegExp[] = [
 
 export function stripToolCallArtifacts(text: string): string {
   if (!text) return '';
-  let result = '';
-  let remaining = text;
-  while (remaining.length > 0) {
-    const toolCallStart = remaining.search(/\{\s*"(?:name|function)"\s*:/);
-    if (toolCallStart === -1) { result += remaining; break; }
-    result += remaining.substring(0, toolCallStart);
-    const braceIdx = remaining.indexOf('{', toolCallStart);
-    if (braceIdx === -1) { result += remaining.substring(toolCallStart); break; }
-    let depth = 0;
-    let inStr = false;
-    let escaped = false;
-    let endIdx = braceIdx;
-    for (; endIdx < remaining.length; endIdx++) {
-      const c = remaining[endIdx];
-      if (escaped) { escaped = false; continue; }
-      if (c === '\\') { escaped = true; continue; }
-      if (c === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (c === '{') depth++;
-      else if (c === '}') { depth--; if (depth === 0) { endIdx++; break; } }
-    }
-    if (depth !== 0) { result += remaining.substring(braceIdx); break; }
-    const jsonStr = remaining.substring(braceIdx, endIdx);
-    const hasNameField = /"name"\s*:\s*"[^"]*"/.test(jsonStr);
-    const hasArgsField = /\barguments\s*:/.test(jsonStr);
-    if (hasNameField) {
-      try {
-        const parsed = JSON.parse(jsonStr);
-        const name = parsed.name || parsed.function?.name;
-        if (name && typeof name === 'string') {
-          const after = remaining.substring(endIdx);
-          const trailing = after.match(/^[\s\n]*/);
-          remaining = after.substring(trailing ? trailing[0].length : 0);
-          continue;
-        }
-      } catch {
-        const after = remaining.substring(endIdx);
-        const trailing = after.match(/^[\s\n]*/);
-        remaining = after.substring(trailing ? trailing[0].length : 0);
-        continue;
-      }
-    }
-    if (hasArgsField && jsonStr.includes('"function"')) {
-      const after = remaining.substring(endIdx);
-      const trailing = after.match(/^[\s\n]*/);
-      remaining = after.substring(trailing ? trailing[0].length : 0);
-      continue;
-    }
-    result += '{';
-    remaining = remaining.substring(braceIdx + 1);
-  }
-  text = result;
+  // Strip XML tool_result blocks
   text = text.replace(/<tool_result[^>]*>[\s\S]*?<\/tool_result>/g, '');
   const unmatchedOpenIdx = text.search(/<tool_result(?:\s[^>]*)?>/);
   if (unmatchedOpenIdx !== -1) { text = text.substring(0, unmatchedOpenIdx); }
@@ -83,24 +32,6 @@ export function stripToolCallArtifacts(text: string): string {
   text = text.replace(/\n?<to(?:ol?)?$/g, '');
   // Only strip trailing <t or < if preceded by tool_, tool, to_, etc — never standalone
   text = text.replace(/\n?(?:<to(?:o(?:l)?)?|<\S*?t)$/g, '');
-  text = text.replace(/Tool Response \([^)]+\):[^\n]*(?:\n(?!\s*(?:\n|$)|Tool Response\s*\(|{"name)[^\n]*)*/g, '');
-  text = text.replace(/[a-z_][a-z_0-9]*(?:\.[a-z_][a-z_0-9]*)*"\s*,\s*"arguments"\s*:\s*\}/g, '');
-  text = text.replace(/"arguments"\s*:\s*\}/g, '');
-  text = text.replace(/"arguments"\s*:\s*\{\s*\}/g, '');
-  text = text.replace(/,\s*"arguments"\s*:/g, '');
-  text = text.replace(/"[a-z_]+(?:\.[a-z_]+)*"(?=\s*,\s*"arguments")/g, '');
-  text = text.replace(/\{\s*"(?:name|function)"[^}]*\{[\s\S]*?\}\s*\}/g, '');
-  text = text.replace(/\{\s*":\s*\{[\s\S]*?\}\s*\}/g, '');
-  text = text.replace(
-    /\{\s*"(?:filePath|content|command|pattern|oldString|newString|query|mode|action|description|email|password|url|format|limit|include|path|status|priority|name|arguments)"[\s\S]*?\}/g,
-    '',
-  );
-  text = text.replace(/read"\s*,\s*"arguments"\s*:\s*\}/g, '');
-  text = text.replace(/","arguments"\s*:\s*\}/g, '');
-  text = text.replace(/"[a-z_]+",\s*"arguments"\s*:\s*\}/g, '');
-  text = text.replace(/Tool Response \([a-z_]+$/gm, '');
-  text = text.replace(/\}\s*,\s*"arguments"/g, '');
-  text = text.replace(/^[\s]*[\]}]+[}\]}]*\s*$/gm, '');
   text = stripToolEcho(text);
   text = text.replace(/\n{3,}/g, '\n\n');
   return text;
@@ -113,18 +44,6 @@ export function stripStreamingDelta(delta: string): string {
   cleaned = cleaned.replace(/<tool_result[^>]*>[\s\S]*?<\/tool_result>/g, '');
   cleaned = cleaned.replace(/\n?<tool(?:_[a-z]*)?$/g, '');
   cleaned = cleaned.replace(/\n?<t(?:o(?:o(?:l)?)?)?$/g, '');
-  cleaned = cleaned.replace(/(?<!:)"[a-z_]+(?:\.[a-z_]+)*"(?=\s*,\s*"arguments")/g, '');
-  cleaned = cleaned.replace(/[a-z_]+"\s*,\s*"(?:arguments|parameters|argumen|argu|param)/gi, '');
-  cleaned = cleaned.replace(/"arguments"\s*:\s*\}/g, '');
-  cleaned = cleaned.replace(/,\s*"arguments"\s*:/g, '');
-  cleaned = cleaned.replace(/(?:argumen|argument|arguments|param|parameter|parameters)":\s*/gi, '');
-  cleaned = cleaned.replace(/Tool Response \([a-z_]+$/gm, '');
-  cleaned = cleaned.replace(/"[a-z_]+(?:\.[a-z_]+)*"\s*,\s*"(?:arguments|parameters)"?\s*:?/gi, '');
-  cleaned = cleaned.replace(/"(?:argumen|argument|arguments|param|parameter|parameters|name)"?\s*:?\s*"?$/gm, '');
-  cleaned = cleaned.replace(/"?\s*:\s*"[a-z_]+(?:\.[a-z_]+)*"?\s*,?\s*"?(?:arguments|parameters)?"?\s*:?$/gm, '');
-  cleaned = cleaned.replace(/^"?[a-z_]+(?:\.[a-z_]+)*"?\s*,\s*"?(?:arguments|parameters)/gm, '');
-  cleaned = cleaned.replace(/\{\s*"(?:name|function)"?\s*:\s*"?$/gm, '');
-  cleaned = cleaned.replace(/^"?(?:name|function)"?\s*:\s*"[a-z_]+/gm, '');
   return cleaned;
 }
 

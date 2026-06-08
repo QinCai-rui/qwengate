@@ -16,7 +16,7 @@ import {
   reloadAccounts,
   clearAuth,
 } from './auth.js';
-import { COOKIE_DIR } from './accountManager.js';
+import { COOKIE_DIR, setCookieDir } from './accountManager.js';
 
 const TEST_COOKIE_DIR = mkdtempSync(path.join(tmpdir(), 'qwen-gate-test-cookies-'));
 
@@ -62,6 +62,7 @@ describe('account inFlight and totalRequests tracking', () => {
 describe('hot-reload: reloadAccounts()', () => {
   before(() => {
     cleanupTestCookies();
+    setCookieDir(TEST_COOKIE_DIR);
     clearAuth();
   });
 

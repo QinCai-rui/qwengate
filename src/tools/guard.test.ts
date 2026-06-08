@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { validateToolCalls, validateSingleToolCall, detectToolCallLoop, detectParallelToolLoop } from './guard.ts';
+import { validateToolCalls, validateSingleToolCall, detectToolCallLoop, detectParallelToolLoop, detectProviderToolLeak } from './guard.ts';
 import type { ParsedToolCall } from '../types/openai.ts';
 
 describe('validateToolCalls', () => {
@@ -129,5 +129,40 @@ describe('detectParallelToolLoop', () => {
     ];
     const result = detectParallelToolLoop(tcs);
     assert.ok(result.ok);
+  });
+});
+
+describe('detectProviderToolLeak', () => {
+  it('should detect function_call role leak', () => {
+    const content = 'Here is the result: function_call with role user';
+    const result = detectProviderToolLeak(content);
+    assert.ok(result.detected);
+    assert.strictEqual(result.type, 'function_role');
+  });
+
+  it('should detect tool_calls role leak', () => {
+    const content = 'Processing tool_calls with role assistant';
+    const result = detectProviderToolLeak(content);
+    assert.ok(result.detected);
+    assert.strictEqual(result.type, 'tool_call_role');
+  });
+
+  it('should detect <tool_use> XML leak', () => {
+    const content = 'Calling tool: <tool_use>some content</tool_use>';
+    const result = detectProviderToolLeak(content);
+    assert.ok(result.detected);
+    assert.strictEqual(result.type, 'tool_use_xml');
+  });
+
+  it('should not detect leak in normal content', () => {
+    const content = 'This is a normal response without any leaks';
+    const result = detectProviderToolLeak(content);
+    assert.ok(!result.detected);
+  });
+
+  it('should be case insensitive', () => {
+    const content = 'FUNCTION_CALL with ROLE';
+    const result = detectProviderToolLeak(content);
+    assert.ok(result.detected);
   });
 });

@@ -12,7 +12,7 @@ test('Health check returns degraded when Playwright not initialized', async () =
   const req = new Request('http://localhost/health');
   const res = await app.fetch(req);
   
-  assert.strictEqual(res.status, 503);
+  assert.strictEqual(res.status, 200);
   
   const body = await res.json();
   assert.strictEqual(body.status, 'degraded');

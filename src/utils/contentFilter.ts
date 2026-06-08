@@ -22,15 +22,18 @@ export function filterContent(raw: string): FilterResult {
     if (endMatch) {
       const endIdx = startTagEnd + endMatch.index!;
       const thinkContent = text.substring(startTagEnd, endIdx);
-      if (thinkContent.trim()) {
-        capturedThinking.push(thinkContent.trim());
+      const cleanThinkContent = stripToolCallArtifacts(thinkContent);
+      if (cleanThinkContent.trim()) {
+        capturedThinking.push(cleanThinkContent.trim());
       }
       const before = text.substring(0, startIdx);
       const after = text.substring(endIdx + endMatch[0].length);
       const needsSpace = before.length > 0 && !/[\s\n]$/.test(before) && after.length > 0 && !/^[\s\n]/.test(after);
       text = before + (needsSpace ? ' ' : '') + after;
     } else {
-      capturedThinking.push(text.substring(startTagEnd).trim());
+      const thinkContent = text.substring(startTagEnd);
+      const cleanThinkContent = stripToolCallArtifacts(thinkContent);
+      capturedThinking.push(cleanThinkContent.trim());
       const before = text.substring(0, startIdx);
       text = before + (before.length > 0 && !/[\s\n]$/.test(before) ? ' ' : '');
       break;
@@ -64,9 +67,9 @@ export function filterContent(raw: string): FilterResult {
     );
 
     if (isStrongThinkingStart && !hasContentMarker) {
-      capturedThinking.push(paraLines.join('\n'));
+      capturedThinking.push(stripToolCallArtifacts(paraLines.join('\n')));
     } else if (thinkingCount >= 2 && !hasContentMarker) {
-      capturedThinking.push(paraLines.join('\n'));
+      capturedThinking.push(stripToolCallArtifacts(paraLines.join('\n')));
     } else if (startsWithThinking && thinkingCount === 1 && paraLines.length === 1) {
       cleanParagraphs.push(para);
     } else {
@@ -78,8 +81,12 @@ export function filterContent(raw: string): FilterResult {
   text = text.replace(/\n{3,}/g, '\n\n');
   text = text.replace(/\[READ TOOL RESULT below[^\]]*\]\s*/g, '');
   text = stripToolCallArtifacts(text);
+  
+  const thinkingText = capturedThinking.filter(t => t.length > 0).join('\n');
+  const cleanThinking = stripToolCallArtifacts(thinkingText);
+  
   return {
     cleanText: text,
-    thinking: capturedThinking.filter(t => t.length > 0).join('\n'),
+    thinking: cleanThinking,
   };
 }
