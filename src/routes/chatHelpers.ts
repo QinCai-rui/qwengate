@@ -148,15 +148,16 @@ export function buildQwenMessages(
       const truncated = compressToolResult(contentStr || "");
       const canary = `[tc-${randomUUID().substring(0, 8)}]`;
 
-      const inner = JSON.stringify({
-        success: true,
-        stdout: truncated,
-        stderr: "",
-        command: toolName || "",
-      });
-      const qwenResultStr = JSON.stringify([
-        { type: "text", text: `${canary}\n${inner}` },
-      ]);
+      const qwenResultStr = JSON.stringify([{
+        type: "function",
+        tool: toolName || "unknown",
+        result: {
+          success: true,
+          stdout: truncated,
+          stderr: "",
+          command: toolName || "",
+        },
+      }]);
 
       segments.push(qwenResultStr);
 
