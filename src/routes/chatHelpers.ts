@@ -48,12 +48,10 @@ export function buildQwenMessages(
   body: any,
   availableTokens: number,
   _toolCalling: boolean,
-  clientName?: string,
 ): BuildQwenMessagesResult {
   const toolResultContents: string[] = [];
   const timestamp = Math.floor(Date.now() / 1000);
   const model = (body.model || "").replace("-no-thinking", "");
-  const resolvedClientName = clientName || "qwengate";
 
   const segments: string[] = [];
   let accumulatedSystemContent = "";
@@ -178,10 +176,10 @@ export function buildQwenMessages(
 
   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
     const localMcp: Record<string, any> = {};
-    localMcp[resolvedClientName] = {};
+    localMcp[""] = {};
     for (const t of body.tools) {
       const fn = t.function || {};
-      localMcp[resolvedClientName][fn.name] = {
+      localMcp[""][fn.name] = {
         description: fn.description || "",
         input_schema: fn.parameters || { type: "object", properties: {} },
       };

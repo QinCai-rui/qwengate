@@ -85,23 +85,19 @@ export async function handleToolCalls(
  * ```json
  * {"choices": [{"delta": {"role": "assistant", "content": "", "phase": "local_tool",
  *   "status": "finished",
- *   "extra": {"local_mcp": {"Qwen Core": [{"tool_name": "bash", "params": {"command": "ls -la /tmp"}}]}}}}]}
+ *   "extra": {"local_mcp": {"": [{"tool_name": "bash", "params": {"command": "ls -la /tmp"}}]}}}}]}
  * ```
  *
  * @param sseData - Parsed SSE data chunk
- * @param clientName - MCP server key (defaults to first key in local_mcp object)
  * @returns Array of ParsedToolCall with UUID call IDs
  */
 export function extractLocalMcpToolCalls(
   sseData: any,
-  clientName?: string,
 ): ParsedToolCall[] {
   const localMcp = sseData?.choices?.[0]?.delta?.extra?.local_mcp;
   if (!localMcp) return [];
 
-  const resolvedClient = clientName ?? Object.keys(localMcp)[0] ?? "qwengate";
-
-  const serverTools = localMcp[resolvedClient];
+  const serverTools = localMcp[""];
   if (!Array.isArray(serverTools)) return [];
 
   const toolCalls: ParsedToolCall[] = [];
