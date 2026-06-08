@@ -9,6 +9,7 @@ import {
   type AmplificationGuardState,
 } from './chatHelpers.ts';
 import { validateSingleToolCall } from '../tools/guard.ts';
+import type { ParsedToolCall } from '../tools/types.ts';
 import { logStore } from '../services/logStore.ts';
 import { filterContent, stripToolCallArtifacts, stripStreamingDelta } from '../utils/contentFilter.ts';
 import { StreamingToolParser } from '../tools/parser.ts';
@@ -68,6 +69,48 @@ export async function handleToolCalls(
     await writeToolCallEvent(streamWriter, completionId, model, tc, baseIndex + i);
   }
   return allValid;
+}
+
+// ── Local MCP tool call extraction (from Qwen Studio local_tool phase) ──
+
+/**
+ * Extract tool calls from SSE data containing `extra.local_mcp` in the delta.
+ * Qwen Studio sends tool calls in this format during the `local_tool` phase:
+ *
+ * ```json
+ * {"choices": [{"delta": {"role": "assistant", "content": "", "phase": "local_tool",
+ *   "status": "finished",
+ *   "extra": {"local_mcp": {"Qwen Core": [{"tool_name": "bash", "params": {"command": "ls -la /tmp"}}]}}}}]}
+ * ```
+ *
+ * @param sseData - Parsed SSE data chunk
+ * @param clientName - MCP server key (defaults to first key in local_mcp object)
+ * @returns Array of ParsedToolCall with UUID call IDs
+ */
+export function extractLocalMcpToolCalls(
+  sseData: any,
+  clientName?: string,
+): ParsedToolCall[] {
+  const localMcp = sseData?.choices?.[0]?.delta?.extra?.local_mcp;
+  if (!localMcp) return [];
+
+  const resolvedClient = clientName ?? Object.keys(localMcp)[0];
+  if (!resolvedClient) return [];
+
+  const serverTools = localMcp[resolvedClient];
+  if (!Array.isArray(serverTools)) return [];
+
+  const toolCalls: ParsedToolCall[] = [];
+  for (const tool of serverTools) {
+    if (tool?.tool_name && tool?.params !== undefined) {
+      toolCalls.push({
+        id: `call_${crypto.randomUUID()}`,
+        name: tool.tool_name,
+        arguments: tool.params,
+      });
+    }
+  }
+  return toolCalls;
 }
 
 // ── Echo detection handling ────────────────────────────────────────
@@ -164,6 +207,13 @@ export async function processStreamData(
   if (data.choices?.[0]?.delta?.status === 'finished') {
     const deltaPhase = data.choices[0].delta.phase;
     if (deltaPhase !== 'thinking_summary') {
+      // Extract and emit local MCP tool calls before breaking the stream
+      if (deltaPhase === 'local_tool') {
+        const localToolCalls = extractLocalMcpToolCalls(data);
+        for (let i = 0; i < localToolCalls.length; i++) {
+          await writeToolCallEvent(streamWriter, completionId, model, localToolCalls[i], i);
+        }
+      }
       return 'break_stream';
     }
   }
