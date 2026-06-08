@@ -372,7 +372,6 @@ export function pickAccount(): Promise<AccountEntry | null> {
         return (a.lastUsed || 0) - (b.lastUsed || 0);
       });
       const picked = pool[0];
-      picked.inFlight++;
       picked.lastUsed = Date.now();
       resolve(picked);
     });
