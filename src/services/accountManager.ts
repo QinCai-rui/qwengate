@@ -6,8 +6,8 @@
 import crypto from 'crypto';
 import path from 'path';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, unlinkSync, rmSync, watch, type FSWatcher } from 'fs';
-import type { AccountEntry } from './auth.ts';
-import { loginFresh, saveCookies, loadSavedCookies, accounts } from './auth.ts';
+import { loginFresh, saveCookies, loadSavedCookies, accounts, type AccountEntry } from "./auth.ts";
+import { configureAccount } from './qwenModels.ts';
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
 export const COOKIE_DIR = 'qwen_profile/cookies';
@@ -140,6 +140,9 @@ export async function addAccount(
   if (newState) {
     entry.state = newState;
     await saveCookies(normalizedEmail, newState.token, newState.refreshToken, newState.expiresAt);
+    await configureAccount(normalizedEmail).catch(err =>
+      console.error(`[Account] Failed to configure ${normalizedEmail}: ${err.message}`)
+    );
     return { loginSucceeded: true };
   } else {
     const msg = `Login failed: wrong password or CAPTCHA required for ${normalizedEmail}. Check system logs.`;

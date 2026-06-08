@@ -22,28 +22,9 @@ export interface BrowserProfileOptions {
   headless?: boolean;
 }
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+import { validateQwenUrl } from './playwright.ts';
 
-function validateQwenUrl(url: string): void {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`Invalid URL: ${url}`);
-  }
-  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-    throw new Error(`Blocked URL protocol: ${parsed.protocol}`);
-  }
-  const hostname = parsed.hostname.toLowerCase();
-  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '0.0.0.0') {
-    throw new Error(`Blocked loopback URL: ${url}`);
-  }
-  if (/^10\.\d+\.\d+\.\d+$/.test(hostname) ||
-      /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(hostname) ||
-      /^192\.168\.\d+\.\d+$/.test(hostname)) {
-    throw new Error(`Blocked private IP URL: ${url}`);
-  }
-}
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 function getBrowserArgs(): string[] {
   return [

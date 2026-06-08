@@ -1,7 +1,6 @@
 import { Context } from 'hono';
 import { stream as honoStream } from 'hono/streaming';
-import type { OpenAIRequest, Message } from '../utils/types.ts';
-import { StreamingContentFilter } from './pipeline/StreamingContentFilter.ts';
+import type { OpenAIRequest, Message } from '../types/openai.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { type AmplificationGuardState } from './chatHelpers.ts';
 import {
@@ -71,12 +70,11 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       const reader: ReadableStreamDefaultReader<Uint8Array> = streamReader;
       const decoder = new TextDecoder();
       const enableContentFiltering = cleanOutput;
-      const streamFilter = new StreamingContentFilter(enableContentFiltering);
       const streamState = buildInitialStreamState(finalPrompt, ctx.initialParentId);
 
       const streamCtx: StreamProcessingCtx = {
         streamWriter, completionId, model: body.model,
-        streamFilter, enableContentFiltering, cleanOutput,
+        enableContentFiltering, cleanOutput,
         logId, resolvedEmail, ampState, reader, streamReader, qwenAbortController,
         qwenLogFile: ctx.qwenLogFile,
         emittedToolCallCount: 0,
@@ -97,7 +95,7 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       await handlePostStreamCompletion(
         {
           streamWriter, completionId, model: body.model, streamState, ampState,
-          logId, resolvedEmail, emittedToolCallCount: streamCtx.emittedToolCallCount, streamFilter,
+          logId, resolvedEmail, emittedToolCallCount: streamCtx.emittedToolCallCount,
           buffer: loopResult.buffer, enableContentFiltering,
           includeUsage: !!body.stream_options?.include_usage,
         },

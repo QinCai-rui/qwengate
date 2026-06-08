@@ -1,5 +1,5 @@
 import { getQwenHeaders } from './playwright.ts';
-import { v4 as uuidv4 } from 'uuid';
+import crypto from 'node:crypto';
 import { withRetry, CircuitBreaker, CircuitOpenError } from '../utils/retry.ts';
 import { throttleAccount, pickAccount } from './auth.ts';
 import { createNetworkEntry, recordResponse, recordStreamChunk, completeEntry, errorEntry } from './networkDebug.ts';
@@ -112,14 +112,13 @@ export async function createQwenStream(
   tools?: unknown[],
   toolChoice?: string
 ): Promise<QwenStreamResult> {
-  const { headers: _headers } = await getQwenHeaders(accountEmail);
   const actualParentId: string | null = parentId !== undefined ? parentId : null;
   const timestamp = Math.floor(Date.now() / 1000);
   const model = modelId.replace('-no-thinking', '');
 
   // Ensure each message has required fields
   const qwenMessages: QwenMessage[] = messages.map((msg, i) => ({
-    fid: msg.fid || uuidv4(),
+    fid: msg.fid || crypto.randomUUID(),
     parentId: msg.parentId || (i === 0 ? actualParentId : null),
     childrenIds: msg.childrenIds || [],
     role: msg.role,
@@ -194,7 +193,7 @@ export async function createQwenStream(
       'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
       'user-agent': reqHeaders['user-agent'],
       'x-accel-buffering': 'no',
-      'x-request-id': uuidv4(),
+      'x-request-id': crypto.randomUUID(),
       'bx-ua': reqHeaders['bx-ua'],
       'bx-umidtoken': reqHeaders['bx-umidtoken'],
       'bx-v': reqHeaders['bx-v'],

@@ -50,6 +50,10 @@ if (-not (Test-Path "$Dir\node_modules") -or ((Get-ChildItem "$Dir\node_modules"
 $pkgCount = (Get-ChildItem "$Dir\node_modules" -Directory).Count
 Ok "Dependencies installed ($pkgCount packages)"
 
+# ── Build ──
+Info "Running npm run build..."
+try { npm run build 2>$null; Ok "Build complete" } catch { Info "Skipping build (tsx will compile on the fly)" }
+
 Info "CloakBrowser binary will auto-download on first launch"
 
 # ── Configuration ──

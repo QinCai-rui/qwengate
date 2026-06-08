@@ -99,9 +99,14 @@ export function getSnapshotDelta(
   return "";
 }
 
+/** Matches closing/opening think/tool tags. Extracted to module-level const. */
+const THINK_TAG_PATTERN = /<\/?(?:think|thinking|thought|tool_call|tool_use|function_call|tool)>/gi;
+/** Matches tool result tag fragments. Extracted to module-level const. */
+const TOOL_RESULT_TAG_PATTERN = /<\/tool(?:_result)?/gi;
+
 export function cleanThinkTags(t: string): string {
-  let s = t.replace(/<\/?(?:think|thinking|thought|tool_call|tool_use|function_call|tool)>/gi, "");
-  s = s.replace(/<\/tool(?:_result)?/gi, "");
+  let s = t.replace(THINK_TAG_PATTERN, "");
+  s = s.replace(TOOL_RESULT_TAG_PATTERN, "");
   return s;
 }
 

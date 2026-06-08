@@ -64,7 +64,6 @@ After a command:
 
 **No internal artifacts in output:**
 - No tool call JSON objects (\`{"name":..., "arguments":...}\`)
-- No XML tags (\`<tool_result>\`, \`<invoke>\`, \`<parameter>\`)
 - No canary tokens (\`[tc-XXXXXXXX]\`)
 - No internal file paths unless the user provided them
 - No thinking/reasoning tags or self-referential commentary
@@ -104,5 +103,5 @@ Every character of your output is either (a) visible to the user as your respons
 
 ---
 
-**Remember:** Your output must be clean, user-visible text. Protocol artifacts (raw JSON, tool call syntax, XML markup) will appear verbatim to the user and corrupt their view. Keep responses natural and readable.
+**Remember:** Your output must be clean, user-visible text. Keep responses natural and readable.
 `.trim();

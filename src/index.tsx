@@ -15,7 +15,7 @@ import { accountsRouter } from "./routes/accounts.ts";
 import { configRouter } from "./routes/config.ts";
 import { logStore } from "./services/logStore.ts";
 import { config } from "./services/configService.ts";
-import { startAutoCleanup, stopAutoCleanup } from "./middleware/rateLimit.ts";
+import { startAutoCleanup, stopAutoCleanup, rateLimitMiddleware } from "./middleware/rateLimit.ts";
 import { debugNetworkApp } from "./routes/debugNetwork.ts";
 import { registerDashboardRoutes } from "./routes/dashboard/dashboardRoutes.ts";
 import { fileURLToPath } from "url";
@@ -77,7 +77,7 @@ async function gracefulShutdown(_signal: string): Promise<void> {
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
-app.use("*", cors());
+app.use("*", cors({ origin: ['http://localhost:26405', 'http://127.0.0.1:26405'] }));
 
 // API Key protection for OpenAI-compatible routes
 app.use("/v1/*", async (c, next) => {
@@ -120,9 +120,17 @@ app.use("/v1/chat/completions", async (c, next) => {
   await next();
 });
 
-app.post("/v1/chat/completions", chatCompletions);
+app.post("/v1/chat/completions", async (c, next) => {
+  const result = await rateLimitMiddleware(c, 'chat-completions');
+  if (result) return result;
+  await next();
+}, chatCompletions);
 
-app.get("/v1/models", async (c) => {
+app.get("/v1/models", async (c, next) => {
+  const result = await rateLimitMiddleware(c, 'models');
+  if (result) return result;
+  await next();
+}, async (c) => {
   try {
     const models = await fetchQwenModels();
     return c.json({
@@ -150,7 +158,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = parseInt(config.get("PORT"), 10) || 26405;
 
   // Show banner immediately on startup
-  console.log(`\x1b[31m
+  process.stdout.write(`\x1b[31m
 ████████▄    ▄█     █▄     ▄████████ ███▄▄▄▄
 ███    ███  ███     ███   ███    ███ ███▀▀▀██▄
 ███    ███  ███     ███   ███    █▀  ███   ███
@@ -169,29 +177,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   ███    ███   ███    ███     ███       ███    ███
   ████████▀    ███    █▀     ▄████▀     ██████████
 
-  \x1b[0m\x1b[32m●\x1b[0m Port: ${parseInt(config.get("PORT"), 10) || 26405}
-  \x1b[32m●\x1b[0m API: localhost:${parseInt(config.get("PORT"), 10) || 26405}/v1
-  \x1b[32m●\x1b[0m Dashboard: http://localhost:${parseInt(config.get("PORT"), 10) || 26405}/dashboard (Ctrl+Click)
+  \x1b[0m\x1b[32m●\x1b[0m Port: ${port}
+  \x1b[32m●\x1b[0m API: localhost:${port}/v1
+  \x1b[32m●\x1b[0m Dashboard: http://localhost:${port}/dashboard (Ctrl+Click)\x1b[0m
   `);
-
-  const APP_VERSION = "0.3.0";
-
-  async function checkForUpdates(): Promise<void> {
-    try {
-      const res = await fetch(
-        "https://api.github.com/repos/youssefvdel/qwen-gate/releases/latest",
-        { signal: AbortSignal.timeout(5000) },
-      );
-      if (!res.ok) return;
-      const data: any = await res.json();
-      const latest = (data.tag_name || "").replace(/^v/, "");
-      if (latest && latest !== APP_VERSION) {
-        logStore.log("warn", "server",
-          `Update available: v${APP_VERSION} → v${latest}. Run "curl -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.sh | bash" to update.`,
-        );
-      }
-    } catch { /* network error — skip */ }
-  }
 
   initPlaywright(true, browserType)
     .then(async () => {
@@ -206,8 +195,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         },
       });
       logStore.log("info", "server", "Server started on port " + port);
-
-      checkForUpdates().catch(() => {});
 
       if (config.get("OPEN_DASHBOARD_ON_START") === "true") {
         const { exec } = await import("child_process");

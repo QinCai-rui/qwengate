@@ -1,5 +1,5 @@
-import { v4 as uuidv4 } from 'uuid';
-import type { ParsedToolCall } from './types.ts';
+import crypto from 'node:crypto';
+import type { ParsedToolCall } from '../types/openai.ts';
 import { robustParseJSON } from '../utils/json.ts';
 
 export interface ExtractResult {
@@ -49,7 +49,7 @@ export function tryExtractToolCall(remaining: string): ExtractResult {
     if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
     if (typeof args !== 'object' || Array.isArray(args)) args = {};
     const toolCall: ParsedToolCall = {
-      id: 'call_' + uuidv4(),
+      id: 'call_' + crypto.randomUUID(),
       name: parsed.name || '',
       arguments: args || (() => { const { name: _name, ...rest } = parsed; return rest; })(),
     };

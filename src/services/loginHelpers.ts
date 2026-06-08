@@ -6,8 +6,7 @@
 
 import crypto from 'crypto';
 import { getActivePage, getBrowser, createAccountContext } from './playwright.ts';
-import type { AuthState } from './auth.ts';
-import { AUTH_TOKEN_MAX_AGE_MS, createAuthFetchTimeout, checkPlaywrightSession } from './auth.ts';
+import { AUTH_TOKEN_MAX_AGE_MS, createAuthFetchTimeout, checkPlaywrightSession, type AuthState } from "./auth.ts";
 
 const QWEN_CHAT_URL = 'https://chat.qwen.ai';
 

@@ -10,7 +10,7 @@ import type {
   ToolContext,
   ToolHandler,
   ToolRegistration,
-} from './types.ts';
+} from '../types/openai.ts';
 import { validateAgainstSchema } from './schema.ts';
 
 /**

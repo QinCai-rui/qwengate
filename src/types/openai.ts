@@ -94,53 +94,6 @@ export interface OpenAIRequest {
   };
 }
 
-export interface ToolCallDelta {
-  index: number;
-  id?: string;
-  type: string;
-  function: {
-    name: string;
-    arguments: string;
-  };
-}
-
-export interface ChoiceDelta {
-  role?: string;
-  content?: string | null;
-  reasoning_content?: string | null;
-  tool_calls?: ToolCallDelta[];
-}
-
-export interface Choice {
-  index: number;
-  delta?: ChoiceDelta;
-  message?: ChoiceDelta;
-  finish_reason: string | null;
-}
-
-export interface Usage {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  completion_tokens_details?: {
-    reasoning_tokens: number;
-  };
-  prompt_tokens_details?: {
-    cached_tokens: number;
-  };
-}
-
-export interface ChatCompletionChunk {
-  id: string;
-  object: string;
-  created: number;
-  model: string;
-  system_fingerprint: string;
-  service_tier: string;
-  choices: Choice[];
-  usage?: Usage;
-}
-
 export interface ParsedToolCall {
   id: string;
   name: string;

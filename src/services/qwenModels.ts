@@ -1,5 +1,5 @@
 import { getQwenHeaders, getBasicHeaders } from './playwright.ts';
-import { v4 as uuidv4 } from 'uuid';
+import crypto from 'node:crypto';
 import modelSpecs from '../models.json' with { type: 'json' };
 import type { ModelSpec } from '../types/openai.ts';
 import { getAllAccountEmails } from './auth.ts';
@@ -27,7 +27,7 @@ function makeQwenSettingsHeaders(qwenHeaders: Record<string, string>, contentTyp
     'origin': QWEN_API_BASE,
     'referer': 'https://chat.qwen.ai/',
     'user-agent': qwenHeaders['user-agent'],
-    'x-request-id': uuidv4(),
+    'x-request-id': crypto.randomUUID(),
     'bx-ua': qwenHeaders['bx-ua'],
     'bx-umidtoken': qwenHeaders['bx-umidtoken'],
     'bx-v': qwenHeaders['bx-v'],
@@ -242,7 +242,7 @@ export async function fetchQwenModels(): Promise<any[]> {
         'cookie': cookie,
         'referer': 'https://chat.qwen.ai/',
         'user-agent': userAgent,
-        'x-request-id': uuidv4(),
+        'x-request-id': crypto.randomUUID(),
         'bx-v': bxV,
         'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
         'source': 'web'

@@ -1,5 +1,5 @@
-import { v4 as uuidv4 } from 'uuid';
-import type { ParsedToolCall, ToolCallResult, ToolContext } from './types.ts';
+import crypto from 'node:crypto';
+import type { ParsedToolCall, ToolCallResult, ToolContext } from '../types/openai.ts';
 import { SchemaValidationError } from './schema.ts';
 import { registry } from './registry.ts';
 import { tryExtractToolCall } from './parserHelpers.ts';
@@ -117,7 +117,7 @@ export function normalizeToolCalls(toolCalls: ParsedToolCall[]): { fixed: Parsed
       if (typeof args !== 'object' || Array.isArray(args) || !args) continue;
       const name = tc.name?.trim() || '';
       if (!name) continue;
-      fixed.push({ id: tc.id || 'call_' + uuidv4(), name, arguments: args });
+      fixed.push({ id: tc.id || 'call_' + crypto.randomUUID(), name, arguments: args });
     } catch { continue; }
   }
   return { fixed };

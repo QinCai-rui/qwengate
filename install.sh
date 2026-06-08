@@ -56,6 +56,11 @@ fi
 PACKAGE_COUNT=$(find node_modules -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
 ok "npm install complete ($PACKAGE_COUNT packages)"
 
+# ── Build ───────────────────────────────────────────────────────────
+
+info "Running npm run build..."
+npm run build 2>/dev/null && ok "Build complete" || info "Skipping build (tsx will compile on the fly)"
+
 # ── Configuration ──────────────────────────────────────────────────
 
 if [ ! -f "config.json" ]; then

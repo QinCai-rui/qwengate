@@ -27,7 +27,7 @@ const COOKIES_TTL = 30 * 1000;
 let cookiesInFlight: Promise<string> | null = null;
 const COOKIE_REFRESH_INTERVAL = 30 * 1000;
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-function validateQwenUrl(url: string): void {
+export function validateQwenUrl(url: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);

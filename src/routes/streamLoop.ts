@@ -2,13 +2,11 @@ import {
   parseQwenErrorPayload,
   getSnapshotDelta,
   cleanThinkTags,
-  streamDebugLog,
   checkAmplificationGuard,
   type AmplificationGuardState,
 } from './chatHelpers.ts';
 import { logStore } from '../services/logStore.ts';
 import { filterContent } from '../utils/contentFilter.ts';
-import { StreamingContentFilter } from './pipeline/StreamingContentFilter.ts';
 import {
   writeEvent,
   writeReasoningEvent,
@@ -58,7 +56,6 @@ export async function runStreamLoop(
     if (readResult.value) ampState.rawInputBytes += readResult.value.length;
 
     const rawDecoded = decoder.decode(readResult.value, { stream: true });
-    streamDebugLog(streamCtx.completionId, 'WIRE_CHUNK', { chunkNum: _totalChunks, byteLen: readResult.value?.length ?? 0, preview: rawDecoded.substring(0, 300) });
     bufferRef.text += rawDecoded;
     const lines = bufferRef.text.split('\n');
     bufferRef.text = lines.pop() || '';
@@ -75,13 +72,6 @@ export async function runStreamLoop(
 
       try {
         const chunk = JSON.parse(dataStr);
-        streamDebugLog(streamCtx.completionId, 'SSE_EVENT', {
-          phase: chunk.choices?.[0]?.delta?.phase,
-          hasContent: !!chunk.choices?.[0]?.delta?.content,
-          hasToolCalls: !!chunk.choices?.[0]?.delta?.tool_calls,
-          contentLen: chunk.choices?.[0]?.delta?.content?.length ?? 0,
-          dataPreview: dataStr.substring(0, 300),
-        });
 
         const result = await processStreamData(chunk, streamState, streamCtx);
         if (result === 'break_stream') { streamDone = true; break; }
@@ -105,7 +95,6 @@ export async function handlePostStreamCompletion(
     logId: string;
     resolvedEmail: string;
     emittedToolCallCount: number;
-    streamFilter: StreamingContentFilter;
     buffer: string;
     enableContentFiltering: boolean;
     includeUsage: boolean;
@@ -121,7 +110,7 @@ export async function handlePostStreamCompletion(
 ): Promise<void> {
   const {
     streamWriter, completionId, model, streamState, ampState,
-    logId, resolvedEmail, emittedToolCallCount, streamFilter: _streamFilter,
+    logId, resolvedEmail, emittedToolCallCount,
     buffer, enableContentFiltering, includeUsage,
   } = args;
   const { reader, heartbeatInterval, chatId, sessionHeaders, email, sessionPool } = cleanup;
@@ -151,10 +140,10 @@ export async function handlePostStreamCompletion(
   if (flushCleaned) {
     const contentDelta = getSnapshotDelta(flushCleaned, streamState.lastFilteredSnapshot);
     if (contentDelta) {
+      streamState.lastFilteredSnapshot = flushCleaned;
       if (checkAmplificationGuard(ampState, contentDelta.length, logId, resolvedEmail, model, streamState.lastRawContent, streamState.lastVStrRaw)) {
-        streamState.lastFilteredSnapshot = flushCleaned;
+        // guard triggered — skip content emission
       } else {
-        streamState.lastFilteredSnapshot = flushCleaned;
         const ct = contentDelta.replace(/[\n\s]*$/, '');
         if (ct) {
           logStore.addProcessedOutput(logId, ct);

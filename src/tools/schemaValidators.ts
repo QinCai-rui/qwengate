@@ -1,4 +1,4 @@
-import type { JsonSchema } from './types.ts';
+import type { JsonSchema } from '../types/openai.ts';
 import { SchemaValidationError } from './schema.ts';
 
 interface ValidationContext {

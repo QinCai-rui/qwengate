@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import crypto from 'node:crypto';
 
 export interface NetworkDebugEntry {
   id: string;
@@ -85,7 +85,7 @@ function notifyListeners(entry: NetworkDebugEntry): void {
 
 export function createNetworkEntry(options: NetworkDebugOptions): NetworkDebugEntry {
   const entry: NetworkDebugEntry = {
-    id: uuidv4(),
+    id: crypto.randomUUID(),
     timestamp: new Date().toISOString(),
     phase: 'pending',
     request: {

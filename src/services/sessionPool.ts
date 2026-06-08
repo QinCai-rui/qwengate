@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import crypto from 'node:crypto';
 import { getBasicHeaders } from './playwright.ts';
 import { pickAccount, incrementInFlight, decrementInFlight, incrementTotalRequests, getAccountByEmail, throttleAccount, getAllAccountEmails } from './auth.ts';
 import { createNetworkEntry, recordResponse, completeEntry, errorEntry } from './networkDebug.ts';
@@ -172,8 +172,16 @@ export class SessionPool {
       return;
     }
 
-    const { cookie, userAgent } = cachedHeaders || await getBasicHeaders(accountEmail);
-    const requestId = uuidv4();
+    let cookie: string, userAgent: string;
+    try {
+      const headers = cachedHeaders || await getBasicHeaders(accountEmail);
+      cookie = headers.cookie;
+      userAgent = headers.userAgent;
+    } catch (err: any) {
+      console.error('[SessionPool] Failed to get headers for session deletion:', err);
+      return;
+    }
+    const requestId = crypto.randomUUID();
     const debugEntry = createNetworkEntry({
       url: `${QWEN_API_BASE}/api/v2/chats/${chatId}`,
       method: 'DELETE',
@@ -228,7 +236,7 @@ export class SessionPool {
   private async createSession(email?: string): Promise<string> {
     const headers = await getBasicHeaders(email);
     const { cookie, userAgent, bxUmidtoken, bxUa, bxV } = headers;
-    const requestId = uuidv4();
+    const requestId = crypto.randomUUID();
 
     const acct = email ? getAccountByEmail(email) : null;
     const bearerToken = acct?.state?.token;

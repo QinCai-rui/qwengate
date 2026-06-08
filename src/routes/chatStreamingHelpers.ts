@@ -3,23 +3,29 @@ import {
   getSnapshotDelta,
   cleanThinkTags,
   extractDeltaContent,
-  streamDebugLog,
-  logDebug,
   type AmplificationGuardState,
 } from "./chatHelpers.ts";
 import { validateSingleToolCall } from '../tools/guard.ts';
-import type { ParsedToolCall } from '../tools/types.ts';
+import type { ParsedToolCall } from '../types/openai.ts';
 import { logStore } from '../services/logStore.ts';
+import { parseXmlToolCalls, cleanTextOfXmlArtifacts, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
 import { logQwenSSE } from '../services/qwenLogger.ts';
 import { filterContent } from '../utils/contentFilter.ts';
 
-import { StreamingContentFilter } from './pipeline/StreamingContentFilter.ts';
 import {
   writeReasoningEvent,
   writeContentDelta,
   writeToolCallEvent,
   writeDeferredThinking,
 } from './writeHelpers.ts';
+
+// ── Constants ──────────────────────────────────────────────────────
+
+/**
+ * Matches self-closing thinking/tool tags (newlines/spaces around tags).
+ * Performance: extracted to module-level const to avoid recompilation on each chunk.
+ */
+const SELF_CLOSING_TAG_PATTERN = /^[\n\s]*<\/?(?:think|thinking|thought|tool_call|tool_use|function_call)[\s>]*[\n\s]*$/;
 
 // ── Tool call handling ─────────────────────────────────────────────
 
@@ -133,7 +139,6 @@ export interface StreamProcessingCtx {
   completionId: string;
   model: string;
   emittedToolCallCount: number;
-  streamFilter: StreamingContentFilter;
   enableContentFiltering: boolean;
   cleanOutput: boolean;
   logId: string;
@@ -160,7 +165,7 @@ export async function processStreamData(
   ctx: StreamProcessingCtx,
 ): Promise<ProcessStreamResult> {
   const {
-    streamWriter, completionId, model, emittedToolCallCount, streamFilter,
+    streamWriter, completionId, model, emittedToolCallCount: _emittedToolCallCount,
     enableContentFiltering, cleanOutput: _cleanOutput,
     logId, resolvedEmail, ampState, reader: _reader, streamReader: _streamReader, qwenAbortController: _qwenAbortController,
   } = ctx;
@@ -211,24 +216,16 @@ export async function processStreamData(
     return 'continue';
   }
 
-  if (/^[\n\s]*<\/?(?:think|thinking|thought|tool_call|tool_use|function_call)[\s>]*[\n\s]*$/.test(vStr)) {
+  if (SELF_CLOSING_TAG_PATTERN.test(vStr)) {
     return 'continue';
   }
 
   logStore.addRawChunk(logId, vStr);
-  streamDebugLog(completionId, 'RAW_CHUNK', vStr);
-  if (vStr.includes('"name"')) logDebug('QWEN RAW CHUNK (streaming)', vStr);
 
   // Compute incremental delta for text content tracking
   let rawText = vStr;
   if (state.lastVStrRaw.length > 0) {
     const cumulativeDetection = detectCumulativeChunk(vStr, state.lastVStrRaw);
-    streamDebugLog(completionId, 'CUMULATIVE_DETECT', {
-      cumulative: cumulativeDetection.cumulative,
-      deltaLen: cumulativeDetection.delta.length,
-      lastLen: state.lastVStrRaw.length,
-      newLen: vStr.length,
-    });
     if (cumulativeDetection.cumulative) {
       rawText = cumulativeDetection.delta;
       state.lastVStrRaw = vStr;
@@ -241,51 +238,32 @@ export async function processStreamData(
     state.lastVStrRaw = vStr;
   }
 
-  // Tool calls are extracted via SSE native extraction (extractLocalMcpToolCalls),
-  // not via XML parsing. Text content passes through directly.
-  const toolCalls: ParsedToolCall[] = [];
-  const parserThinking = '';
-  streamDebugLog(completionId, 'CONTENT_DELTA', {
-    textLen: rawText.length,
-  });
-
   if (rawText) {
-    streamDebugLog(completionId, 'RAW_TEXT', { len: rawText.length, preview: rawText.substring(0, 100) });
-    if (state.lastRawContent.length > 0) {
-      const textDetection = detectCumulativeChunk(rawText, state.lastRawContent);
-      streamDebugLog(completionId, 'RAW_CUMULATIVE_DETECT', {
-        cumulative: textDetection.cumulative,
-        deltaLen: textDetection.delta.length,
-      });
-      if (textDetection.cumulative) {
-        state.lastRawContent = rawText;
-        state.lastFullContent += textDetection.delta;
-      } else if (textDetection.delta) {
-        state.lastRawContent += rawText;
-        state.lastFullContent += rawText;
-      }
-    } else {
-      state.lastRawContent = rawText;
-      state.lastFullContent = rawText;
+    state.lastRawContent += rawText;
+    state.lastFullContent += rawText;
+  }
+
+  // Keep state.lastFullContent raw so partial <function=...> survives for the next chunk
+  const { toolCalls: xmlToolCalls } = parseXmlToolCalls(state.lastFullContent);
+  if (xmlToolCalls.length > 0) {
+    for (const [i, tc] of xmlToolCalls.entries()) {
+      const parsed = xmlToolCallToParsed(tc, i);
+      await writeToolCallEvent(streamWriter, completionId, model, parsed, i);
     }
   }
 
-  streamFilter.feed(state.lastFullContent);
-  const baseFilteredContent = enableContentFiltering
-    ? filterContent(state.lastFullContent).cleanText
-    : state.lastFullContent;
-  const filteredThinking = enableContentFiltering
-    ? filterContent(state.lastFullContent).thinking
-    : '';
+  const contentForUser = cleanTextOfXmlArtifacts(state.lastFullContent).cleanedText;
+  const filteredResult = enableContentFiltering
+    ? filterContent(contentForUser)
+    : { cleanText: contentForUser, thinking: '' };
+  const baseFilteredContent = filteredResult.cleanText;
+  const filteredThinking = filteredResult.thinking;
 
   if (state.deferredThinkingChunks.length > 0) {
     await writeDeferredThinking(streamWriter, completionId, model, state.deferredThinkingChunks);
     state.deferredThinkingChunks = [];
   }
 
-      if (parserThinking) {
-        await writeReasoningEvent(streamWriter, completionId, model, parserThinking);
-      }
       if (filteredThinking) {
         const thinkingDelta = getSnapshotDelta(filteredThinking, state.lastThinkingSnapshot);
         state.lastThinkingSnapshot = filteredThinking;
@@ -298,16 +276,7 @@ export async function processStreamData(
     ? cleanThinkTags(baseFilteredContent)
     : null;
 
-  if (toolCalls.length > 0) {
-    const allToolCallsValid = await handleToolCalls(toolCalls, logId, streamWriter, completionId, model, emittedToolCallCount);
-    if (baseFilteredContent && allToolCallsValid && cleanedText) {
-      const contentDelta = getSnapshotDelta(cleanedText, state.lastFilteredSnapshot);
-      state.lastFilteredSnapshot = cleanedText;
-      if (contentDelta) {
-        await writeContentDelta(streamWriter, completionId, model, contentDelta, ampState, logId, resolvedEmail, state.lastRawContent, state.lastVStrRaw, logStore);
-      }
-    }
-  } else if (cleanedText) {
+  if (cleanedText) {
     // Text-only content (no tool calls): write content delta to SSE + logStore
     const contentDelta = getSnapshotDelta(cleanedText, state.lastFilteredSnapshot);
     state.lastFilteredSnapshot = cleanedText;

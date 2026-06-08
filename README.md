@@ -30,12 +30,11 @@ Then open [http://localhost:26405/dashboard](http://localhost:26405/dashboard) t
 - **OpenAI-Compatible API** — Drop-in replacement for `/v1/chat/completions` and `/v1/models`. Works with existing OpenAI SDKs, curl, or any HTTP client.
 - **Multi-Account Rotation** — Configure multiple Qwen accounts (3+ recommended). Requests are distributed via round-robin with automatic failover and cooldown tracking — cooldown limits become a non-issue.
 - **Session Pooling** — Browser sessions are pooled, reused, and autoscaled under load. No per-request login overhead.
-- **Tool Calling** — Full OpenAI-style function calling with JSON Schema validation, echo detection, and spam guards.
+- **Tool Calling** — Full OpenAI-style function calling with JSON Schema validation and spam guards.
 - **Streaming SSE** — Server-Sent Events with heartbeat keep-alive and content filter integrity maintained across stream boundaries.
-- **Content Filter Pipeline** — Strips tool call artifacts, XML leaks, thinking tags, and echo repetitions from model output.
+- **Content Filter Pipeline** — Strips thinking tags and filters internal artifacts from model output.
 - **Web Dashboard** — Real-time monitoring with 5 pages: overview, request log, account manager, network debug, and settings.
 - **Stealth Browser Automation** — Uses CloakBrowser with anti-detection patches to maintain session integrity.
-- **Update Notifications** — Automatically checks for new versions on startup and logs a warning when outdated.
 - **No Build Step** — TypeScript executed directly via `tsx`. Run from source with no compilation needed.
 
 ## Installation

@@ -1,4 +1,4 @@
-import type { JsonSchema } from './types.ts';
+import type { JsonSchema } from '../types/openai.ts';
 import { validateObject, validateArray, validateString, validateNumber, validateBoolean, deepEqual } from './schemaValidators.ts';
 
 export class SchemaValidationError extends Error {

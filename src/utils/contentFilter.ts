@@ -1,5 +1,4 @@
-import { isThinkingLine, QWEN_THINK_TAG_PATTERN, QWEN_THINK_BLOCK_START } from './thinkTagStripper.ts';
-import type { FilterResult } from './thinkTagStripper.ts';
+import { isThinkingLine, QWEN_THINK_TAG_PATTERN, QWEN_THINK_BLOCK_START, type FilterResult } from "./thinkTagStripper.ts";
 export type { FilterResult } from './thinkTagStripper.ts';
 
 export function filterContent(raw: string): FilterResult {

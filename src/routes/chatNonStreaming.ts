@@ -1,11 +1,10 @@
 import { Context } from 'hono';
-import type { OpenAIRequest, Message } from '../utils/types.ts';
+import type { OpenAIRequest, Message, ParsedToolCall } from "../types/openai.ts";
 import { detectParallelToolLoop } from '../tools/guard.ts';
 import { filterContent } from '../utils/contentFilter.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { logStore } from '../services/logStore.ts';
 import {
-  logDebug,
   commonPrefixLen,
   detectCumulativeChunk,
   parseQwenErrorPayload,
@@ -13,9 +12,10 @@ import {
   ToolSpamGuard,
   pendingCorrections,
 } from './chatHelpers.ts';
-import type { ParsedToolCall } from '../tools/types.ts';
 
 const MAX_TOOL_CALLS_PER_TURN = 8;
+
+import { parseXmlToolCalls, cleanTextOfXmlArtifacts, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
 
 export interface NonStreamingContext {
   c: Context;
@@ -98,30 +98,27 @@ function processAnswerDelta(delta: any, state: StreamProcessorState, ctx: NonStr
   if (!vStr || vStr === 'FINISHED') return;
 
   logStore.addRawChunk(ctx.logId, vStr);
-  if (vStr.includes('"name"')) {
-    logDebug('QWEN RAW CHUNK (non-streaming)', vStr);
-  }
 
-  // Text passes through directly — tool calls come from SSE extraction, not XML parsing
-  const textContent = vStr;
-  const toolCalls: ParsedToolCall[] = [];
-
-  if (textContent) {
+  if (vStr) {
     if (state.lastFullContent.length > 0) {
-      const detection = detectCumulativeChunk(textContent, state.lastFullContent);
-      state.lastFullContent = detection.cumulative ? textContent : state.lastFullContent + textContent;
+      const detection = detectCumulativeChunk(vStr, state.lastFullContent);
+      state.lastFullContent = detection.cumulative ? vStr : state.lastFullContent + vStr;
     } else {
-      state.lastFullContent = textContent;
+      state.lastFullContent = vStr;
     }
   }
 
-  processToolCallsThroughGuard(toolCalls, state.toolCallsOut, {
-    logId: ctx.logId,
-    toolSpamGuard: state.toolSpamGuard,
-    correctionPrompts: state.correctionPrompts,
-    maxToolCalls: MAX_TOOL_CALLS_PER_TURN,
-    logParsed: true,
-  });
+  const { toolCalls } = parseXmlToolCalls(state.lastFullContent);
+  if (toolCalls.length > 0) {
+    const parsed = toolCalls.map((tc, i) => xmlToolCallToParsed(tc, i));
+    processToolCallsThroughGuard(parsed, state.toolCallsOut, {
+      logId: ctx.logId,
+      toolSpamGuard: state.toolSpamGuard,
+      correctionPrompts: state.correctionPrompts,
+      maxToolCalls: MAX_TOOL_CALLS_PER_TURN,
+      logParsed: true,
+    });
+  }
 }
 
 function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonStreamingContext): void {
@@ -164,17 +161,18 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
 }
 
 function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
-  // No parser to flush — content is already accumulated in processAnswerDelta/processThinkingDelta.
-  // Tool calls come from SSE extraction, not parser flush.
-  const toolCalls: ParsedToolCall[] = [];
-
-  processToolCallsThroughGuard(toolCalls, state.toolCallsOut, {
-    logId,
-    toolSpamGuard: state.toolSpamGuard,
-    correctionPrompts: state.correctionPrompts,
-    maxToolCalls: MAX_TOOL_CALLS_PER_TURN,
-    label: 'flush',
-  });
+  const { toolCalls } = parseXmlToolCalls(state.lastFullContent);
+  if (toolCalls.length > 0) {
+    const parsed = toolCalls.map((tc, i) => xmlToolCallToParsed(tc, i));
+    processToolCallsThroughGuard(parsed, state.toolCallsOut, {
+      logId,
+      toolSpamGuard: state.toolSpamGuard,
+      correctionPrompts: state.correctionPrompts,
+      maxToolCalls: MAX_TOOL_CALLS_PER_TURN,
+      label: 'xml-flush',
+      logParsed: true,
+    });
+  }
 
   if (state.toolCallsOut.length < 3) return;
 
@@ -205,6 +203,8 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
     prompt_tokens_details: { cached_tokens: 0 },
   };
 
+  const contentForUser = cleanTextOfXmlArtifacts(state.lastFullContent).cleanedText;
+  state.lastFullContent = contentForUser;
   const { cleanText: baseFilteredContent, thinking: filteredReasoning } = cleanOutput
     ? filterContent(state.lastFullContent)
     : { cleanText: state.lastFullContent, thinking: '' };
@@ -213,8 +213,6 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
       ? state.reasoningBuffer + '\n' + filteredReasoning
       : filteredReasoning;
   }
-
-
 
   const filteredContent = baseFilteredContent;
 

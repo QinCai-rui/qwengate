@@ -1,0 +1,76 @@
+export interface ParsedXmlToolCall {
+  name: string;
+  parameters: Record<string, string>;
+}
+
+function functionNameFromTag(tag: string): string | null {
+  const m = tag.match(/^<function=(\w+)>/);
+  return m ? m[1] : null;
+}
+
+export function parseXmlToolCalls(text: string): { toolCalls: ParsedXmlToolCall[]; cleanedText: string } {
+  const toolCalls: ParsedXmlToolCall[] = [];
+  const unique = new Set<string>();
+  let cleanedText = text;
+
+  const re = /<function=\w+>[\s\S]*?<\/function>/g;
+  const sections: string[] = [];
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(text)) !== null) {
+    if (unique.has(match[0])) continue;
+    unique.add(match[0]);
+
+    const name = functionNameFromTag(match[0]);
+    if (!name) continue;
+
+    const body = match[0].slice(match[0].indexOf('>') + 1, match[0].lastIndexOf('<'));
+
+    const parameters: Record<string, string> = {};
+    const paramRe = /<parameter=(\w+)>([\s\S]*?)<\/parameter>/g;
+    let pm: RegExpExecArray | null;
+    while ((pm = paramRe.exec(body)) !== null) {
+      parameters[pm[1].trim()] = pm[2].trim();
+    }
+
+    toolCalls.push({ name, parameters });
+    sections.push(text.slice(lastIdx, match.index));
+    lastIdx = re.lastIndex;
+  }
+
+  sections.push(text.slice(lastIdx));
+  cleanedText = sections.join('');
+
+  return { toolCalls, cleanedText: cleanedText.replace(/\n{4,}/g, '\n\n\n').trim() };
+}
+
+function stripRemainingXmlMarkup(text: string): string {
+  return text
+    .replace(/<function=\w+>[\s\S]*?(?=<function=\w+>|$)/g, '')
+    .replace(/<\/?function>/g, '')
+    .replace(/<parameter=\w+>[\s\S]*?<\/parameter>/g, '')
+    .replace(/<\/?parameter>/g, '')
+    .replace(/<parameter=\w+>/g, '')
+    .replace(/<function=\w+>/g, '')
+    .replace(/\n{4,}/g, '\n\n\n')
+    .trim();
+}
+
+export function cleanTextOfXmlArtifacts(text: string): { toolCalls: ParsedXmlToolCall[]; cleanedText: string } {
+  const { toolCalls, cleanedText } = parseXmlToolCalls(text);
+  const fullyCleaned = stripRemainingXmlMarkup(cleanedText);
+  return { toolCalls, cleanedText: fullyCleaned };
+}
+
+export function xmlToolCallToParsed(block: ParsedXmlToolCall, _index: number): { id: string; name: string; arguments: Record<string, unknown> } {
+  const args: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(block.parameters)) {
+    try { args[key] = JSON.parse(value); } catch { args[key] = value; }
+  }
+  return {
+    id: `call_${crypto.randomUUID()}`,
+    name: block.name,
+    arguments: args,
+  };
+}

@@ -4,7 +4,7 @@ import { sessionPool } from "../services/sessionPool.ts";
 import { createQwenStream } from "../services/qwen.ts";
 import { modelRouter } from "../services/modelRouter.ts";
 import modelSpecs from "../models.json" with { type: "json" };
-import type { ModelSpec } from "../utils/types.ts";
+import type { ModelSpec } from "../types/openai.ts";
 import { safeTruncate, pendingCorrections } from "./chatHelpersCore.ts";
 import { compressToolResult } from "./compressToolResult.ts";
 

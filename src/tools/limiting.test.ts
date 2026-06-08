@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert';
+import { streamChunks } from '../tests/helpers.ts';
 
 /**
  * Tool call limiting tests.
@@ -9,20 +10,6 @@ import assert from 'node:assert';
  * 2. MAX_TOOL_CALLS_PER_RESPONSE env var — reads default and override
  * 3. StreamingToolParser respects the limit
  */
-
-function streamChunks(text: string): string[] {
-  const tokens = text.match(/\S+\s*/g) || [];
-  const chunks: string[] = [];
-  const pattern = [2, 4, 3, 5, 2];
-  let i = 0, pi = 0;
-  while (i < tokens.length) {
-    const size = Math.min(pattern[pi % pattern.length], tokens.length - i);
-    chunks.push(tokens.slice(i, i + size).join(''));
-    i += size;
-    pi++;
-  }
-  return chunks;
-}
 
 // ─── truncateToolResult (from chat.ts) ──────────────────────────────────────
 

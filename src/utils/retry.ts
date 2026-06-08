@@ -88,19 +88,21 @@ export class CircuitBreaker {
     this.halfOpenMaxAttempts = config?.halfOpenMaxAttempts ?? 1;
   }
 
-  getState(): CircuitState {
-    // Auto-transition from open → half_open after reset timeout
+  tryTransitionToHalfOpen(): void {
     if (this.state === 'open' && Date.now() - this.lastFailureTime >= this.resetTimeoutMs) {
       this.state = 'half_open';
       this.successCount = 0;
       console.error(`[CircuitBreaker:${this.name}] open → half_open (reset timeout elapsed)`);
     }
+  }
+
+  getState(): CircuitState {
     return this.state;
   }
 
   getStats(): { state: CircuitState; failureCount: number; successCount: number; lastFailureTime: number } {
     return {
-      state: this.getState(),
+      state: this.state,
       failureCount: this.failureCount,
       successCount: this.successCount,
       lastFailureTime: this.lastFailureTime,
@@ -109,8 +111,8 @@ export class CircuitBreaker {
 
   /** Check if the circuit allows a request to pass. Throws CircuitOpenError if open. */
   allowRequest(): void {
-    const state = this.getState();
-    if (state === 'open') {
+    this.tryTransitionToHalfOpen();
+    if (this.state === 'open') {
       const retryAfterMs = Math.max(0, this.resetTimeoutMs - (Date.now() - this.lastFailureTime));
       throw new CircuitOpenError(retryAfterMs);
     }

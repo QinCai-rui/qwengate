@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { validateToolCalls, validateSingleToolCall, detectToolCallLoop, detectParallelToolLoop } from './guard.ts';
-import type { ParsedToolCall } from './types.ts';
+import type { ParsedToolCall } from '../types/openai.ts';
 
 describe('validateToolCalls', () => {
   it('should accept valid tool calls', () => {

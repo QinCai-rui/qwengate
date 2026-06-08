@@ -1,8 +1,7 @@
 /**
  * SSE event write helpers for streaming chat responses.
  */
-import { checkAmplificationGuard } from './chatHelpers.ts';
-import type { AmplificationGuardState } from './chatHelpers.ts';
+import { checkAmplificationGuard, type AmplificationGuardState } from "./chatHelpers.ts";
 
 /**
  * Write a single SSE data event to the stream.

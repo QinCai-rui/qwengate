@@ -45,25 +45,3 @@ async function apiFetch(url) {
   } catch(e) { return null; }
 }
 var API_KEY = window.API_KEY || '';
-var APP_VERSION = window.APP_VERSION || '0.2.0';
-
-/* ── Update check ── */
-(function checkUpdate() {
-  var bannerId = 'update-banner';
-  if (document.getElementById(bannerId)) return;
-  fetch('https://api.github.com/repos/youssefvdel/qwen-gate/releases/latest', { signal: AbortSignal.timeout(5000) })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      var latest = (data.tag_name || '').replace(/^v/, '');
-      if (!latest || latest === APP_VERSION) return;
-      var banner = document.createElement('div');
-      banner.id = bannerId;
-      banner.style.cssText = 'background:var(--accent);color:#fff;text-align:center;padding:8px 16px;font-size:0.8rem;font-weight:500;display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap';
-      banner.innerHTML = 'Update available: v' + APP_VERSION + ' → v' + latest
-        + ' <code style="background:rgba(255,255,255,0.2);padding:3px 8px;border-radius:4px;font-size:0.7rem">qg update</code>'
-        + ' <button onclick="this.parentElement.remove()" style="background:none;border:1px solid rgba(255,255,255,0.4);color:#fff;border-radius:4px;padding:2px 10px;cursor:pointer;font-size:0.7rem;margin-left:4px">Dismiss</button>';
-      var main = document.querySelector('.main-content') || document.body;
-      main.parentElement.insertBefore(banner, main);
-    })
-    .catch(function() {});
-})();

@@ -1,4 +1,4 @@
-import type { ParsedToolCall } from './types.ts';
+import type { ParsedToolCall } from '../types/openai.ts';
 
 export interface ParserResult {
   text: string;

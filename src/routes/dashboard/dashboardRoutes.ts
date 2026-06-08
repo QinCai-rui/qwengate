@@ -11,7 +11,7 @@ import {
   getAllAccountEmails,
   initAuth,
 } from "../../services/auth.ts";
-import { checkApiKeyAuth } from "../../utils/auth.ts";
+import { checkApiKeyAuth, safeCompare } from "../../utils/auth.ts";
 import {
   deleteAllChats,
   configureAccount,
@@ -122,6 +122,8 @@ function modelHealthHandler(c: any) {
 }
 
 function logStreamHandler(c: any) {
+  const auth = checkApiKeyAuth(c);
+  if (auth) return auth;
   return new Response(
     new ReadableStream({
       start(controller) {
@@ -183,6 +185,8 @@ function logStreamHandler(c: any) {
 }
 
 function logJsonHandler(c: any) {
+  const auth = checkApiKeyAuth(c);
+  if (auth) return auth;
   const entries = logStore.getRecent(50);
   const serialized = entries.map((e) => {
     const dt = new Date(e.timestamp);
@@ -236,8 +240,16 @@ export function registerDashboardRoutes(app: Hono): void {
 
   app.get("/", (c) => c.redirect("/dashboard"));
   app.get("/health", healthHandler);
-  app.get("/accounts", (c) => c.json(getAccountStats()));
-  app.get("/pool/stats", (c) => c.json(sessionPool.getStats()));
+  app.get("/accounts", (c) => {
+    const auth = checkApiKeyAuth(c);
+    if (auth) return auth;
+    return c.json(getAccountStats());
+  });
+  app.get("/pool/stats", (c) => {
+    const auth = checkApiKeyAuth(c);
+    if (auth) return auth;
+    return c.json(sessionPool.getStats());
+  });
 
   app.post("/admin/accounts/reload", accountsReloadHandler);
   app.post("/dashboard/accounts/delete-all-chats", deleteAllChatsHandler);
@@ -248,13 +260,17 @@ export function registerDashboardRoutes(app: Hono): void {
   app.get("/log", (c) => c.redirect("/dashboard/logs"));
   app.get("/log/json", logJsonHandler);
   app.get("/log/stream", logStreamHandler);
-  app.get("/metrics/uptime", (c) => c.json({ uptimeSeconds: logStore.getUptimeSeconds() }));
+  app.get("/metrics/uptime", (c) => {
+    const auth = checkApiKeyAuth(c);
+    if (auth) return auth;
+    return c.json({ uptimeSeconds: logStore.getUptimeSeconds() });
+  });
 
   app.get("/api/config", (c) => {
     const apiKey = config.get("API_KEY");
     if (apiKey) {
       const authHeader = c.req.header("authorization");
-      if (!authHeader || !authHeader.startsWith("Bearer ") || authHeader.slice(7) !== apiKey) {
+      if (!authHeader || !authHeader.startsWith("Bearer ") || !safeCompare(authHeader.slice(7), apiKey)) {
         return c.json({ error: "unauthorized" }, 401);
       }
     }
@@ -265,7 +281,7 @@ export function registerDashboardRoutes(app: Hono): void {
     const apiKey = config.get("API_KEY");
     if (apiKey) {
       const authHeader = c.req.header("authorization");
-      if (!authHeader || !authHeader.startsWith("Bearer ") || authHeader.slice(7) !== apiKey) {
+      if (!authHeader || !authHeader.startsWith("Bearer ") || !safeCompare(authHeader.slice(7), apiKey)) {
         return c.json({ error: "unauthorized" }, 401);
       }
     }

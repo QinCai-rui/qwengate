@@ -1,6 +1,6 @@
 import { Context } from "hono";
-import { v4 as uuidv4 } from "uuid";
-import { OpenAIRequest } from "../utils/types.ts";
+import crypto from 'node:crypto';
+import { OpenAIRequest } from "../types/openai.ts";
 import { config } from "../services/configService.ts";
 import { logStore } from "../services/logStore.ts";
 import { modelRouter } from "../services/modelRouter.ts";
@@ -154,7 +154,7 @@ function populateLogEntry(logEntry: any, body: OpenAIRequest, messages: any[]): 
 }
 
 export async function chatCompletions(c: Context) {
-  const logId = uuidv4();
+  const logId = crypto.randomUUID();
   try {
     const parsed = await parseRequestBody(c);
     const { body, isStream, toolCalling, cleanOutput, messages, contextCheck } =
@@ -188,7 +188,7 @@ export async function chatCompletions(c: Context) {
         logId,
       );
 
-    const completionId = "chatcmpl-" + uuidv4();
+    const completionId = "chatcmpl-" + crypto.randomUUID();
 
     if (!isStream) {
       return handleNonStreamingRequest({

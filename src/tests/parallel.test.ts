@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { executeToolCalls } from '../tools/executor.ts';
+import { executeToolCalls } from '../tools/toolRunner.ts';
 import { registry } from '../tools/registry.ts';
-import type { ToolContext } from '../tools/types.ts';
+import type { ToolContext } from '../types/openai.ts';
 
 test('executeToolCalls: parallel execution', async () => {
   let activeCount = 0;

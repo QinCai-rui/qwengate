@@ -4,8 +4,7 @@
  * Handles refresh token exchange and ensuring accounts stay fresh.
  */
 
-import type { AccountEntry } from './auth.ts';
-import { createAuthFetchTimeout, AUTH_TOKEN_MAX_AGE_MS, AUTH_REFRESH_BEFORE_MS, saveCookies, loginFresh } from './auth.ts';
+import { createAuthFetchTimeout, AUTH_TOKEN_MAX_AGE_MS, AUTH_REFRESH_BEFORE_MS, saveCookies, loginFresh, type AccountEntry } from "./auth.ts";
 
 export function needsRefresh(acct: AccountEntry): boolean {
   if (!acct.state) return true;
@@ -61,7 +60,8 @@ export async function tryRefreshToken(acct: AccountEntry): Promise<boolean> {
     }
 
     return false;
-  } catch {
+  } catch (err: any) {
+    console.error('[TokenRefresh] HTTP fetch failed:', err);
     try {
       const { refreshViaProfile } = await import('./playwright.ts');
       const profileResult = await refreshViaProfile(acct.email);
@@ -69,7 +69,8 @@ export async function tryRefreshToken(acct: AccountEntry): Promise<boolean> {
         console.error(`[Auth] ✓ Token refreshed via profile for ${acct.email} (after network error)`);
         return true;
       }
-    } catch {
+    } catch (innerErr: any) {
+      console.error('[TokenRefresh] Profile refresh fallback failed:', innerErr);
       // non-blocking: profile refresh may fail if browser unavailable
     }
     return false;
