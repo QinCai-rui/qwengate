@@ -66,8 +66,11 @@ export function buildPromptAndSystem(
           const args = tc.function?.arguments;
           if (typeof args === "string") { try { parsedArgs = JSON.parse(args); } catch { parsedArgs = {}; } }
           else if (args && typeof args === "object") parsedArgs = args;
-          const payload = { name: tc.function?.name, arguments: parsedArgs };
-          assistantContent = assistantContent ? assistantContent + "\n" + JSON.stringify(payload) : JSON.stringify(payload);
+          const xmlParams = Object.entries(parsedArgs)
+            .map(([k, v]) => `<parameter=${k}>${String(v)}</parameter>`)
+            .join('\n');
+          const xmlPayload = `<function=${tc.function?.name}>\n${xmlParams}\n</function>`;
+          assistantContent = assistantContent ? assistantContent + "\n" + xmlPayload : xmlPayload;
         }
       }
       prompt += `Assistant: ${assistantContent}\n\n`;
