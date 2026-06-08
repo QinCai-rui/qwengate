@@ -85,6 +85,7 @@ export interface QwenStreamResult {
   uiSessionId: string;
   accountEmail?: string;
   abortController: AbortController;
+  qwenLogFile?: string;
 }
 
 const QWEN_FETCH_TIMEOUT_MS = parseInt(config.get('QWEN_FETCH_TIMEOUT_MS', '30000'), 10);
@@ -253,7 +254,8 @@ export async function createQwenStream(
     );
   }
 
-  const makeRequest = async (): Promise<{ response: Response; headers: Record<string, string> }> => {
+  let makeRequestQwenLogFile: string | undefined;
+  const makeRequest = async (): Promise<{ response: Response; headers: Record<string, string>; qwenLogFile?: string }> => {
     const { headers: reqHeaders } = await getQwenHeaders(currentAccountEmail);
     const requestHeaders = buildRequestHeaders(reqHeaders, chatId);
     const debugEntry = createNetworkEntry({
@@ -277,14 +279,16 @@ export async function createQwenStream(
         });
         try {
           const bodyStr = JSON.stringify(payload);
-          const qwenLogFile = logQwenRequest(payload, url);
+          if (config.get("SAVE_REQUEST_LOGS") === "true") {
+            makeRequestQwenLogFile = logQwenRequest(payload, url);
+          }
           response = await fetch(url, {
             method: 'POST', headers: requestHeaders,
             body: bodyStr, signal: controller.signal,
           });
           const respHeaders: Record<string, string> = {};
           response.headers.forEach((v, k) => { respHeaders[k] = v; });
-          logQwenResponse(qwenLogFile, response.status, response.statusText, respHeaders, '');
+          if (makeRequestQwenLogFile) logQwenResponse(makeRequestQwenLogFile, response.status, response.statusText, respHeaders, '');
         } finally { cleanup(); }
       } catch (fetchErr: unknown) {
         const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
@@ -295,14 +299,14 @@ export async function createQwenStream(
       if (!response.ok || !response.body) {
         await handleErrorResponse(response, debugEntry.id);
       }
-      return { response, headers: reqHeaders };
+      return { response, headers: reqHeaders, qwenLogFile: makeRequestQwenLogFile };
     } catch (err) {
       errorEntry(debugEntry.id, err instanceof Error ? err.message : String(err));
       throw err;
     }
   };
 
-  let result: { response: Response; headers: Record<string, string> };
+  let result: { response: Response; headers: Record<string, string>; qwenLogFile?: string };
   const cbState = qwenCircuitBreaker.getState();
   if (cbState === 'open') {
     const stats = qwenCircuitBreaker.getStats();
@@ -335,5 +339,5 @@ export async function createQwenStream(
       }
     })
   );
-  return { stream: wrappedStream, headers: result.headers, uiSessionId: chatId || '', accountEmail: currentAccountEmail, abortController: streamAbortController };
+  return { stream: wrappedStream, headers: result.headers, uiSessionId: chatId || '', accountEmail: currentAccountEmail, abortController: streamAbortController, qwenLogFile: result.qwenLogFile };
 }

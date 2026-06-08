@@ -168,7 +168,7 @@ function renderEntryHtml(entry) {
     html += '<div class="req-error-top">';
     for (var ei = 0; ei < entry.errors.length; ei++) {
       var e = entry.errors[ei];
-      var isWarn = e.indexOf('ECHO') !== -1 || e.indexOf('LOOP') !== -1 || e.indexOf('Loop') !== -1 || e.indexOf('parallel') !== -1;
+      var isWarn = e.indexOf('LOOP') !== -1 || e.indexOf('Loop') !== -1 || e.indexOf('parallel') !== -1;
       var badgeClass = isWarn ? 'badge-warning' : 'badge-danger';
       var label = isWarn ? 'WARN' : 'ERROR';
       html += '<div style="margin:4px 0;padding:6px 8px;background:var(--bg-elevated);border-radius:var(--radius-sm);font-family:var(--mono);font-size:0.75rem"><span class="badge ' + badgeClass + '" style="margin-right:6px">' + label + '</span>' + escHtml(e) + '</div>';

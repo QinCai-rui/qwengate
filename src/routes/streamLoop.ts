@@ -6,21 +6,16 @@ import {
   checkAmplificationGuard,
   type AmplificationGuardState,
 } from './chatHelpers.ts';
-import { validateSingleToolCall } from '../tools/guard.ts';
 import { logStore } from '../services/logStore.ts';
-import { filterContent, stripToolCallArtifacts, stripStreamingDelta } from '../utils/contentFilter.ts';
-import { StreamingToolParser } from '../tools/parser.ts';
+import { filterContent } from '../utils/contentFilter.ts';
 import { StreamingContentFilter } from './pipeline/StreamingContentFilter.ts';
-import { StreamingEchoFilter } from './pipeline/StreamingEchoFilter.ts';
 import {
   writeEvent,
   writeReasoningEvent,
-  writeContentDelta,
-  writeToolCallEvent,
   makeChoice,
   buildChunkEvent,
   buildUsage,
-} from './writeHelpers.ts';
+} from "./writeHelpers.ts";
 import { checkFinalAmplification, scheduleCleanup } from './cleanupHelpers.ts';
 import {
   processStreamData,
@@ -44,7 +39,6 @@ export async function runStreamLoop(
   bufferRef: { text: string },
 ): Promise<StreamLoopResult> {
   let streamDone = false;
-  let echoAborted = false;
   let nextParentId = streamState.nextParentId;
   let _totalChunks = 0;
 
@@ -90,17 +84,15 @@ export async function runStreamLoop(
         });
 
         const result = await processStreamData(chunk, streamState, streamCtx);
-        if (result === 'abort_stream') { echoAborted = true; break; }
         if (result === 'break_stream') { streamDone = true; break; }
       } catch (e) {
         console.error('[Chat] Streaming: parse error on chunk, ignoring partial:', (e as Error)?.message);
       }
     }
-    if (echoAborted) break;
     nextParentId = streamState.nextParentId;
   }
 
-  return { buffer: bufferRef.text, echoAborted, nextParentId };
+  return { buffer: bufferRef.text, echoAborted: false, nextParentId };
 }
 
 export async function handlePostStreamCompletion(
@@ -112,8 +104,7 @@ export async function handlePostStreamCompletion(
     ampState: AmplificationGuardState;
     logId: string;
     resolvedEmail: string;
-    streamingEchoFilter: StreamingEchoFilter;
-    toolParser: StreamingToolParser;
+    emittedToolCallCount: number;
     streamFilter: StreamingContentFilter;
     buffer: string;
     enableContentFiltering: boolean;
@@ -130,22 +121,10 @@ export async function handlePostStreamCompletion(
 ): Promise<void> {
   const {
     streamWriter, completionId, model, streamState, ampState,
-    logId, resolvedEmail, streamingEchoFilter, toolParser, streamFilter,
+    logId, resolvedEmail, emittedToolCallCount, streamFilter: _streamFilter,
     buffer, enableContentFiltering, includeUsage,
   } = args;
   const { reader, heartbeatInterval, chatId, sessionHeaders, email, sessionPool } = cleanup;
-
-  const remainingEchoDelta = streamingEchoFilter.flush(streamState.lastFullContent);
-  if (remainingEchoDelta) {
-    const flushEchoCleaned = cleanThinkTags(stripToolCallArtifacts(remainingEchoDelta));
-    if (flushEchoCleaned) {
-      const echoFlushDelta = stripStreamingDelta(getSnapshotDelta(flushEchoCleaned, streamState.lastFilteredSnapshot));
-      streamState.lastFilteredSnapshot = flushEchoCleaned;
-      if (echoFlushDelta) {
-        await writeContentDelta(streamWriter, completionId, model, echoFlushDelta, ampState, logId, resolvedEmail, streamState.lastRawContent, streamState.lastVStrRaw, logStore);
-      }
-    }
-  }
 
   const upstreamError = parseQwenErrorPayload(buffer);
   if (upstreamError) {
@@ -157,36 +136,16 @@ export async function handlePostStreamCompletion(
     return;
   }
 
-  const emittedToolCallCount = toolParser.getEmittedToolCallCount();
-  const { text: remainingText, toolCalls: remainingToolCalls, thinking: remainingThinking } = toolParser.flush();
-  if (remainingThinking) {
-    const echoCheck = streamingEchoFilter.checkLine(remainingThinking);
-    if (echoCheck.echoDetected) {
-      console.warn(`[Echo in reasoning] Suppressed echo in thinking content`);
-    } else {
-      await writeReasoningEvent(streamWriter, completionId, model, remainingThinking);
-    }
-  }
-  if (remainingText) {
-    streamState.lastFullContent += remainingText;
-  }
-  streamFilter.flush();
   const { cleanText: flushBase, thinking: flushThinking } = (enableContentFiltering && streamState.lastFullContent)
     ? filterContent(streamState.lastFullContent)
     : { cleanText: streamState.lastFullContent || '', thinking: '' };
-  const flushFiltered = stripToolCallArtifacts(flushBase);
-  const flushCleaned = cleanThinkTags(flushFiltered);
+  const flushCleaned = cleanThinkTags(flushBase);
 
   if (flushThinking) {
     const thinkDelta = getSnapshotDelta(flushThinking, streamState.lastThinkingSnapshot);
     if (thinkDelta) {
       streamState.lastThinkingSnapshot = flushThinking;
-      const echoCheck = streamingEchoFilter.checkLine(thinkDelta);
-      if (!echoCheck.echoDetected) {
-        await writeReasoningEvent(streamWriter, completionId, model, thinkDelta);
-      } else {
-        console.warn(`[Echo in reasoning] Suppressed echo in filtered thinking`);
-      }
+      await writeReasoningEvent(streamWriter, completionId, model, thinkDelta);
     }
   }
   if (flushCleaned) {
@@ -196,7 +155,7 @@ export async function handlePostStreamCompletion(
         streamState.lastFilteredSnapshot = flushCleaned;
       } else {
         streamState.lastFilteredSnapshot = flushCleaned;
-        const ct = stripStreamingDelta(contentDelta).replace(/[\n\s]*$/, '');
+        const ct = contentDelta.replace(/[\n\s]*$/, '');
         if (ct) {
           logStore.addProcessedOutput(logId, ct);
           ampState.emittedOutputBytes += ct.length;
@@ -205,19 +164,10 @@ export async function handlePostStreamCompletion(
       }
     }
   }
-  for (const tc of remainingToolCalls) {
-    const guard = validateSingleToolCall(tc);
-    if (!guard.ok) {
-      logStore.updateEntry(logId, entry => {
-        entry.errors.push(`Guard rejected streaming flush tool call "${tc.name}": ${guard.errors.join(', ')}`);
-      });
-      continue;
-    }
-    await writeToolCallEvent(streamWriter, completionId, model, tc, emittedToolCallCount + remainingToolCalls.indexOf(tc));
-  }
+
 
   const usage = buildUsage(streamState.promptTokens, streamState.completionTokens, streamState.reasoningBuffer);
-  const finalFinishReason = (emittedToolCallCount + remainingToolCalls.length) > 0 ? 'tool_calls' : 'stop';
+  const finalFinishReason = emittedToolCallCount > 0 ? 'tool_calls' : 'stop';
 
   await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({}, finalFinishReason)],
     includeUsage ? undefined : { usage },
@@ -237,7 +187,7 @@ export async function handlePostStreamCompletion(
     if (streamState.lastFullContent) entry.remainingText = streamState.lastFullContent;
     entry.finalResponse = {
       finishReason: finalFinishReason || 'stop',
-      toolCallCount: emittedToolCallCount + remainingToolCalls.length,
+      toolCallCount: emittedToolCallCount,
       contentPreview: (streamState.lastFullContent || '').substring(0, 100),
     };
   });

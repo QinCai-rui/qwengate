@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { logStore } from './logStore';
+import { logStore } from './logStore.js';
 
 test('logStore createLogEntry emits valid JSON with required structured fields', () => {
   const entry = logStore.createLogEntry(

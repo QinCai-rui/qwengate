@@ -1,5 +1,4 @@
 import {
-  pendingCorrections,
   detectCumulativeChunk,
   getSnapshotDelta,
   cleanThinkTags,
@@ -7,14 +6,14 @@ import {
   streamDebugLog,
   logDebug,
   type AmplificationGuardState,
-} from './chatHelpers.ts';
+} from "./chatHelpers.ts";
 import { validateSingleToolCall } from '../tools/guard.ts';
 import type { ParsedToolCall } from '../tools/types.ts';
 import { logStore } from '../services/logStore.ts';
-import { filterContent, stripToolCallArtifacts, stripStreamingDelta } from '../utils/contentFilter.ts';
-import { StreamingToolParser } from '../tools/parser.ts';
+import { logQwenSSE } from '../services/qwenLogger.ts';
+import { filterContent } from '../utils/contentFilter.ts';
+
 import { StreamingContentFilter } from './pipeline/StreamingContentFilter.ts';
-import { StreamingEchoFilter } from './pipeline/StreamingEchoFilter.ts';
 import {
   writeReasoningEvent,
   writeContentDelta,
@@ -36,7 +35,7 @@ export async function handleToolCalls(
   streamWriter: any,
   completionId: string,
   model: string,
-  toolParser: { getEmittedToolCallCount: () => number },
+  emittedToolCallCount: number,
 ): Promise<boolean> {
   if (toolCalls.length > MAX_TOOL_CALLS_PER_TURN) {
     console.warn(`  [🛑 TOOL LIMIT] Truncating ${toolCalls.length} tool calls to first ${MAX_TOOL_CALLS_PER_TURN}`);
@@ -55,7 +54,7 @@ export async function handleToolCalls(
   });
 
   let allValid = true;
-  const baseIndex = toolParser.getEmittedToolCallCount() - toolCalls.length;
+  const baseIndex = emittedToolCallCount - toolCalls.length;
   for (let i = 0; i < toolCalls.length; i++) {
     const tc = toolCalls[i];
     const guard = validateSingleToolCall(tc);
@@ -94,8 +93,7 @@ export function extractLocalMcpToolCalls(
   const localMcp = sseData?.choices?.[0]?.delta?.extra?.local_mcp;
   if (!localMcp) return [];
 
-  const resolvedClient = clientName ?? Object.keys(localMcp)[0];
-  if (!resolvedClient) return [];
+  const resolvedClient = clientName ?? Object.keys(localMcp)[0] ?? "qwengate";
 
   const serverTools = localMcp[resolvedClient];
   if (!Array.isArray(serverTools)) return [];
@@ -111,43 +109,6 @@ export function extractLocalMcpToolCalls(
     }
   }
   return toolCalls;
-}
-
-// ── Echo detection handling ────────────────────────────────────────
-
-/**
- * Handle echo detection: cancel streams, log error, set corrections.
- */
-export async function handleEchoDetection(
-  echoResult: { echoDetected: boolean; reason: string; similarity: number; matchedLine?: string },
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  streamReader: ReadableStreamDefaultReader<Uint8Array> | null,
-  qwenAbortController: AbortController,
-  streamWriter: { writer?: { abort: (err: Error) => void } },
-  logId: string,
-  resolvedEmail: string,
-): Promise<void> {
-  console.warn(`[StreamingEchoFilter] ${echoResult.reason}`);
-  logStore.updateEntry(logId, entry => {
-    entry.level = 'error';
-    entry.errors.push(`[Echo Detection] ${echoResult.reason} | Matched: "${(echoResult.matchedLine || '').substring(0, 120)}"`);
-  });
-
-  reader.cancel();
-  if (streamReader) streamReader.cancel();
-  qwenAbortController.abort();
-
-  const correction = `[ECHO DETECTED — PREVENT RECURRENCE] You repeated a tool result verbatim (${(echoResult.similarity * 100).toFixed(0)}% match). This is not allowed. Analyze the result internally, then respond to the user in your own words — never copy tool output directly into your response.`;
-  pendingCorrections.set('__echo_retry__', [
-    ...(pendingCorrections.get('__echo_retry__') || []),
-    correction,
-  ]);
-  pendingCorrections.set(resolvedEmail, [
-    ...(pendingCorrections.get(resolvedEmail) || []),
-    correction,
-  ]);
-
-  try { streamWriter.writer?.abort(new Error('connection lost')); } catch { /* ignore */ }
 }
 
 // ── Per-chunk stream processing ────────────────────────────────────
@@ -171,9 +132,8 @@ export interface StreamProcessingCtx {
   streamWriter: any;
   completionId: string;
   model: string;
-  toolParser: StreamingToolParser;
+  emittedToolCallCount: number;
   streamFilter: StreamingContentFilter;
-  streamingEchoFilter: StreamingEchoFilter;
   enableContentFiltering: boolean;
   cleanOutput: boolean;
   logId: string;
@@ -182,16 +142,17 @@ export interface StreamProcessingCtx {
   reader: ReadableStreamDefaultReader<Uint8Array>;
   streamReader: ReadableStreamDefaultReader<Uint8Array> | null;
   qwenAbortController: AbortController;
+  qwenLogFile?: string;
+  sseEventCount?: number;
 }
 
-export type ProcessStreamResult = 'continue' | 'break_stream' | 'abort_stream';
+export type ProcessStreamResult = 'continue' | 'break_stream';
 
 /**
  * Process a single parsed SSE data chunk from the stream.
  * Mutates `state` in place and returns a directive:
- *   - 'continue'     → normal processing, keep iterating
- *   - 'break_stream' → stream finished (break out of loops)
- *   - 'abort_stream' → echo detected (abort entire stream callback)
+ *   - 'continue'      → normal processing, keep iterating
+ *   - 'break_stream'  → stream finished (break out of loops)
  */
 export async function processStreamData(
   data: any,
@@ -199,12 +160,12 @@ export async function processStreamData(
   ctx: StreamProcessingCtx,
 ): Promise<ProcessStreamResult> {
   const {
-    streamWriter, completionId, model, toolParser, streamFilter,
-    streamingEchoFilter, enableContentFiltering, cleanOutput: _cleanOutput,
-    logId, resolvedEmail, ampState, reader, streamReader, qwenAbortController,
+    streamWriter, completionId, model, emittedToolCallCount, streamFilter,
+    enableContentFiltering, cleanOutput: _cleanOutput,
+    logId, resolvedEmail, ampState, reader: _reader, streamReader: _streamReader, qwenAbortController: _qwenAbortController,
   } = ctx;
 
-  if (data.choices?.[0]?.delta?.status === 'finished') {
+    if (data.choices?.[0]?.delta?.status === 'finished') {
     const deltaPhase = data.choices[0].delta.phase;
     if (deltaPhase !== 'thinking_summary') {
       // Extract and emit local MCP tool calls before breaking the stream
@@ -213,10 +174,16 @@ export async function processStreamData(
         for (let i = 0; i < localToolCalls.length; i++) {
           await writeToolCallEvent(streamWriter, completionId, model, localToolCalls[i], i);
         }
+        if (ctx.qwenLogFile && localToolCalls.length > 0) {
+          logQwenSSE(ctx.qwenLogFile, ctx.sseEventCount || 0, localToolCalls.length, localToolCalls);
+        }
       }
       return 'break_stream';
     }
   }
+
+  // Track SSE events for logging
+  ctx.sseEventCount = (ctx.sseEventCount || 0) + 1;
 
   if (data['response.created']?.response_id) {
     if (!state.targetResponseId) state.targetResponseId = data['response.created'].response_id;
@@ -252,7 +219,8 @@ export async function processStreamData(
   streamDebugLog(completionId, 'RAW_CHUNK', vStr);
   if (vStr.includes('"name"')) logDebug('QWEN RAW CHUNK (streaming)', vStr);
 
-  let feedStr = vStr;
+  // Compute incremental delta for text content tracking
+  let rawText = vStr;
   if (state.lastVStrRaw.length > 0) {
     const cumulativeDetection = detectCumulativeChunk(vStr, state.lastVStrRaw);
     streamDebugLog(completionId, 'CUMULATIVE_DETECT', {
@@ -262,10 +230,10 @@ export async function processStreamData(
       newLen: vStr.length,
     });
     if (cumulativeDetection.cumulative) {
-      feedStr = cumulativeDetection.delta;
+      rawText = cumulativeDetection.delta;
       state.lastVStrRaw = vStr;
     } else if (!cumulativeDetection.delta) {
-      feedStr = '';
+      rawText = '';
     } else {
       state.lastVStrRaw += vStr;
     }
@@ -273,14 +241,12 @@ export async function processStreamData(
     state.lastVStrRaw = vStr;
   }
 
-  const { text: rawText, toolCalls, thinking: parserThinking } = feedStr
-    ? toolParser.feed(feedStr)
-    : { text: '', toolCalls: [], thinking: '' };
-  streamDebugLog(completionId, 'PARSER_OUTPUT', {
-    feedLen: feedStr.length,
+  // Tool calls are extracted via SSE native extraction (extractLocalMcpToolCalls),
+  // not via XML parsing. Text content passes through directly.
+  const toolCalls: ParsedToolCall[] = [];
+  const parserThinking = '';
+  streamDebugLog(completionId, 'CONTENT_DELTA', {
     textLen: rawText.length,
-    toolCount: toolCalls.length,
-    toolNames: toolCalls.map(t => t.name),
   });
 
   if (rawText) {
@@ -311,46 +277,31 @@ export async function processStreamData(
   const filteredThinking = enableContentFiltering
     ? filterContent(state.lastFullContent).thinking
     : '';
-  const fullFilteredText = stripToolCallArtifacts(baseFilteredContent);
-
-  const echoResult = streamingEchoFilter.feed(fullFilteredText);
-  if (echoResult.echoDetected) {
-    await handleEchoDetection(echoResult, reader, streamReader, qwenAbortController, streamWriter, logId, resolvedEmail);
-    return 'abort_stream';
-  }
 
   if (state.deferredThinkingChunks.length > 0) {
     await writeDeferredThinking(streamWriter, completionId, model, state.deferredThinkingChunks);
     state.deferredThinkingChunks = [];
   }
-  const echoFilteredText = fullFilteredText || null;
 
       if (parserThinking) {
-        const echoCheck = streamingEchoFilter.checkLine(parserThinking);
-        if (!echoCheck.echoDetected) {
-          await writeReasoningEvent(streamWriter, completionId, model, parserThinking);
-        }
+        await writeReasoningEvent(streamWriter, completionId, model, parserThinking);
       }
       if (filteredThinking) {
         const thinkingDelta = getSnapshotDelta(filteredThinking, state.lastThinkingSnapshot);
         state.lastThinkingSnapshot = filteredThinking;
         if (thinkingDelta) {
-          const echoCheck = streamingEchoFilter.checkLine(thinkingDelta);
-          if (!echoCheck.echoDetected) {
-            await writeReasoningEvent(streamWriter, completionId, model, thinkingDelta);
-          }
+          await writeReasoningEvent(streamWriter, completionId, model, thinkingDelta);
         }
       }
 
-  const pendingText = (toolCalls.length > 0 && echoFilteredText) ? echoFilteredText : null;
-  const cleanedText = pendingText
-    ? cleanThinkTags(pendingText)
-    : (echoFilteredText ? cleanThinkTags(echoFilteredText) : null);
+  const cleanedText = baseFilteredContent
+    ? cleanThinkTags(baseFilteredContent)
+    : null;
 
   if (toolCalls.length > 0) {
-    const allToolCallsValid = await handleToolCalls(toolCalls, logId, streamWriter, completionId, model, toolParser);
-    if (pendingText && allToolCallsValid && cleanedText) {
-      const contentDelta = stripStreamingDelta(getSnapshotDelta(cleanedText, state.lastFilteredSnapshot));
+    const allToolCallsValid = await handleToolCalls(toolCalls, logId, streamWriter, completionId, model, emittedToolCallCount);
+    if (baseFilteredContent && allToolCallsValid && cleanedText) {
+      const contentDelta = getSnapshotDelta(cleanedText, state.lastFilteredSnapshot);
       state.lastFilteredSnapshot = cleanedText;
       if (contentDelta) {
         await writeContentDelta(streamWriter, completionId, model, contentDelta, ampState, logId, resolvedEmail, state.lastRawContent, state.lastVStrRaw, logStore);
@@ -358,7 +309,7 @@ export async function processStreamData(
     }
   } else if (cleanedText) {
     // Text-only content (no tool calls): write content delta to SSE + logStore
-    const contentDelta = stripStreamingDelta(getSnapshotDelta(cleanedText, state.lastFilteredSnapshot));
+    const contentDelta = getSnapshotDelta(cleanedText, state.lastFilteredSnapshot);
     state.lastFilteredSnapshot = cleanedText;
     if (contentDelta) {
       await writeContentDelta(streamWriter, completionId, model, contentDelta, ampState, logId, resolvedEmail, state.lastRawContent, state.lastVStrRaw, logStore);

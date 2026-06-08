@@ -53,7 +53,7 @@ export function buildQwenMessages(
   const toolResultContents: string[] = [];
   const timestamp = Math.floor(Date.now() / 1000);
   const model = (body.model || "").replace("-no-thinking", "");
-  const resolvedClientName = clientName || "gateway";
+  const resolvedClientName = clientName || "qwengate";
 
   const segments: string[] = [];
   let accumulatedSystemContent = "";
@@ -336,7 +336,7 @@ export async function createQwenStreamWithRetry(
   nextParentId: string | null,
   resolvedEmail: string,
   tools?: unknown[],
-): Promise<{ stream: ReadableStream; abortController: AbortController }> {
+): Promise<{ stream: ReadableStream; abortController: AbortController; qwenLogFile?: string }> {
   try {
     const result = await createQwenStream(
       qwenMessages,
@@ -348,7 +348,7 @@ export async function createQwenStreamWithRetry(
       tools,
     );
     modelRouter.recordSuccess(routedModel);
-    return { stream: result.stream, abortController: result.abortController };
+    return { stream: result.stream, abortController: result.abortController, qwenLogFile: result.qwenLogFile };
   } catch (err: any) {
     modelRouter.recordError(routedModel);
     sessionPool.release(chatId, nextParentId, undefined, resolvedEmail);

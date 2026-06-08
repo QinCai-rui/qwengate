@@ -14,7 +14,7 @@ import {
   hasInFlight,
   reloadAccounts,
   clearAuth,
-} from './auth';
+} from './auth.js';
 
 const TEST_COOKIE_DIR = 'qwen_profile/cookies';
 
@@ -98,9 +98,9 @@ describe('hot-reload: reloadAccounts()', () => {
     // Reload should preserve inFlight count
     await reloadAccounts();
     const stats = getAccountStats();
-    const acct = stats.find(a => a.email === 'inflight@test.com');
+    const acct = stats.find((a: { email: string }) => a.email === 'inflight@test.com');
     assert.ok(acct, 'account should still exist after reload');
-    assert.strictEqual(acct.inFlight, 2, 'inFlight count must be preserved across reload');
+    assert.strictEqual((acct as any).inFlight, 2, 'inFlight count must be preserved across reload');
 
     // Cleanup
     decrementInFlight('inflight@test.com');
@@ -119,16 +119,16 @@ describe('hot-reload: reloadAccounts()', () => {
     // Reload should preserve totalRequests
     await reloadAccounts();
     const stats = getAccountStats();
-    const acct = stats.find(a => a.email === 'counter@test.com');
+    const acct = stats.find((a: { email: string }) => a.email === 'counter@test.com');
     assert.ok(acct, 'account should still exist after reload');
-    assert.strictEqual(acct.totalRequests, 3, 'totalRequests must be preserved across reload');
+    assert.strictEqual((acct as any).totalRequests, 3, 'totalRequests must be preserved across reload');
   });
 
   test('removing account file removes account from rotation', async () => {
     writeTestAccount('removable@test.com');
     await reloadAccounts();
     let stats = getAccountStats();
-    assert.ok(stats.some(a => a.email === 'removable@test.com'), 'account should exist');
+    assert.ok(stats.some((a: { email: string }) => a.email === 'removable@test.com'), 'account should exist');
 
     // Remove the file
     const hash = hashEmail('removable@test.com');
@@ -136,6 +136,6 @@ describe('hot-reload: reloadAccounts()', () => {
     await reloadAccounts();
 
     stats = getAccountStats();
-    assert.ok(!stats.some(a => a.email === 'removable@test.com'), 'account should be removed after file deletion');
+    assert.ok(!stats.some((a: { email: string }) => a.email === 'removable@test.com'), 'account should be removed after file deletion');
   });
 });

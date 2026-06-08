@@ -1,12 +1,9 @@
 import { Context } from 'hono';
 import { stream as honoStream } from 'hono/streaming';
 import type { OpenAIRequest, Message } from '../utils/types.ts';
-import { StreamingToolParser } from '../tools/parser.ts';
 import { StreamingContentFilter } from './pipeline/StreamingContentFilter.ts';
-import { StreamingEchoFilter } from './pipeline/StreamingEchoFilter.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { type AmplificationGuardState } from './chatHelpers.ts';
-import { config } from '../services/configService.ts';
 import {
   writeEvent,
   makeChoice,
@@ -39,6 +36,7 @@ export interface StreamingContext {
   toolCalling: boolean;
   cleanOutput: boolean;
   toolResultContents: string[];
+  qwenLogFile?: string;
 }
 
 function buildPromptString(messages: Message[]): string {
@@ -51,7 +49,7 @@ function buildPromptString(messages: Message[]): string {
 }
 
 export async function handleStreamingRequest(ctx: StreamingContext): Promise<Response> {
-  const { c, logId, completionId, body, session, stream, qwenAbortController, resolvedEmail, sessionHeaders, toolCalling, cleanOutput, toolResultContents } = ctx;
+  const { c, logId, completionId, body, session, stream, qwenAbortController, resolvedEmail, sessionHeaders, toolCalling: _toolCalling, cleanOutput, toolResultContents: _toolResultContents } = ctx;
 
   const finalPrompt = buildPromptString(body.messages);
 
@@ -74,17 +72,14 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       const decoder = new TextDecoder();
       const enableContentFiltering = cleanOutput;
       const streamFilter = new StreamingContentFilter(enableContentFiltering);
-      const echoDetectorEnabled = config.get('ECHO_DETECTOR', 'true') !== 'false';
-      const streamingEchoFilter = new StreamingEchoFilter(echoDetectorEnabled ? toolResultContents : []);
-      const toolParser = new StreamingToolParser();
-      if (!toolCalling) toolParser.passThrough = true;
-
       const streamState = buildInitialStreamState(finalPrompt, ctx.initialParentId);
 
       const streamCtx: StreamProcessingCtx = {
-        streamWriter, completionId, model: body.model, toolParser,
-        streamFilter, streamingEchoFilter, enableContentFiltering, cleanOutput,
+        streamWriter, completionId, model: body.model,
+        streamFilter, enableContentFiltering, cleanOutput,
         logId, resolvedEmail, ampState, reader, streamReader, qwenAbortController,
+        qwenLogFile: ctx.qwenLogFile,
+        emittedToolCallCount: 0,
       };
 
       const bufferRef = { text: '' };
@@ -102,7 +97,7 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       await handlePostStreamCompletion(
         {
           streamWriter, completionId, model: body.model, streamState, ampState,
-          logId, resolvedEmail, streamingEchoFilter, toolParser, streamFilter,
+          logId, resolvedEmail, emittedToolCallCount: streamCtx.emittedToolCallCount, streamFilter,
           buffer: loopResult.buffer, enableContentFiltering,
           includeUsage: !!body.stream_options?.include_usage,
         },

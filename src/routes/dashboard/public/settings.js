@@ -21,12 +21,6 @@ var SETTINGS_SECTIONS = [
     ]},
     { key: 'MAX_TOOL_CALLS_PER_RESPONSE', label: 'MAX_TOOL_CALLS_PER_RESPONSE', type: 'number' },
   ]},
-  { title: 'Echo Detector', desc: 'Prevent tool-call and prompt echo leaks in output.', fields: [
-    { key: 'ECHO_DETECTOR', label: 'ECHO_DETECTOR', type: 'checkbox' },
-    { key: 'ECHO_JACCARD_THRESHOLD', label: 'ECHO_JACCARD_THRESHOLD', type: 'number', step: '0.1' },
-    { key: 'ECHO_MIN_LINE_LENGTH', label: 'ECHO_MIN_LINE_LENGTH', type: 'number' },
-    { key: 'ECHO_MIN_UNIQUE_SHINGLES', label: 'ECHO_MIN_UNIQUE_SHINGLES', type: 'number' }
-  ]},
   { title: 'Session & Auth', desc: 'Token lifetimes, refresh windows, and session cleanup.', fields: [
     { key: 'QWEN_FETCH_TIMEOUT_MS', label: 'QWEN_FETCH_TIMEOUT_MS', type: 'number' },
     { key: 'AUTH_TOKEN_MAX_AGE_MS', label: 'AUTH_TOKEN_MAX_AGE_MS', type: 'number' },

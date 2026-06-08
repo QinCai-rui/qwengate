@@ -104,7 +104,7 @@ export function detectToolCallLoop(
   maxRepeats = 4,
 ): GuardResult {
   const recentSerialized = recentHistory.map(h => `${h.name}::${serializeArgs(h.args)}`);
-  const currentSerialized = `${toolCall.name}::${serializeArgs(toolCall.arguments)}`;
+  const currentSerialized = `${toolCall.name}::${serializeArgs(toolCall.arguments as Record<string, unknown>)}`;
 
   let repeatCount = 0;
   for (const entry of recentSerialized) {
@@ -136,7 +136,7 @@ export function detectParallelToolLoop(toolCalls: ParsedToolCall[]): GuardResult
 
   const seen = new Map<string, number[]>();
   for (let i = 0; i < toolCalls.length; i++) {
-    const key = `${toolCalls[i].name}::${serializeArgs(toolCalls[i].arguments)}`;
+    const key = `${toolCalls[i].name}::${serializeArgs(toolCalls[i].arguments as Record<string, unknown>)}`;
     const indices = seen.get(key) || [];
     indices.push(i);
     seen.set(key, indices);

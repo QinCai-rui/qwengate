@@ -16,7 +16,7 @@
  *     // emit any remaining content
  */
 
-import { filterContent, stripToolCallArtifacts } from "../../utils/contentFilter.ts";
+import { filterContent } from "../../utils/contentFilter.ts";
 
 export interface StreamFilterResult {
   /** New clean content delta since last feed() call */
@@ -64,7 +64,7 @@ export class StreamingContentFilter {
     // 2. We use snapshot deltas so the caller only emits genuinely new content
     // 3. In practice, the hot loop is dominated by network I/O, not filtering
     const result = filterContent(fullText);
-    const cleanText = stripToolCallArtifacts(result.cleanText);
+    const cleanText = result.cleanText;
     const thinking = result.thinking;
 
     // Update high-water mark: the full text length we've now processed

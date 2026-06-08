@@ -34,11 +34,15 @@ function streamThenParse(
   let allText = '';
   for (const chunk of streamChunks(text)) {
     const r = p.feed(chunk);
-    allToolCalls.push(...r.toolCalls);
+    for (const tc of r.toolCalls) {
+      allToolCalls.push(tc as { name: string; arguments: Record<string, unknown> });
+    }
     allText += r.text;
   }
   const flush = p.flush();
-  allToolCalls.push(...flush.toolCalls);
+  for (const tc of flush.toolCalls) {
+    allToolCalls.push(tc as { name: string; arguments: Record<string, unknown> });
+  }
   allText += flush.text;
   return { toolCalls: allToolCalls, text: allText };
 }
@@ -72,7 +76,7 @@ test('JSON parser: streaming split', () => {
   const r3 = p.flush();
   const all = [...r1.toolCalls, ...r2.toolCalls, ...r3.toolCalls];
   assert.strictEqual(all.length, 1);
-  assert.strictEqual(all[0].arguments.path, 'x.txt');
+  assert.strictEqual((all[0].arguments as Record<string, unknown>).path, 'x.txt');
 });
 
 test('JSON parser: text before and after', () => {

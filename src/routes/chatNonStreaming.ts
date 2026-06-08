@@ -1,9 +1,7 @@
 import { Context } from 'hono';
 import type { OpenAIRequest, Message } from '../utils/types.ts';
-import { StreamingToolParser } from '../tools/parser.ts';
 import { detectParallelToolLoop } from '../tools/guard.ts';
-import { filterContent, stripToolCallArtifacts } from '../utils/contentFilter.ts';
-import { ToolResultEchoFilter } from './pipeline/ToolResultEchoFilter.ts';
+import { filterContent } from '../utils/contentFilter.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { logStore } from '../services/logStore.ts';
 import {
@@ -41,7 +39,6 @@ interface StreamProcessorState {
   reasoningBuffer: string;
   lastFullContent: string;
   targetResponseId: string | null;
-  toolParser: StreamingToolParser;
   toolCallsOut: any[];
   correctionPrompts: string[];
   toolSpamGuard: ToolSpamGuard;
@@ -62,8 +59,6 @@ function buildPromptString(messages: Message[]): string {
 
 function buildQwenRequest(ctx: NonStreamingContext): StreamProcessorState {
   const reader = ctx.stream.getReader();
-  const toolParser = new StreamingToolParser();
-  if (!ctx.toolCalling) toolParser.passThrough = true;
   const finalPrompt = buildPromptString(ctx.body.messages);
   return {
     reader,
@@ -72,7 +67,6 @@ function buildQwenRequest(ctx: NonStreamingContext): StreamProcessorState {
     reasoningBuffer: '',
     lastFullContent: '',
     targetResponseId: null,
-    toolParser,
     toolCallsOut: [],
     correctionPrompts: [],
     toolSpamGuard: new ToolSpamGuard(),
@@ -108,15 +102,16 @@ function processAnswerDelta(delta: any, state: StreamProcessorState, ctx: NonStr
     logDebug('QWEN RAW CHUNK (non-streaming)', vStr);
   }
 
-  const { toolCalls, thinking, text: parserText } = state.toolParser.feed(vStr);
-  if (thinking) state.reasoningBuffer += thinking;
+  // Text passes through directly — tool calls come from SSE extraction, not XML parsing
+  const textContent = vStr;
+  const toolCalls: ParsedToolCall[] = [];
 
-  if (parserText) {
+  if (textContent) {
     if (state.lastFullContent.length > 0) {
-      const detection = detectCumulativeChunk(parserText, state.lastFullContent);
-      state.lastFullContent = detection.cumulative ? parserText : state.lastFullContent + parserText;
+      const detection = detectCumulativeChunk(textContent, state.lastFullContent);
+      state.lastFullContent = detection.cumulative ? textContent : state.lastFullContent + textContent;
     } else {
-      state.lastFullContent = parserText;
+      state.lastFullContent = textContent;
     }
   }
 
@@ -169,9 +164,9 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
 }
 
 function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
-  const { text, toolCalls, thinking } = state.toolParser.flush();
-  if (text) state.lastFullContent += text;
-  if (thinking) state.reasoningBuffer += thinking;
+  // No parser to flush — content is already accumulated in processAnswerDelta/processThinkingDelta.
+  // Tool calls come from SSE extraction, not parser flush.
+  const toolCalls: ParsedToolCall[] = [];
 
   processToolCallsThroughGuard(toolCalls, state.toolCallsOut, {
     logId,
@@ -199,7 +194,7 @@ function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
 }
 
 function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingContext): Response {
-  const { c, logId, completionId, body, session, cleanOutput, toolResultContents } = ctx;
+  const { c, logId, completionId, body, session, cleanOutput, toolResultContents: _toolResultContents } = ctx;
 
   const reasoningTokensEstimate = state.reasoningBuffer ? Math.ceil(state.reasoningBuffer.length / 4) : 0;
   const usage = {
@@ -219,17 +214,9 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
       : filteredReasoning;
   }
 
-  const toolEchoFilter = new ToolResultEchoFilter(toolResultContents);
-  const echoFiltered = toolEchoFilter.filterText(baseFilteredContent);
-  const echoRatio = toolEchoFilter.getEchoRatio(baseFilteredContent);
-  if (echoRatio > 0.3 && baseFilteredContent.length > 0) {
-    const echoWarning = `[ECHO WARNING] ${Math.round(echoRatio * 100)}% of output was tool result echoes — suppressing. Review system prompt anti-echo directives.`;
-    console.warn(`  [${echoWarning}]`);
-    logStore.addError(logId, echoWarning);
-    state.correctionPrompts.push(echoWarning);
-  }
 
-  const filteredContent = stripToolCallArtifacts(echoFiltered);
+
+  const filteredContent = baseFilteredContent;
 
   const message: any = { role: 'assistant', content: state.toolCallsOut.length ? null : filteredContent };
   if (state.reasoningBuffer) message.reasoning_content = state.reasoningBuffer;

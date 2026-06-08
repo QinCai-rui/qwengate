@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ParsedToolCall } from '../types/openai.ts';
 import type { QwenPayload } from './qwen.ts';
 
 const LOG_DIR = join(process.cwd(), 'logs', 'qwen');
@@ -12,7 +13,7 @@ function ensureDir(): void {
 
 export function logQwenRequest(
   payload: QwenPayload,
-  url: string,
+  _url: string,
 ): string {
   ensureDir();
   const timestamp = Date.now();
@@ -47,17 +48,17 @@ export function logQwenResponse(
 }
 
 export function logQwenSSE(
-  requestFile: string,
+  logFile: string | undefined,
   sseEvents: number,
   toolCallEvents: number,
-  firstToolCallSample: any,
+  toolCalls: ParsedToolCall[],
 ): void {
-  if (!existsSync(requestFile)) return;
-  const sseFile = requestFile.replace('_request.json', '_sse.json');
+  if (!logFile) return;
+  const sseFile = logFile.replace(/\.json$/, '_sse.json');
   const entry = {
     totalEvents: sseEvents,
     toolCallEvents,
-    firstToolCallSample: firstToolCallSample || null,
+    toolCalls,
     timestamp: Date.now(),
   };
   writeFileSync(sseFile, JSON.stringify(entry, null, 2));

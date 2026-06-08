@@ -58,14 +58,10 @@ async function accountsReloadHandler(c: any) {
   const auth = checkApiKeyAuth(c);
   if (auth) return auth;
 
-  const { getQwenHeaders } =
-    (await import("../../services/playwright.ts")) as typeof import("../../services/playwright.ts");
   try {
     await initAuth(async (email) => {
-      const { headers } = (await getQwenHeaders!(email))!;
-      const headersArr = Object.entries(headers).map(([k, v]) => `${k}: ${v}`);
       logStore.log("info", "account", `Reloading ${email}`);
-      await configureAccount(email, headersArr, "");
+      await configureAccount(email);
     });
     logStore.log("info", "auth", "Accounts reloaded");
     return c.json({ ok: true });
@@ -186,6 +182,49 @@ function logStreamHandler(c: any) {
   );
 }
 
+function logJsonHandler(c: any) {
+  const entries = logStore.getRecent(50);
+  const serialized = entries.map((e) => {
+    const dt = new Date(e.timestamp);
+    const datePart = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+    const timePart = `${String(dt.getHours()).padStart(2, "0")}-${String(dt.getMinutes()).padStart(2, "0")}-${String(dt.getSeconds()).padStart(2, "0")}`;
+    return {
+      id: e.id,
+      date: datePart,
+      time: timePart,
+      timestamp: e.timestamp,
+      stream: e.stream,
+      accountEmail: e.accountEmail,
+      latency_ms: e.latency_ms,
+      tokens: e.tokens,
+      request_id: e.request_id,
+      errors: e.errors?.length > 0 ? e.errors : undefined,
+      model: e.model,
+      turnId: e.turnId || "",
+      raw_output: e.rawFullContent || "",
+      processed_output: {
+        content: e.processedApiOutput || "",
+        tool_calls: (e.parsedToolCalls || []).map((tc) => {
+          let args: unknown = tc.args;
+          try { args = JSON.parse(tc.args); } catch { /* keep as string */ }
+          return { name: tc.name, arguments: args };
+        }),
+      },
+      chunks: (e.qwenRawChunks || []) as string[],
+      finalResponse: e.finalResponse || undefined,
+      remainingText: e.remainingText || undefined,
+      promptToQwen: e.promptToQwen || undefined,
+      rawRequestBody: e.rawRequestBody || undefined,
+      networkTiming: e.networkTiming || undefined,
+      amplificationRatio: e.amplificationRatio,
+      amplificationTriggeredInput: e.amplificationTriggeredInput || undefined,
+      input: e.input || undefined,
+      client_request: e.clientRequest || {},
+    };
+  });
+  return c.json(serialized);
+}
+
 export function registerDashboardRoutes(app: Hono): void {
   app.get("/dashboard", serveHtml(overviewHtml));
   app.get("/dashboard/logs", serveHtml(logsHtml));
@@ -207,48 +246,7 @@ export function registerDashboardRoutes(app: Hono): void {
   app.get("/metrics/model-health", modelHealthHandler);
 
   app.get("/log", (c) => c.redirect("/dashboard/logs"));
-  app.get("/log/json", (c) => {
-    const entries = logStore.getRecent(50);
-    const serialized = entries.map((e) => {
-      const dt = new Date(e.timestamp);
-      const datePart = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-      const timePart = `${String(dt.getHours()).padStart(2, "0")}-${String(dt.getMinutes()).padStart(2, "0")}-${String(dt.getSeconds()).padStart(2, "0")}`;
-      return {
-        id: e.id,
-        date: datePart,
-        time: timePart,
-        timestamp: e.timestamp,
-        stream: e.stream,
-        accountEmail: e.accountEmail,
-        latency_ms: e.latency_ms,
-        tokens: e.tokens,
-        request_id: e.request_id,
-        errors: e.errors?.length > 0 ? e.errors : undefined,
-        model: e.model,
-        turnId: e.turnId || "",
-        raw_output: e.rawFullContent || "",
-        processed_output: {
-          content: e.processedApiOutput || "",
-          tool_calls: (e.parsedToolCalls || []).map((tc) => {
-            let args: unknown = tc.args;
-            try { args = JSON.parse(tc.args); } catch { /* keep as string */ }
-            return { name: tc.name, arguments: args };
-          }),
-        },
-        chunks: (e.qwenRawChunks || []) as string[],
-        finalResponse: e.finalResponse || undefined,
-        remainingText: e.remainingText || undefined,
-        promptToQwen: e.promptToQwen || undefined,
-        rawRequestBody: e.rawRequestBody || undefined,
-        networkTiming: e.networkTiming || undefined,
-        amplificationRatio: e.amplificationRatio,
-        amplificationTriggeredInput: e.amplificationTriggeredInput || undefined,
-        input: e.input || undefined,
-        client_request: e.clientRequest || {},
-      };
-    });
-    return c.json(serialized);
-  });
+  app.get("/log/json", logJsonHandler);
   app.get("/log/stream", logStreamHandler);
   app.get("/metrics/uptime", (c) => c.json({ uptimeSeconds: logStore.getUptimeSeconds() }));
 
@@ -276,7 +274,7 @@ export function registerDashboardRoutes(app: Hono): void {
       let changed = false;
       for (const key of Object.keys(body)) {
         if (typeof body[key] === "string" && isValidKey(key)) {
-          config.set(key as any, body[key]);
+          config.set(key, body[key]);
           changed = true;
         }
       }

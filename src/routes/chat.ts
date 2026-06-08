@@ -139,6 +139,20 @@ async function setupSession(
   };
 }
 
+function populateLogEntry(logEntry: any, body: OpenAIRequest, messages: any[]): void {
+  const rawContent = messages.length > 0 ? messages[messages.length - 1].content : '';
+  const lastMsg = typeof rawContent === 'string' ? rawContent : (rawContent !== undefined ? JSON.stringify(rawContent) : '');
+  logEntry.clientRequest = {
+    messageCount: messages.length,
+    roles: messages.map((m) => m.role),
+    hasTools: !!body.tools?.length,
+    toolNames: body.tools?.map((t: any) => t.function?.name || t.name) || [],
+    tool_choice: body.tool_choice ? (typeof body.tool_choice === "string" ? body.tool_choice : JSON.stringify(body.tool_choice)) : null,
+    lastMessage: lastMsg.substring(0, 300),
+    messages: messages.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
+  };
+}
+
 export async function chatCompletions(c: Context) {
   const logId = uuidv4();
   try {
@@ -147,19 +161,7 @@ export async function chatCompletions(c: Context) {
       parsed;
     logStore.createEntry(logId, body.model, isStream);
     const logEntry = logStore.getEntry(logId);
-    if (logEntry) {
-      const rawContent = messages.length > 0 ? messages[messages.length - 1].content : '';
-      const lastMsg = typeof rawContent === 'string' ? rawContent : (rawContent !== undefined ? JSON.stringify(rawContent) : '');
-      logEntry.clientRequest = {
-        messageCount: messages.length,
-        roles: messages.map((m) => m.role),
-        hasTools: !!body.tools?.length,
-        toolNames: body.tools?.map((t: any) => t.function?.name || t.name) || [],
-        tool_choice: body.tool_choice ? (typeof body.tool_choice === "string" ? body.tool_choice : JSON.stringify(body.tool_choice)) : null,
-        lastMessage: lastMsg.substring(0, 300),
-        messages: messages.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
-      };
-    }
+    if (logEntry) populateLogEntry(logEntry, body, messages);
 
     if (!contextCheck.ok) {
       logStore.updateEntry(logId, entry => { entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' }; entry.finalResponse.finishReason = 'context_window_exceeded'; });
@@ -177,7 +179,7 @@ export async function chatCompletions(c: Context) {
       );
     }
 
-    const { toolResultContents, sessionMessages, session, nextParentId, sessionHeaders, resolvedEmail, stream, qwenAbortController } =
+    const { toolResultContents, sessionMessages: _sessionMessages, session, nextParentId, sessionHeaders, resolvedEmail, stream, qwenAbortController } =
       await setupSession(
         messages,
         body,

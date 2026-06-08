@@ -48,13 +48,6 @@ const CONTAINER_CONFUSION_PATTERNS = [
   /không chứa.*cấu trúc thư mục/i,
 ];
 
-const FAILURE_ECHO_PATTERNS = [
-  /Tool \w+ does not (?:exist|exists)/i,
-  /Something went wrong/i,
-  /The user denied this operation/i,
-  /^Tool \w+ is not (?:accessible|available)/i,
-];
-
 export function stripThinkingBlocks(text: string): string {
   return text.replace(THINKING_PATTERN, '').trim();
 }
@@ -65,10 +58,6 @@ export function isAutomatedError(text: string): boolean {
 
 export function isContainerConfusion(text: string): boolean {
   return CONTAINER_CONFUSION_PATTERNS.some(p => p.test(text));
-}
-
-export function isAssistantFailureEcho(text: string): boolean {
-  return FAILURE_ECHO_PATTERNS.some(p => p.test(text));
 }
 
 export function isRetryReminder(text: string): boolean {
@@ -127,7 +116,6 @@ export function sanitizeConversation(
     stripClientProtocol?: boolean;
     stripAssistantThinking?: boolean;
     stripContainerConfusion?: boolean;
-    stripFailureEcho?: boolean;
     maxUserMessages?: number;
   }
 ): SanitizedContextResult {
@@ -137,7 +125,6 @@ export function sanitizeConversation(
     stripClientProtocol: options?.stripClientProtocol ?? true,
     stripAssistantThinking: options?.stripAssistantThinking ?? false,
     stripContainerConfusion: options?.stripContainerConfusion ?? true,
-    stripFailureEcho: options?.stripFailureEcho ?? true,
     maxUserMessages: options?.maxUserMessages ?? 50,
   };
 
@@ -198,11 +185,6 @@ export function sanitizeConversation(
     if (msg.role === 'assistant') {
       if (!text.trim()) {
         ignored.push({ messageIndex: i, reason: 'empty assistant message' });
-        continue;
-      }
-
-      if (opts.stripFailureEcho && isAssistantFailureEcho(cleanedText)) {
-        ignored.push({ messageIndex: i, reason: 'assistant tool failure echo' });
         continue;
       }
 
