@@ -176,10 +176,10 @@ export function buildQwenMessages(
 
   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
     const localMcp: Record<string, any> = {};
-    localMcp[""] = {};
+    localMcp["★"] = {};
     for (const t of body.tools) {
       const fn = t.function || {};
-      localMcp[""][fn.name] = {
+      localMcp["★"][fn.name] = {
         description: fn.description || "",
         input_schema: fn.parameters || { type: "object", properties: {} },
       };

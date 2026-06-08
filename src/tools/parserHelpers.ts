@@ -48,9 +48,11 @@ export function tryExtractToolCall(remaining: string): ExtractResult {
     let args = parsed.arguments;
     if (typeof args === 'string') { try { args = JSON.parse(args); } catch { args = {}; } }
     if (typeof args !== 'object' || Array.isArray(args)) args = {};
+    const rawName = parsed.name || '';
+    const name = rawName.startsWith("★-") ? rawName.slice(2) : rawName;
     const toolCall: ParsedToolCall = {
       id: 'call_' + crypto.randomUUID(),
-      name: parsed.name || '',
+      name,
       arguments: args || (() => { const { name: _name, ...rest } = parsed; return rest; })(),
     };
     return { textContent, toolCall, remaining: after.substring(jsonEnd), shouldBreak: false };

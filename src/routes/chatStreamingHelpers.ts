@@ -85,7 +85,7 @@ export async function handleToolCalls(
  * ```json
  * {"choices": [{"delta": {"role": "assistant", "content": "", "phase": "local_tool",
  *   "status": "finished",
- *   "extra": {"local_mcp": {"": [{"tool_name": "bash", "params": {"command": "ls -la /tmp"}}]}}}}]}
+ *   "extra": {"local_mcp": {"★": [{"tool_name": "★-bash", "params": {"command": "ls -la /tmp"}}]}}}}]}
  * ```
  *
  * @param sseData - Parsed SSE data chunk
@@ -97,15 +97,17 @@ export function extractLocalMcpToolCalls(
   const localMcp = sseData?.choices?.[0]?.delta?.extra?.local_mcp;
   if (!localMcp) return [];
 
-  const serverTools = localMcp[""];
+  const serverTools = localMcp["★"];
   if (!Array.isArray(serverTools)) return [];
 
   const toolCalls: ParsedToolCall[] = [];
   for (const tool of serverTools) {
     if (tool?.tool_name && tool?.params !== undefined) {
+      const rawName = tool.tool_name;
+      const name = rawName.startsWith("★-") ? rawName.slice(2) : rawName;
       toolCalls.push({
         id: `call_${crypto.randomUUID()}`,
-        name: tool.tool_name,
+        name,
         arguments: tool.params,
       });
     }

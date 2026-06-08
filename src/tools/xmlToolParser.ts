@@ -78,9 +78,11 @@ export function xmlToolCallToParsed(block: ParsedXmlToolCall, _index: number): {
   for (const [key, value] of Object.entries(block.parameters)) {
     try { args[key] = JSON.parse(value); } catch { args[key] = value; }
   }
+  const rawName = block.name;
+  const name = rawName.startsWith("★-") ? rawName.slice(2) : rawName;
   return {
     id: `call_${crypto.randomUUID()}`,
-    name: block.name,
+    name,
     arguments: args,
   };
 }
