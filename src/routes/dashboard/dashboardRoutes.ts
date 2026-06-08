@@ -23,11 +23,11 @@ import { logsHtml } from "./logs.ts";
 import { accountsHtml } from "./accounts.ts";
 import { networkHtml } from "./network.ts";
 import { settingsHtml } from "./settings.ts";
+import { APP_VERSION } from "../../utils/version.ts";
 
 const serveHtml = (html: string) => (c: any) => {
   const apiKey = config.get("API_KEY");
-  const appVersion = "0.3.2";
-  const scriptInjection = `<script>\nwindow.APP_VERSION = '${appVersion}';\n${apiKey ? `window.API_KEY = '${apiKey.replace(/'/g, "\\'")}';\n` : ""}`;
+  const scriptInjection = `<script>\nwindow.APP_VERSION = '${APP_VERSION}';\n${apiKey ? `window.API_KEY = '${apiKey.replace(/'/g, "\\'")}';\n` : ""}`;
   const output = html.replace("<script>", scriptInjection);
   return c.html(output);
 };
