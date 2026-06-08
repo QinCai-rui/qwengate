@@ -4,7 +4,8 @@ export interface ParsedXmlToolCall {
 }
 
 function functionNameFromTag(tag: string): string | null {
-  const m = tag.match(/^<function=(\w+)>/);
+  // Match function name from <function=NAME...> — NAME can be any non-whitespace, non-> chars
+  const m = tag.match(/^<function=([^\s>]+)>/);
   return m ? m[1] : null;
 }
 
@@ -13,7 +14,7 @@ export function parseXmlToolCalls(text: string): { toolCalls: ParsedXmlToolCall[
   const unique = new Set<string>();
   let cleanedText = text;
 
-  const re = /<function=\w+>[\s\S]*?<\/function>/g;
+  const re = /<function=\w+[\s\S]*?>[\s\S]*?<\/function>/g;
   const sections: string[] = [];
   let lastIdx = 0;
   let match: RegExpExecArray | null;
@@ -47,12 +48,21 @@ export function parseXmlToolCalls(text: string): { toolCalls: ParsedXmlToolCall[
 
 function stripRemainingXmlMarkup(text: string): string {
   return text
-    .replace(/<function=\w+>[\s\S]*?(?=<function=\w+>|$)/g, '')
+    // Strip complete or partial <function=...> blocks (including malformed/incomplete tags)
+    .replace(/<function=[^\s>][^>]*>[\s\S]*?(?:<\/function>|<function=|$)/g, '')
+    // Strip bare <function=...> tags without content (with or without closing >)
+    .replace(/<function=[^>]*(?:>|(?=\n|$))/g, '')
+    // Strip bare <function (without =) when split across chunks
+    .replace(/<function(?=[\s<]|$)/g, '')
+    // Strip </function> tags
     .replace(/<\/?function>/g, '')
-    .replace(/<parameter=\w+>[\s\S]*?<\/parameter>/g, '')
+    // Strip complete <parameter=...> blocks
+    .replace(/<parameter=[^\s>][^>]*>[\s\S]*?<\/parameter>/g, '')
+    // Strip bare <parameter=...> tags
+    .replace(/<parameter=[^>]*(?:>|(?=\n|$))/g, '')
+    // Strip </parameter> tags
     .replace(/<\/?parameter>/g, '')
-    .replace(/<parameter=\w+>/g, '')
-    .replace(/<function=\w+>/g, '')
+    // Clear excessive newlines
     .replace(/\n{4,}/g, '\n\n\n')
     .trim();
 }

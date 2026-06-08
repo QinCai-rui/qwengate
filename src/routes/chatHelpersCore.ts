@@ -107,6 +107,10 @@ const TOOL_RESULT_TAG_PATTERN = /<\/tool(?:_result)?/gi;
 export function cleanThinkTags(t: string): string {
   let s = t.replace(THINK_TAG_PATTERN, "");
   s = s.replace(TOOL_RESULT_TAG_PATTERN, "");
+  // Strip any remaining <function=...> or </function> markup that may have
+  // leaked from partial/incomplete tool call XML in Qwen's output
+  s = s.replace(/<function=[^>]*(?:>|(?=\n|$))/g, '');
+  s = s.replace(/<\/?function>/g, '');
   return s;
 }
 

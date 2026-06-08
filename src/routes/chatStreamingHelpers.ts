@@ -165,8 +165,7 @@ export async function processStreamData(
   ctx: StreamProcessingCtx,
 ): Promise<ProcessStreamResult> {
   const {
-    streamWriter, completionId, model, emittedToolCallCount: _emittedToolCallCount,
-    enableContentFiltering, cleanOutput: _cleanOutput,
+    streamWriter, completionId, model, enableContentFiltering,
     logId, resolvedEmail, ampState, reader: _reader, streamReader: _streamReader, qwenAbortController: _qwenAbortController,
   } = ctx;
 

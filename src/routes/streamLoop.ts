@@ -7,6 +7,7 @@ import {
 } from './chatHelpers.ts';
 import { logStore } from '../services/logStore.ts';
 import { filterContent } from '../utils/contentFilter.ts';
+import { parseXmlToolCalls } from '../tools/xmlToolParser.ts';
 import {
   writeEvent,
   writeReasoningEvent,
@@ -125,6 +126,12 @@ export async function handlePostStreamCompletion(
     return;
   }
 
+  // Count tool calls from the final assembled content
+  const finalToolCalls = streamState.lastFullContent
+    ? parseXmlToolCalls(streamState.lastFullContent).toolCalls.length
+    : 0;
+  const effectiveToolCallCount = Math.max(emittedToolCallCount, finalToolCalls);
+
   const { cleanText: flushBase, thinking: flushThinking } = (enableContentFiltering && streamState.lastFullContent)
     ? filterContent(streamState.lastFullContent)
     : { cleanText: streamState.lastFullContent || '', thinking: '' };
@@ -156,7 +163,7 @@ export async function handlePostStreamCompletion(
 
 
   const usage = buildUsage(streamState.promptTokens, streamState.completionTokens, streamState.reasoningBuffer);
-  const finalFinishReason = emittedToolCallCount > 0 ? 'tool_calls' : 'stop';
+  const finalFinishReason = effectiveToolCallCount > 0 ? 'tool_calls' : 'stop';
 
   await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({}, finalFinishReason)],
     includeUsage ? undefined : { usage },
@@ -176,7 +183,7 @@ export async function handlePostStreamCompletion(
     if (streamState.lastFullContent) entry.remainingText = streamState.lastFullContent;
     entry.finalResponse = {
       finishReason: finalFinishReason || 'stop',
-      toolCallCount: emittedToolCallCount,
+      toolCallCount: effectiveToolCallCount,
       contentPreview: (streamState.lastFullContent || '').substring(0, 100),
     };
   });
