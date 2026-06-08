@@ -60,8 +60,8 @@ export function buildQwenMessages(
   let userTurns = 0;
   const turnToolResults: Array<{ turn: number; content: string }> = [];
 
-  // Limit messages to last 20 to avoid Qwen's "too many messages" error
-  const MAX_MESSAGES = 20;
+  // Limit messages to last 5 to avoid Qwen's "too many messages" error
+  const MAX_MESSAGES = 5;
   const startIdx = Math.max(0, messages.length - MAX_MESSAGES);
   for (let i = startIdx; i < messages.length; i++) {
     const msg = messages[i];
