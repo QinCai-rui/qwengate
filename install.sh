@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 REPO="https://github.com/youssefvdel/qwen-gate.git"
 DIR="qwen-gate"
@@ -29,21 +29,18 @@ else
 fi
 ok "Repository ready at $INSTALL_DIR"
 
-info "Installing npm dependencies (this may take a minute)..."
-cd "$INSTALL_DIR" || fail "Cannot cd to $INSTALL_DIR"
-
-if [ ! -d "node_modules" ] || [ -z "$(ls -A node_modules 2>/dev/null)" ]; then
-  npm install
-else
-  npm install
-fi
-
-if [ ! -d "node_modules" ] || [ -z "$(ls -A node_modules 2>/dev/null)" ]; then
-  fail "npm install did not create node_modules. Run 'cd $INSTALL_DIR && npm install' manually."
-fi
-
-PACKAGE_COUNT=$(find node_modules -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
-ok "$PACKAGE_COUNT packages installed"
+cd "$INSTALL_DIR" || { echo "Failed to cd to $INSTALL_DIR"; exit 1; }
+echo ""
+echo "========================================"
+echo " RUNNING: npm install"
+echo "========================================"
+echo ""
+npm install
+echo ""
+echo "========================================"
+echo " npm install finished"
+echo "========================================"
+echo ""
 
 if [ ! -f "config.json" ]; then
   sed 's|//.*||' config.example.jsonc > config.json
@@ -77,7 +74,7 @@ fi
 PORT="${PORT:-26405}"
 
 printf '\n\033[1;32m╔══════════════════════════════════════════════╗\033[0m\n'
-printf '\033[1;32m║       Qwen Gate installed successfully      ║\033[0m\n'
+printf '\033[1;32m║       Qwen Gate installed successfully       ║\033[0m\n'
 printf '\033[1;32m╚══════════════════════════════════════════════╝\033[0m\n\n'
 printf '  cd %s && qg\n' "$INSTALL_DIR"
 printf '  Dashboard: http://localhost:%s/dashboard\n' "$PORT"
