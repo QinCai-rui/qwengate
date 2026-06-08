@@ -8,6 +8,7 @@ import { pickAccount } from "../services/auth.ts";
 import { checkContextWindow, estimateTokens } from "../utils/tokenEstimator.ts";
 import { handleStreamingRequest } from "./chatStreaming.ts";
 import { handleNonStreamingRequest } from "./chatNonStreaming.ts";
+import { cleanTextOfXmlArtifacts } from "../tools/xmlToolParser.ts";
 import {
   buildQwenMessages,
   handleImageModelFallback,
@@ -228,6 +229,7 @@ export async function chatCompletions(c: Context) {
     logStore.updateEntry(logId, entry => { entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' }; entry.finalResponse.finishReason = 'error'; });
     logStore.finalizeRequest(logId);
     const status = err.upstreamStatus || 500;
-    return c.json({ error: { message: err.message } }, status);
+    const cleanMessage = cleanTextOfXmlArtifacts(err.message || String(err)).cleanedText || err.message || 'Internal error';
+    return c.json({ error: { message: cleanMessage } }, status);
   }
 }

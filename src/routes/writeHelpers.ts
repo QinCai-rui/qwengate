@@ -2,6 +2,7 @@
  * SSE event write helpers for streaming chat responses.
  */
 import { checkAmplificationGuard, type AmplificationGuardState } from "./chatHelpers.ts";
+import { cleanTextOfXmlArtifacts } from "../tools/xmlToolParser.ts";
 
 /**
  * Write a single SSE data event to the stream.
@@ -98,7 +99,10 @@ export async function writeDeferredThinking(
   streamWriter: any, completionId: string, model: string, chunks: string[],
 ) {
   for (const chunk of chunks) {
-    await writeReasoningEvent(streamWriter, completionId, model, chunk);
+    const cleaned = cleanTextOfXmlArtifacts(chunk).cleanedText;
+    if (cleaned) {
+      await writeReasoningEvent(streamWriter, completionId, model, cleaned);
+    }
   }
 }
 

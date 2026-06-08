@@ -7,7 +7,7 @@ import {
 } from './chatHelpers.ts';
 import { logStore } from '../services/logStore.ts';
 import { filterContent } from '../utils/contentFilter.ts';
-import { parseXmlToolCalls } from '../tools/xmlToolParser.ts';
+import { parseXmlToolCalls, cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import {
   writeEvent,
   writeReasoningEvent,
@@ -118,7 +118,8 @@ export async function handlePostStreamCompletion(
 
   const upstreamError = parseQwenErrorPayload(buffer);
   if (upstreamError) {
-    await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ content: upstreamError.message })]));
+    const cleanErrorMessage = cleanTextOfXmlArtifacts(upstreamError.message).cleanedText || upstreamError.message;
+    await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ content: cleanErrorMessage })]));
     await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({}, 'stop')]));
     await streamWriter.write('data: [DONE]\n\n');
     logStore.updateEntry(logId, entry => { entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' }; entry.finalResponse.finishReason = 'upstream_error'; });
@@ -135,7 +136,8 @@ export async function handlePostStreamCompletion(
   const { cleanText: flushBase, thinking: flushThinking } = (enableContentFiltering && streamState.lastFullContent)
     ? filterContent(streamState.lastFullContent)
     : { cleanText: streamState.lastFullContent || '', thinking: '' };
-  const flushCleaned = cleanThinkTags(flushBase);
+  const flushXmlStripped = cleanTextOfXmlArtifacts(flushBase).cleanedText;
+  const flushCleaned = cleanThinkTags(flushXmlStripped);
 
   if (flushThinking) {
     const thinkDelta = getSnapshotDelta(flushThinking, streamState.lastThinkingSnapshot);

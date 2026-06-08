@@ -267,7 +267,8 @@ async function processContentChunks(state: StreamProcessorState, ctx: NonStreami
   const upstreamError = parseQwenErrorPayload(state.buffer);
   if (upstreamError) {
     logStore.finalizeRequest(logId);
-    return c.json({ error: { message: upstreamError.message } }, upstreamError.status);
+    const cleanMessage = cleanTextOfXmlArtifacts(upstreamError.message).cleanedText || upstreamError.message;
+    return c.json({ error: { message: cleanMessage } }, upstreamError.status);
   }
 
   flushAndDetectLoops(state, logId);

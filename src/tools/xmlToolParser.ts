@@ -14,7 +14,7 @@ export function parseXmlToolCalls(text: string): { toolCalls: ParsedXmlToolCall[
   const unique = new Set<string>();
   let cleanedText = text;
 
-  const re = /<function=\w+[\s\S]*?>[\s\S]*?<\/function>/g;
+  const re = /<function=[^\s>]+[\s\S]*?>[\s\S]*?<\/function>/g;
   const sections: string[] = [];
   let lastIdx = 0;
   let match: RegExpExecArray | null;
@@ -29,7 +29,7 @@ export function parseXmlToolCalls(text: string): { toolCalls: ParsedXmlToolCall[
     const body = match[0].slice(match[0].indexOf('>') + 1, match[0].lastIndexOf('<'));
 
     const parameters: Record<string, string> = {};
-    const paramRe = /<parameter=(\w+)>([\s\S]*?)<\/parameter>/g;
+    const paramRe = /<parameter=([^\s>]+)>([\s\S]*?)<\/parameter>/g;
     let pm: RegExpExecArray | null;
     while ((pm = paramRe.exec(body)) !== null) {
       parameters[pm[1].trim()] = pm[2].trim();

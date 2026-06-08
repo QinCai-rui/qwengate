@@ -1,4 +1,5 @@
 import { isThinkingLine, QWEN_THINK_TAG_PATTERN, QWEN_THINK_BLOCK_START, type FilterResult } from "./thinkTagStripper.ts";
+import { stripToolCallArtifacts } from "./xmlStripper.ts";
 export type { FilterResult } from './thinkTagStripper.ts';
 
 export function filterContent(raw: string): FilterResult {
@@ -76,6 +77,7 @@ export function filterContent(raw: string): FilterResult {
   text = cleanParagraphs.join('\n\n');
   text = text.replace(/\n{3,}/g, '\n\n');
   text = text.replace(/\[READ TOOL RESULT below[^\]]*\]\s*/g, '');
+  text = stripToolCallArtifacts(text);
   return {
     cleanText: text,
     thinking: capturedThinking.filter(t => t.length > 0).join('\n'),
