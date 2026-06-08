@@ -145,5 +145,6 @@ function buildInitialStreamState(finalPrompt: string, initialParentId: string | 
     lastFilteredSnapshot: '',
     lastThinkingSnapshot: '',
     lastVStrRaw: '',
+    loggedToolCalls: new Set(),
   };
 }

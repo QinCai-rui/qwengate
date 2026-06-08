@@ -132,6 +132,7 @@ export interface StreamProcessingState {
   lastFilteredSnapshot: string;
   lastThinkingSnapshot: string;
   lastVStrRaw: string;
+  loggedToolCalls: Set<string>;
 }
 
 export interface StreamProcessingCtx {
@@ -175,11 +176,21 @@ export async function processStreamData(
       // Extract and emit local MCP tool calls before breaking the stream
       if (deltaPhase === 'local_tool') {
         const localToolCalls = extractLocalMcpToolCalls(data);
-        logStore.updateEntry(logId, entry => {
-          for (const tc of localToolCalls) {
-            entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
-          }
+        const newToolCalls = localToolCalls.filter(tc => {
+          const key = `${tc.name}:${JSON.stringify(tc.arguments)}`;
+          if (state.loggedToolCalls.has(key)) return false;
+          state.loggedToolCalls.add(key);
+          return true;
         });
+        
+        if (newToolCalls.length > 0) {
+          logStore.updateEntry(logId, entry => {
+            for (const tc of newToolCalls) {
+              entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
+            }
+          });
+        }
+        
         for (let i = 0; i < localToolCalls.length; i++) {
           await writeToolCallEvent(streamWriter, completionId, model, localToolCalls[i], i);
         }
@@ -250,6 +261,21 @@ export async function processStreamData(
   // Keep state.lastFullContent raw so partial <function=...> survives for the next chunk
   const { toolCalls: xmlToolCalls } = parseXmlToolCalls(state.lastFullContent);
   if (xmlToolCalls.length > 0) {
+    const newToolCalls = xmlToolCalls.filter(tc => {
+      const key = `${tc.name}:${JSON.stringify(tc.parameters)}`;
+      if (state.loggedToolCalls.has(key)) return false;
+      state.loggedToolCalls.add(key);
+      return true;
+    });
+    
+    if (newToolCalls.length > 0) {
+      logStore.updateEntry(logId, entry => {
+        for (const tc of newToolCalls) {
+          entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.parameters) });
+        }
+      });
+    }
+    
     for (const [i, tc] of xmlToolCalls.entries()) {
       const parsed = xmlToolCallToParsed(tc, i);
       await writeToolCallEvent(streamWriter, completionId, model, parsed, i);
