@@ -7,8 +7,6 @@
 
 import crypto from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
-import { join } from 'path';
 import { getActivePage, getBrowser } from './playwright.ts';
 import { logStore } from './logStore.js';
 import {
@@ -260,62 +258,13 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
   try {
     const { getProfileDir } = await import('./playwright.ts');
     const managedDir = getProfileDir(email);
-
-    // Try managed profile first
-    if (existsSync(managedDir)) {
-      const result = await tryExtractCookies(managedDir, email, true);
-      if (result) return result;
-    }
-
-    // Fallback: try scanning the user's system Chrome profile
-    const { launchPersistentContext } = await import('cloakbrowser');
-    const systemProfiles = getSystemChromeProfiles();
-    for (const profilePath of systemProfiles) {
-      if (existsSync(profilePath)) {
-        const result = await tryExtractCookies(profilePath, email, false);
-        if (result) return result;
-      }
-    }
-
-    return null;
+    if (!existsSync(managedDir)) return null;
+    const result = await tryExtractCookies(managedDir, email, true);
+    return result;
   } catch (err: any) {
     console.warn(`[Auth] Profile cookie load failed for ${email}: ${err.message}`);
     return null;
   }
-}
-
-/**
- * Get common system Chrome/Chromium profile directories by platform.
- */
-function getSystemChromeProfiles(): string[] {
-  const home = homedir();
-  const isWin = process.platform === 'win32';
-  const isMac = process.platform === 'darwin';
-
-  if (isMac) {
-    return [
-      join(home, 'Library', 'Application Support', 'Google', 'Chrome', 'Default'),
-      join(home, 'Library', 'Application Support', 'Google', 'Chrome'),
-      join(home, 'Library', 'Application Support', 'Chromium', 'Default'),
-      join(home, 'Library', 'Application Support', 'Chromium'),
-    ];
-  }
-  if (isWin) {
-    const localAppData = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local');
-    return [
-      join(localAppData, 'Google', 'Chrome', 'User Data', 'Default'),
-      join(localAppData, 'Google', 'Chrome', 'User Data'),
-      join(localAppData, 'Chromium', 'User Data', 'Default'),
-      join(localAppData, 'Chromium', 'User Data'),
-    ];
-  }
-  // Linux
-  return [
-    join(home, '.config', 'google-chrome', 'Default'),
-    join(home, '.config', 'google-chrome'),
-    join(home, '.config', 'chromium', 'Default'),
-    join(home, '.config', 'chromium'),
-  ];
 }
 
 async function tryExtractCookies(profilePath: string, email: string, saveCookieFile: boolean): Promise<AuthState | null> {
