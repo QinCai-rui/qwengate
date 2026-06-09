@@ -236,7 +236,11 @@ async function tryExtractCookies(profilePath: string, email: string, saveCookieF
     });
 
     let cookies: Array<{ name: string; value: string; expires?: number }> = await context.cookies();
-    const hasAuth = cookies.some(c => c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session'));
+    const hasAuth = cookies.some(c => {
+      const n = c.name.toLowerCase();
+      if (n.includes('refresh')) return false;
+      return n.includes('token') || n.includes('session');
+    });
 
     if (!hasAuth) {
       const page = context.pages()[0] || await context.newPage();
@@ -245,9 +249,11 @@ async function tryExtractCookies(profilePath: string, email: string, saveCookieF
       cookies = await context.cookies();
     }
 
-    const authCookie = cookies.find(c =>
-      c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session')
-    );
+    const authCookie = cookies.find(c => {
+      const n = c.name.toLowerCase();
+      if (n.includes('refresh')) return false;
+      return n.includes('token') || n.includes('session');
+    });
 
     if (authCookie?.value) {
       const payload = decodeJwt(authCookie.value);

@@ -250,13 +250,21 @@ export async function refreshAccountCookies(email: string): Promise<void> {
   const { context, page } = accCtx;
   try {
     const cookies = await context.cookies();
-    const hasAuthCookie = cookies.some(c => c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session'));
+    const hasAuthCookie = cookies.some(c => {
+      const n = c.name.toLowerCase();
+      if (n.includes('refresh')) return false;
+      return n.includes('token') || n.includes('session');
+    });
     if (!hasAuthCookie) {
       validateQwenUrl('https://chat.qwen.ai/');
       await page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded', timeout: 15000 });
       await sleep(2000);
       const postCookies = await context.cookies();
-      const hasPostAuth = postCookies.some(c => c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session'));
+      const hasPostAuth = postCookies.some(c => {
+        const n = c.name.toLowerCase();
+        if (n.includes('refresh')) return false;
+        return n.includes('token') || n.includes('session');
+      });
       if (!hasPostAuth) {
         logStore.log('warn', 'account', `${email} still has no auth cookie after navigation - token invalid, marking unavailable`);
         const { throttleAccount } = await import('./auth.ts');
