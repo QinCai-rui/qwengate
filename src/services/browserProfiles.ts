@@ -114,8 +114,8 @@ async function tryCheckToken(context: any, email: string): Promise<LoginResult |
     if (!tokenCookie) return null;
     const { saveCookies } = await import('./auth.ts');
     const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
-    const expiresAt = tokenCookie.expires ? tokenCookie.expires * 1000 : undefined;
-    await saveCookies(email, tokenCookie.value, refreshCookie?.value, expiresAt);
+    // Don't pass expiresAt — let saveCookies decode the JWT for real TTL
+    await saveCookies(email, tokenCookie.value, refreshCookie?.value);
     try { await context.close(); } catch { /* non-blocking */ }
     return 'success';
   } catch {
@@ -230,8 +230,8 @@ export async function refreshViaProfile(email: string): Promise<boolean> {
       if (tokenCookie && tokenCookie.expires && tokenCookie.expires * 1000 > Date.now()) {
         const { saveCookies } = await import('./auth.ts');
         const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
-        const expiresAt = tokenCookie.expires * 1000;
-        await saveCookies(email, tokenCookie.value, refreshCookie?.value, expiresAt);
+        // Don't pass expiresAt — let saveCookies decode the JWT for real TTL
+        await saveCookies(email, tokenCookie.value, refreshCookie?.value);
         try { await context.close(); } catch { /* non-blocking */ }
         return true;
       }
