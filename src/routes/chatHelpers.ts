@@ -116,7 +116,7 @@ export function buildQwenMessages(
             parsedArgs = args;
           }
           const xmlParams = Object.entries(parsedArgs)
-            .map(([k, v]) => `<parameter=${k}>${String(v)}</parameter>`)
+            .map(([k, v]) => `<parameter=${k}>${typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}</parameter>`)
             .join("\n");
           const xmlPayload = `<function=${tc.function?.name}>\n${xmlParams}\n</function>`;
           assistantContent = assistantContent

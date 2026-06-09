@@ -1,37 +1,37 @@
+/**
+ * Tool echo patterns — strip lines where the model echoes tool results
+ * as JSON: [{"type":"function","tool":"name","result":{...}}]
+ */
 const TOOL_ECHO_PATTERNS: RegExp[] = [
-  /\bI(?:'ll|\s+will|\s+shall|\s+can|\s+need\s+to)\s+(?:use|run|call|invoke|execute|try)\s+(?:the\s+)?[a-z_]+(?:\.\w+)?\s+(?:tool|command|function|utility)/i,
-  /\bUsing\s+(?:the\s+)?[a-z_]+(?:\.\w+)?\s+(?:tool|command|function|utility)\s+(?:to|for|I)/i,
-  /\b[Tt]he\s+[a-z_]+(?:\.\w+)?\s+(?:tool|command|function|utility)\s+(?:returned|shows?|produced|found|gave|output(?:ted)?|contained|has|displays?)/i,
-  /\b[Tt]ool\s+[a-z_]+(?:\.\w+)?\s+(?:result|output|response|returned|shows?|found|gave|produced)\s*[:.]/i,
-  /\b(?:result|output|response)(?:\s+(?:from|of|returned\s+by|given\s+by))\s+(?:the\s+)?[a-z_]+(?:\.\w+)?(?:\s+(?:tool|command|function))?\s*[:.]/i,
-  /\b(?:[Rr]unning|[Ee]xecuting|[Ii]nvoking|[Cc]alling)\s+(?:the\s+)?(?:following\s+)?(?:command|tool|function|script)\s*[:.]/i,
-  /\b(?:[Cc]ommand|[Ss]hell|[Tt]ool|[Ss]cript)\s+(?:output|result|response)\s*[:.]/i,
-  /\bI\s+(?:ran|executed|called|used|invoked)\s+[a-z_]+(?:\.\w+)?\s+(?:and\s+)?(?:it\s+)?(?:returned|showed|produced|gave|output(?:ted)?|found)/i,
-  /\b[Bb]ased\s+on\s+(?:the\s+)?(?:output|result|response|content|data|findings)\s+(?:from|of|returned\s+by|given\s+by)\s+(?:the\s+)?[a-z_]+(?:\.\w+)?/i,
-  /\b[Aa]fter\s+(?:calling|running|executing|using|invoking)\s+(?:the\s+)?[a-z_]+(?:\.\w+)?/i,
-  /\b[Ll]et\s+me\s+(?:use|call|run|execute|invoke|try)\s+(?:the\s+)?[a-z_]+(?:\.\w+)?\s+(?:tool|command|function)/i,
-  /^(?:[Tt]ool|Command|Function)\s+[a-z_]+(?:\.\w+)?\s*[:.].*$/m,
-  /\bI(?:'ll|\s+will)\s+(?:use|run|call|invoke|execute)\s+(?:[a-z_]+\s+){0,2}(?:to\s+)/i,
-  /\b[Tt]he\s+(?:output|result)\s+(?:shows?|contains?|indicates?|reveals?|displays?|produced|gave|returned)\b/i,
+  // Single-line JSON tool result echo: [{"type":"function","tool":"name","result":{...}}]
+  /^\[\s*\{.*"type"\s*:\s*"function".*"tool"\s*:\s*"/i,
 ];
 
 export function stripToolCallArtifacts(text: string): string {
   if (!text) return '';
-  // Strip XML tool_result blocks
+  // Strip XML tool_result blocks (complete pairs)
   text = text.replace(/<tool_result[^>]*>[\s\S]*?<\/tool_result>/g, '');
+  // Strip orphaned <tool_result without matching close
   const unmatchedOpenIdx = text.search(/<tool_result(?:\s[^>]*)?>/);
   if (unmatchedOpenIdx !== -1) { text = text.substring(0, unmatchedOpenIdx); }
+  // Strip residual </tool_result> without matching open
   text = text.replace(/<\/tool_result\s*>/g, '');
-  text = text.replace(/<\/[\s\S]*?tool_result\s*>/g, '');
-  text = text.replace(/<\/tool(?:_result)?/g, '');
+  // Strip any </...tool_result> where prefix between </ and tool_result may be garbled
+  // Use \w+ instead of [\s\S]*? to avoid eating surrounding text
+  text = text.replace(/<\/\w+tool_result\s*>/g, '');
+  // Strip partial / incomplete tool tags at end of text (streaming boundaries).
+  // These are conservatively matched — only unambiguous tool tag prefixes.
   text = text.replace(/\n?<tool_result(?:\s[^>]*)?$/g, '');
-  text = text.replace(/\n?<tool_res(?:ult?)?(?:\s[^>]*)?$/g, '');
-  text = text.replace(/\n?<tool_re(?:s(?:ult?)?)?(?:\s[^>]*)?$/g, '');
-  text = text.replace(/\n?<tool_?(?:re(?:s(?:ult?)?)?)?(?:\s[^>]*)?$/g, '');
-  text = text.replace(/\n?<tool(?:\s[^>]*)?$/g, '');
-  text = text.replace(/\n?<to(?:ol?)?$/g, '');
-  // Only strip trailing tool-related partial tags — never standalone <t
-  text = text.replace(/\n?(?:<\/?(?:tool|tc|function|parameter)[^>]*)$/gi, '');
+  text = text.replace(/\n?<tool_call(?:\s[^>]*)?$/g, '');
+  text = text.replace(/\n?<tool_use(?:\s[^>]*)?$/g, '');
+  text = text.replace(/\n?<function(?:\s[^>]*)?$/g, '');
+  text = text.replace(/\n?<parameter(?:\s[^>]*)?$/g, '');
+  // Strip any remaining </tool or </tool_result prefix (with > requirement to avoid
+  // matching </toolbox, </toolkit etc.)
+  text = text.replace(/<\/tool(?:_result)?>/g, '');
+  // Strip JSON tool result echo blocks (handles both single-line and pretty-printed multi-line):
+  //   [{"type":"function","tool":"name","result":{"success":true,"stdout":"...","stderr":"","command":"name"}}]
+  text = text.replace(/\[\s*\{[\s\S]*?"type"\s*:\s*"function"[\s\S]*?"tool"\s*:\s*"[a-z_]+"[\s\S]*?\}\s*\]/g, '');
   text = stripToolEcho(text);
   text = text.replace(/\n{3,}/g, '\n\n');
   return text;
@@ -42,8 +42,10 @@ export function stripStreamingDelta(delta: string): string {
   let cleaned = delta;
   cleaned = cleaned.replace(/\[READ TOOL RESULT below[^\]]*\]\s*/g, '');
   cleaned = cleaned.replace(/<tool_result[^>]*>[\s\S]*?<\/tool_result>/g, '');
-  cleaned = cleaned.replace(/\n?<tool(?:_[a-z]*)?$/g, '');
-  cleaned = cleaned.replace(/\n?<t(?:o(?:o(?:l)?)?)?$/g, '');
+  // Strip partial tool tags at EOL (streaming chunk boundaries)
+  cleaned = cleaned.replace(/\n?<tool_result(?:\s[^>]*)?$/g, '');
+  cleaned = cleaned.replace(/\n?<tool_call(?:\s[^>]*)?$/g, '');
+  cleaned = cleaned.replace(/\n?<function(?:\s[^>]*)?$/g, '');
   return cleaned;
 }
 

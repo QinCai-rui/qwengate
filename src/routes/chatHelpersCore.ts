@@ -63,25 +63,39 @@ export function detectCumulativeChunk(
   if (!lastText || !newText) return { cumulative: false, delta: newText };
   if (newText === lastText) return { cumulative: false, delta: "" };
 
+  // Fast path: exact prefix match
   if (newText.startsWith(lastText) && newText.length > lastText.length) {
     return { cumulative: true, delta: newText.substring(lastText.length) };
   }
 
+  // Fingerprint-based recovery: Qwen sometimes resends cumulative content
+  // with minor edits (extra words, rephrasing). Use suffix fingerprints to
+  // find where old content resumes in the new text.
   if (newText.length > lastText.length && lastText.length >= 32) {
-    const fingerprint = lastText.slice(-Math.min(64, lastText.length));
-    const idx = newText.indexOf(fingerprint);
-    if (idx !== -1) {
+    // Try multiple fingerprint sizes for robustness
+    for (const fpSize of [64, 48, 32, 24]) {
+      if (lastText.length < fpSize) continue;
+      const fingerprint = lastText.slice(-fpSize);
+      const idx = newText.indexOf(fingerprint);
+      if (idx === -1) continue;
+
       const expectedEnd = idx + lastText.length;
-      if (expectedEnd <= newText.length) {
-        const candidateRegion = newText.substring(idx, idx + lastText.length);
-        const suffixMatch = commonSuffixLen(candidateRegion, lastText);
-        if (suffixMatch >= Math.min(lastText.length * 0.9, lastText.length - 4)) {
-          const delta = newText.substring(expectedEnd);
-          return { cumulative: true, delta };
-        }
+      if (expectedEnd > newText.length) continue;
+
+      // Check if the found position is plausible: the overlap region at
+      // expectedEnd should match the tail of lastText by at least 75%.
+      const overlap = newText.substring(expectedEnd - Math.min(20, lastText.length), expectedEnd);
+      const lastTail = lastText.slice(-overlap.length);
+      const overlapMatch = commonSuffixLen(overlap, lastTail);
+      if (overlapMatch < overlap.length * 0.75 && overlapMatch < 3) continue;
+
+      const delta = newText.substring(expectedEnd);
+      if (delta) {
+        return { cumulative: true, delta };
       }
     }
   }
+
   return { cumulative: false, delta: newText };
 }
 
@@ -92,17 +106,34 @@ export function getSnapshotDelta(
   if (!newSnapshot) return "";
   if (!lastSnapshot) return newSnapshot;
   if (newSnapshot === lastSnapshot) return "";
-  if (newSnapshot.length <= lastSnapshot.length) return "";
-  if (newSnapshot.startsWith(lastSnapshot)) return newSnapshot.substring(lastSnapshot.length);
+
+  // Fast path: monotonic growth (the common case)
+  if (newSnapshot.length > lastSnapshot.length && newSnapshot.startsWith(lastSnapshot))
+    return newSnapshot.substring(lastSnapshot.length);
+
+  // When cleaning removes characters (e.g. partial <tool_call completing to
+  // <tool_call> which then gets stripped by cleanThinkTags), newSnapshot can
+  // be SHORTER than lastSnapshot. Use common prefix to find what's genuinely new.
+  // Also handles the case where previous content was re-cleaned more aggressively.
+  const prefixLen = commonPrefixLen(newSnapshot, lastSnapshot);
+  if (prefixLen > 0 && prefixLen < newSnapshot.length) {
+    return newSnapshot.substring(prefixLen);
+  }
+  if (prefixLen === newSnapshot.length && prefixLen > 0) {
+    // newSnapshot is entirely a prefix of lastSnapshot — nothing genuinely new
+    return "";
+  }
+
+  // Fallback: fingerprint-based cumulative chunk detection for overlapping content
   const detection = detectCumulativeChunk(newSnapshot, lastSnapshot);
   if (detection.cumulative) return detection.delta;
   return "";
 }
 
-/** Matches closing/opening think/tool tags. Extracted to module-level const. */
-const THINK_TAG_PATTERN = /<\/?(?:think|thinking|thought|tool_call|tool_use|function_call|tool)>/gi;
-/** Matches tool result tag fragments. Extracted to module-level const. */
-const TOOL_RESULT_TAG_PATTERN = /<\/tool(?:_result)?/gi;
+/** Matches closing/opening think/tool tags (with optional attributes/self-close). */
+const THINK_TAG_PATTERN = /<\/?(?:think|thinking|thought|tool_call|tool_use|function_call|tool)(?:\s[^>]*)?\/?>/gi;
+/** Matches tool result tag fragments (requires closing > to avoid false stripping of /toolbox /toolkit etc). */
+const TOOL_RESULT_TAG_PATTERN = /<\/tool(?:_result)?>/gi;
 
 export function cleanThinkTags(t: string): string {
   let s = t.replace(THINK_TAG_PATTERN, "");

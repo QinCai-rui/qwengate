@@ -68,7 +68,9 @@ export function filterContent(raw: string): FilterResult {
 
     if (isStrongThinkingStart && !hasContentMarker) {
       capturedThinking.push(stripToolCallArtifacts(paraLines.join('\n')));
-    } else if (thinkingCount >= 2 && !hasContentMarker) {
+    } else if (thinkingCount >= 3 && !hasContentMarker && thinkingCount >= paraLines.length / 2) {
+      // Require at least 3 thinking lines AND they must be a majority of the paragraph
+      // to avoid false-positive stripping of normal prose (e.g. "I need to verify...")
       capturedThinking.push(stripToolCallArtifacts(paraLines.join('\n')));
     } else if (startsWithThinking && thinkingCount === 1 && paraLines.length === 1) {
       cleanParagraphs.push(para);

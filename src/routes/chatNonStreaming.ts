@@ -164,11 +164,9 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
   } else if (delta.phase === 'answer') {
     processAnswerDelta(delta, state, ctx);
   } else if (delta.phase === 'local_tool') {
-    // Local tool results are already captured in the answer content
-    // Just ensure we don't lose them
-    if (delta.content) {
-      processAnswerDelta(delta, state, ctx);
-    }
+    // Local tool results are already captured in the answer content phase.
+    // Do NOT process them again here — doing so duplicates the content
+    // in state.lastFullContent and in the user-facing response.
   }
 }
 
@@ -177,11 +175,19 @@ function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
   if (toolCalls.length > 0) {
     const parsed = toolCalls.map((tc, i) => xmlToolCallToParsed(tc, i));
     // Filter out already-processed tool calls to avoid corrupting ToolSpamGuard state
+    // Stable dedup: sort object keys so property order doesn't cause false negatives
+    const stableArgs = (args: Record<string, unknown>): string => {
+      const keys = Object.keys(args).sort();
+      return '{' + keys.map(k => `${JSON.stringify(k)}:${JSON.stringify(args[k])}`).join(',') + '}';
+    };
     const newCalls = parsed.filter(tc => {
-      return !state.toolCallsOut.some(existing =>
-        existing.function.name === tc.name &&
-        existing.function.arguments === JSON.stringify(tc.arguments)
-      );
+      const tcArgsStr = stableArgs(tc.arguments as Record<string, unknown>);
+      return !state.toolCallsOut.some(existing => {
+        let existingArgs: Record<string, unknown> = {};
+        try { existingArgs = JSON.parse(existing.function.arguments); } catch { /* ignore */ }
+        return existing.function.name === tc.name &&
+               stableArgs(existingArgs) === tcArgsStr;
+      });
     });
     if (newCalls.length > 0) {
       processToolCallsThroughGuard(newCalls, state.toolCallsOut, {

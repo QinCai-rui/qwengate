@@ -210,10 +210,9 @@ export async function processStreamData(
               entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
             }
           });
-        }
-        
-        for (let i = 0; i < localToolCalls.length; i++) {
-          await writeToolCallEvent(streamWriter, completionId, model, localToolCalls[i], i);
+          for (let i = 0; i < newToolCalls.length; i++) {
+            await writeToolCallEvent(streamWriter, completionId, model, newToolCalls[i], i);
+          }
         }
         if (ctx.qwenLogFile && localToolCalls.length > 0) {
           logQwenSSE(ctx.qwenLogFile, ctx.sseEventCount || 0, localToolCalls.length, localToolCalls);
@@ -304,9 +303,14 @@ export async function processStreamData(
   }
 
   // Truncate lastFullContent to prevent unbounded growth (M-10)
-  // Keep last 2000 chars so partial tags survive across chunks
-  if (state.lastFullContent.length > 2000) {
-    state.lastFullContent = state.lastFullContent.slice(-2000);
+  // Use a generous limit (100000 chars ≈ 25000 tokens) so the content delta
+  // pipeline always has stable, growing input for getSnapshotDelta to diff.
+  // When truncation IS triggered, also reset the snapshot trackers so
+  // filterContentPipeline rebuilds from scratch for the next chunk.
+  if (state.lastFullContent.length > 100000) {
+    state.lastFullContent = state.lastFullContent.slice(-80000);
+    state.lastFilteredSnapshot = '';
+    state.lastThinkingSnapshot = '';
   }
 
   const pipelineResult = filterContentPipeline(state.lastFullContent, enableContentFiltering);
