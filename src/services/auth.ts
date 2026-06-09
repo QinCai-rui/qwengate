@@ -257,10 +257,8 @@ export async function loadSavedCookies(email: string): Promise<AuthState | null>
 export async function loadCookiesFromProfile(email: string): Promise<AuthState | null> {
   try {
     const { getProfileDir } = await import('./playwright.ts');
-    const managedDir = getProfileDir(email);
-    if (!existsSync(managedDir)) return null;
-    const result = await tryExtractCookies(managedDir, email, true);
-    return result;
+    const managedDir = getProfileDir(email); // creates dir if missing
+    return await tryExtractCookies(managedDir, email, true);
   } catch (err: any) {
     console.warn(`[Auth] Profile cookie load failed for ${email}: ${err.message}`);
     return null;
