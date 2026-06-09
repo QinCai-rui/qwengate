@@ -7,6 +7,8 @@
 
 import crypto from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 import { getActivePage, getBrowser } from './playwright.ts';
 import { logStore } from './logStore.js';
 import {
@@ -157,13 +159,14 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
   for (let i = 0; i < accounts.length; i++) {
     const acct = accounts[i];
 
-    const savedState = await loadSavedCookies(acct.email);
-    if (savedState) {
-      acct.state = savedState;
+    // Try Chromium profile FIRST for the freshest session cookies
+    const profileState = await loadCookiesFromProfile(acct.email);
+    if (profileState) {
+      acct.state = profileState;
     } else {
-      const profileState = await loadCookiesFromProfile(acct.email);
-      if (profileState) {
-        acct.state = profileState;
+      const savedState = await loadSavedCookies(acct.email);
+      if (savedState) {
+        acct.state = savedState;
       } else if (acct.password) {
         const newState = await loginFresh(acct.email, acct.password);
         if (newState) {
@@ -256,51 +259,112 @@ export async function loadSavedCookies(email: string): Promise<AuthState | null>
 export async function loadCookiesFromProfile(email: string): Promise<AuthState | null> {
   try {
     const { getProfileDir } = await import('./playwright.ts');
-    const profileDir = getProfileDir(email);
-    if (!existsSync(profileDir)) return null;
+    const managedDir = getProfileDir(email);
 
+    // Try managed profile first
+    if (existsSync(managedDir)) {
+      const result = await tryExtractCookies(managedDir, email, true);
+      if (result) return result;
+    }
+
+    // Fallback: try scanning the user's system Chrome profile
     const { launchPersistentContext } = await import('cloakbrowser');
-    const context = await launchPersistentContext({
-      userDataDir: profileDir,
+    const systemProfiles = getSystemChromeProfiles();
+    for (const profilePath of systemProfiles) {
+      if (existsSync(profilePath)) {
+        const result = await tryExtractCookies(profilePath, email, false);
+        if (result) return result;
+      }
+    }
+
+    return null;
+  } catch (err: any) {
+    console.warn(`[Auth] Profile cookie load failed for ${email}: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Get common system Chrome/Chromium profile directories by platform.
+ */
+function getSystemChromeProfiles(): string[] {
+  const home = homedir();
+  const isWin = process.platform === 'win32';
+  const isMac = process.platform === 'darwin';
+
+  if (isMac) {
+    return [
+      join(home, 'Library', 'Application Support', 'Google', 'Chrome', 'Default'),
+      join(home, 'Library', 'Application Support', 'Google', 'Chrome'),
+      join(home, 'Library', 'Application Support', 'Chromium', 'Default'),
+      join(home, 'Library', 'Application Support', 'Chromium'),
+    ];
+  }
+  if (isWin) {
+    const localAppData = process.env.LOCALAPPDATA || join(home, 'AppData', 'Local');
+    return [
+      join(localAppData, 'Google', 'Chrome', 'User Data', 'Default'),
+      join(localAppData, 'Google', 'Chrome', 'User Data'),
+      join(localAppData, 'Chromium', 'User Data', 'Default'),
+      join(localAppData, 'Chromium', 'User Data'),
+    ];
+  }
+  // Linux
+  return [
+    join(home, '.config', 'google-chrome', 'Default'),
+    join(home, '.config', 'google-chrome'),
+    join(home, '.config', 'chromium', 'Default'),
+    join(home, '.config', 'chromium'),
+  ];
+}
+
+async function tryExtractCookies(profilePath: string, email: string, saveCookieFile: boolean): Promise<AuthState | null> {
+  const { launchPersistentContext } = await import('cloakbrowser');
+  let context: any = null;
+  try {
+    context = await launchPersistentContext({
+      userDataDir: profilePath,
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--mute-audio'],
     });
 
-    try {
-      let cookies = await context.cookies();
-      const hasAuth = cookies.some(c => c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session'));
+    let cookies: Array<{ name: string; value: string; expires?: number }> = await context.cookies();
+    const hasAuth = cookies.some(c => c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session'));
 
-      if (!hasAuth) {
-        // Navigate to Qwen to trigger cookie refresh from profile storage
-        const page = context.pages()[0] || await context.newPage();
-        await page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-        await new Promise(r => setTimeout(r, 2000));
-        cookies = await context.cookies();
-      }
+    if (!hasAuth) {
+      const page = context.pages()[0] || await context.newPage();
+      await page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await new Promise(r => setTimeout(r, 2000));
+      cookies = await context.cookies();
+    }
 
-      const authCookie = cookies.find(c =>
-        c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session')
-      );
+    const authCookie = cookies.find(c =>
+      c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session')
+    );
 
-      if (authCookie?.value) {
-        const payload = decodeJwt(authCookie.value);
-        const expiresAt = payload?.exp ? payload.exp * 1000 : Date.now() + AUTH_TOKEN_MAX_AGE_MS;
-        if (expiresAt > Date.now()) {
-          const refreshCookie = cookies.find(c => c.name.toLowerCase().includes('refresh'));
-          const state: AuthState = {
-            token: authCookie.value,
-            expiresAt,
-            refreshToken: refreshCookie?.value || null,
-          };
+    if (authCookie?.value) {
+      const payload = decodeJwt(authCookie.value);
+      const expiresAt = payload?.exp ? payload.exp * 1000 : Date.now() + AUTH_TOKEN_MAX_AGE_MS;
+      if (expiresAt > Date.now()) {
+        const refreshCookie = cookies.find(c => c.name.toLowerCase().includes('refresh'));
+        const state: AuthState = {
+          token: authCookie.value,
+          expiresAt,
+          refreshToken: refreshCookie?.value || null,
+        };
+        if (saveCookieFile) {
           await saveCookies(email, state.token, state.refreshToken, state.expiresAt);
-          return state;
         }
+        return state;
       }
-    } finally {
-      try { await context.close(); } catch { /* non-blocking */ }
     }
   } catch (err: any) {
-    console.warn(`[Auth] Profile cookie load failed for ${email}: ${err.message}`);
+    if (err?.message?.toLowerCase().includes('lock')) return null;
+    throw err;
+  } finally {
+    if (context) {
+      try { await context.close(); } catch { /* non-blocking */ }
+    }
   }
   return null;
 }
