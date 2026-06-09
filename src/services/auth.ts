@@ -6,14 +6,14 @@
  */
 
 import crypto from 'crypto';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { getActivePage, getBrowser } from './playwright.ts';
 import { logStore } from './logStore.js';
 import {
-  decodeJwt,
+  COOKIE_DIR, getCookieFilePath, decodeJwt,
+  discoverSavedAccounts,
   loadAccountsFromFile, setupAccountWatcher as setupAccountWatcherImpl,
   enableHotReload as enableHotReloadImpl, resetWatcherState,
-  encrypt, decrypt,
 } from './accountManager.ts';
 import { needsRefresh, ensureAccountFresh } from './tokenRefresh.ts';
 import { LoginMutex, loginFreshViaBrowser, loginFreshViaFetch, loginViaTempContext } from './loginHelpers.ts';
@@ -21,14 +21,15 @@ import { config } from './configService.ts';
 
 export { tryRefreshToken, ensureAccountFresh, needsRefresh } from './tokenRefresh.ts';
 export {
-  addAccount, removeAccount, reloadAccounts,
-  decodeJwt,
+  addAccount, removeAccount, reloadAccounts, discoverSavedAccounts,
+  COOKIE_DIR, getCookieFilePath, decodeJwt,
   isAvailable, pickAccount, incrementInFlight, decrementInFlight,
   incrementTotalRequests, hasInFlight, getAccountByEmail,
   getToken, getTokenWithAccount, throttleAccount, isAccountThrottled,
   getAccountStats, getAccountCount, getAvailableCount, getAllAccountEmails, getAccounts,
 } from './accountManager.ts';
 export type { CookieData } from './accountManager.ts';
+import type { CookieData } from './accountManager.ts';
 
 export const AUTH_TOKEN_MAX_AGE_MS = parseInt(config.get('AUTH_TOKEN_MAX_AGE_MS', '28800000'), 10);
 export const AUTH_REFRESH_BEFORE_MS = parseInt(config.get('AUTH_REFRESH_BEFORE_MS', '300000'), 10);
@@ -120,14 +121,27 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
   initDone = true;
 
   const persisted = loadAccountsFromFile();
+  const discovered = discoverSavedAccounts();
 
-  if (persisted.length === 0) {
+  const merged = [...discovered];
+  for (const p of persisted) {
+    const existing = merged.find(a => a.email.toLowerCase().trim() === p.email.toLowerCase().trim());
+    if (existing) {
+      if (p.password && !existing.password) {
+        existing.password = p.password;
+      }
+    } else if (p.password) {
+      merged.push(p);
+    }
+  }
+
+  if (merged.length === 0) {
     console.warn('[Auth] No saved accounts found. Run: npm run login user@example.com');
     return;
   }
 
   accounts.length = 0;
-  for (const a of persisted) {
+  for (const a of merged) {
     accounts.push({
       email: a.email,
       password: a.password,
@@ -141,37 +155,35 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
     });
   }
 
-  // Phase 1: Parallel — extract fresh cookies from Chromium profiles for ALL accounts
-  await Promise.allSettled(accounts.map(async (acct) => {
-    const profileState = await loadCookiesFromProfile(acct.email);
-    if (profileState) {
-      acct.state = profileState;
-    }
-  }));
-
-  // Phase 2: Sequential — password-based login for accounts without a profile session
   for (let i = 0; i < accounts.length; i++) {
     const acct = accounts[i];
-    if (!acct.state && acct.password) {
-      const newState = await loginFresh(acct.email, acct.password);
-      if (newState) {
-        acct.state = newState;
-        await saveCookies(acct.email, newState.token, newState.refreshToken, newState.expiresAt);
-      }
-      if (i < accounts.length - 1) {
-        await new Promise(r => setTimeout(r, 2000));
+
+    const savedState = await loadSavedCookies(acct.email);
+    if (savedState) {
+      acct.state = savedState;
+    } else {
+      const profileState = await loadCookiesFromProfile(acct.email);
+      if (profileState) {
+        acct.state = profileState;
+      } else if (acct.password) {
+        const newState = await loginFresh(acct.email, acct.password);
+        if (newState) {
+          acct.state = newState;
+          await saveCookies(acct.email, newState.token, newState.refreshToken, newState.expiresAt);
+        }
       }
     }
-  }
 
-  // Phase 3: Sequential — post-login config for each authenticated account
-  for (const acct of accounts) {
     if (acct.state?.token && onAccountReady) {
       try {
         await onAccountReady(acct.email);
       } catch (err: any) {
         logStore.log('warn', 'auth', `Post-login config failed for ${acct.email}: ${err.message}`);
       }
+    }
+
+    if (i < accounts.length - 1) {
+      await new Promise(r => setTimeout(r, acct.password && !acct.state ? 2000 : 1000));
     }
   }
 
@@ -202,94 +214,114 @@ export async function ensureAllFresh(): Promise<void> {
   await Promise.allSettled(stale.map(a => ensureAccountFresh(a)));
 }
 
-export async function loadCookiesFromProfile(email: string): Promise<AuthState | null> {
+export async function loadSavedCookies(email: string): Promise<AuthState | null> {
   try {
-    const { getProfileDir } = await import('./playwright.ts');
-    const managedDir = getProfileDir(email); // creates dir if missing
-    return await tryExtractCookies(managedDir, email, true);
+    const filePath = getCookieFilePath(email);
+    if (!existsSync(filePath)) return null;
+
+    const raw = readFileSync(filePath, 'utf-8');
+    const data = JSON.parse(raw) as CookieData;
+
+    if (!data.token || data.email.toLowerCase() !== email.toLowerCase()) return null;
+
+    const payload = decodeJwt(data.token);
+    if (payload?.exp && payload.exp * 1000 < Date.now()) {
+      return null;
+    }
+
+    return {
+      token: data.token,
+      expiresAt: data.expiresAt,
+      refreshToken: data.refreshToken,
+    };
   } catch (err: any) {
-    console.warn(`[Auth] Profile cookie load failed for ${email}: ${err.message}`);
+    console.warn(`[Auth] Failed to load saved cookies for ${email}: ${err.message}`);
     return null;
   }
 }
 
-async function tryExtractCookies(profilePath: string, email: string, saveCookieFile: boolean): Promise<AuthState | null> {
-  const { launchPersistentContext } = await import('cloakbrowser');
-  let context: any = null;
+export async function loadCookiesFromProfile(email: string): Promise<AuthState | null> {
   try {
-    context = await launchPersistentContext({
-      userDataDir: profilePath,
+    const { getProfileDir } = await import('./playwright.ts');
+    const profileDir = getProfileDir(email);
+    if (!existsSync(profileDir)) return null;
+
+    const { launchPersistentContext } = await import('cloakbrowser');
+    const context = await launchPersistentContext({
+      userDataDir: profileDir,
       headless: true,
-      viewport: { width: 1920, height: 1080 },
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--mute-audio',
-        '--no-first-run',
-        '--disable-background-networking',
-        '--disable-default-apps',
-        '--disable-sync',
-        '--disable-translate',
-        '--disable-blink-features=AutomationControlled',
-      ],
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--mute-audio', '--no-first-run', '--disable-background-networking', '--disable-default-apps', '--disable-sync', '--disable-translate', '--disable-blink-features=AutomationControlled'],
     });
 
-    let cookies: Array<{ name: string; value: string; expires?: number }> = await context.cookies();
-    const hasAuth = cookies.some(c => {
-      const n = c.name.toLowerCase();
-      if (n.includes('refresh')) return false;
-      return n.includes('token') || n.includes('session');
-    });
+    try {
+      let cookies = await context.cookies();
+      const hasAuth = cookies.some(c => {
+        const n = c.name.toLowerCase();
+        if (n.includes('refresh')) return false;
+        return n.includes('token') || n.includes('session');
+      });
 
-    if (!hasAuth) {
-      const page = context.pages()[0] || await context.newPage();
-      await page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded', timeout: 15000 });
-      await new Promise(r => setTimeout(r, 2000));
-      cookies = await context.cookies();
-    }
-
-    const authCookie = cookies.find(c => {
-      const n = c.name.toLowerCase();
-      if (n.includes('refresh')) return false;
-      return n.includes('token') || n.includes('session');
-    });
-
-    if (authCookie?.value) {
-      const payload = decodeJwt(authCookie.value);
-      const expiresAt = payload?.exp ? payload.exp * 1000 : Date.now() + AUTH_TOKEN_MAX_AGE_MS;
-      if (expiresAt > Date.now()) {
-        const refreshCookie = cookies.find(c => c.name.toLowerCase().includes('refresh'));
-        const state: AuthState = {
-          token: authCookie.value,
-          expiresAt,
-          refreshToken: refreshCookie?.value || null,
-        };
-        if (saveCookieFile) {
-          await saveCookies(email, state.token, state.refreshToken, state.expiresAt, true);
-        }
-        return state;
+      if (!hasAuth) {
+        const page = context.pages()[0] || await context.newPage();
+        await page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await new Promise(r => setTimeout(r, 2000));
+        cookies = await context.cookies();
       }
+
+      const authCookie = cookies.find(c => {
+        const n = c.name.toLowerCase();
+        if (n.includes('refresh')) return false;
+        return n.includes('token') || n.includes('session');
+      });
+
+      if (authCookie?.value) {
+        const payload = decodeJwt(authCookie.value);
+        const expiresAt = payload?.exp ? payload.exp * 1000 : Date.now() + AUTH_TOKEN_MAX_AGE_MS;
+        if (expiresAt > Date.now()) {
+          const refreshCookie = cookies.find(c => c.name.toLowerCase().includes('refresh'));
+          const state: AuthState = {
+            token: authCookie.value,
+            expiresAt,
+            refreshToken: refreshCookie?.value || null,
+          };
+          await saveCookies(email, state.token, state.refreshToken, state.expiresAt);
+          return state;
+        }
+      }
+    } finally {
+      try { await context.close(); } catch { /* non-blocking */ }
     }
   } catch (err: any) {
     if (err?.message?.toLowerCase().includes('lock')) return null;
-    throw err;
-  } finally {
-    if (context) {
-      try { await context.close(); } catch { /* non-blocking */ }
-    }
+    console.warn(`[Auth] Profile cookie load failed for ${email}: ${err.message}`);
   }
   return null;
 }
 
-export async function saveCookies(email: string, token: string, refreshToken?: string | null, expiresAt?: number, skipProfile?: boolean): Promise<void> {
+export async function saveCookies(email: string, token: string, refreshToken?: string | null, expiresAt?: number): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
   try {
-    const jwtExpiresAt = expiresAt || (() => {
+    if (!existsSync(COOKIE_DIR)) mkdirSync(COOKIE_DIR, { recursive: true });
+
+    let jwtExpiresAt = expiresAt;
+    if (!jwtExpiresAt) {
       const payload = decodeJwt(token);
-      if (payload?.exp && typeof payload.exp === 'number') return payload.exp * 1000;
-      return Date.now() + AUTH_TOKEN_MAX_AGE_MS;
-    })();
+      if (payload?.exp && typeof payload.exp === 'number') {
+        jwtExpiresAt = payload.exp * 1000;
+      } else {
+        jwtExpiresAt = Date.now() + AUTH_TOKEN_MAX_AGE_MS;
+      }
+    }
+
+    const data = {
+      email: normalizedEmail,
+      token,
+      refreshToken: refreshToken || null,
+      savedAt: Date.now(),
+      expiresAt: jwtExpiresAt,
+    };
+
+    writeFileSync(getCookieFilePath(normalizedEmail), JSON.stringify(data, null, 2), 'utf-8');
 
     const acct = accounts.find(a => a.email.toLowerCase().trim() === normalizedEmail);
     if (acct && token) {
@@ -302,46 +334,8 @@ export async function saveCookies(email: string, token: string, refreshToken?: s
         acct.throttledUntil = 0;
       }
     }
-
-    if (!skipProfile) {
-      await saveCookiesToProfile(normalizedEmail, token, refreshToken || null);
-    }
-
   } catch (err: any) {
     console.error(`[Auth] Failed to save cookies for ${normalizedEmail}: ${err.message}`);
-  }
-}
-
-/**
- * Inject the auth token into the persistent Chromium profile so
- * loadCookiesFromProfile can find it on the next boot.
- */
-async function saveCookiesToProfile(email: string, token: string, refreshToken: string | null): Promise<void> {
-  try {
-    const { getProfileDir } = await import('./playwright.ts');
-    const profileDir = getProfileDir(email);
-    const { launchPersistentContext } = await import('cloakbrowser');
-
-    const cookies: Array<{ name: string; value: string; domain: string; path: string }> = [
-      { name: 'token', value: token, domain: '.chat.qwen.ai', path: '/' },
-    ];
-    if (refreshToken) {
-      cookies.push({ name: 'refresh_token', value: refreshToken, domain: '.chat.qwen.ai', path: '/' });
-    }
-
-    const context = await launchPersistentContext({
-      userDataDir: profileDir,
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--mute-audio', '--no-first-run'],
-    });
-    try {
-      await context.addCookies(cookies);
-    } finally {
-      await context.close();
-    }
-  } catch (err: any) {
-    // Non-blocking — profile might be locked or unavailable
-    console.warn(`[Auth] Profile cookie injection failed for ${email}: ${err.message}`);
   }
 }
 

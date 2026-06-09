@@ -114,7 +114,7 @@ async function tryCheckToken(context: any, email: string): Promise<LoginResult |
     if (!tokenCookie) return null;
     const { saveCookies } = await import('./auth.ts');
     const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
-    await saveCookies(email, tokenCookie.value, refreshCookie?.value, undefined, true);
+    await saveCookies(email, tokenCookie.value, refreshCookie?.value);
     try { await context.close(); } catch { /* non-blocking */ }
     return 'success';
   } catch {
@@ -229,7 +229,7 @@ export async function refreshViaProfile(email: string): Promise<boolean> {
       if (tokenCookie && tokenCookie.expires && tokenCookie.expires * 1000 > Date.now()) {
         const { saveCookies } = await import('./auth.ts');
         const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
-        await saveCookies(email, tokenCookie.value, refreshCookie?.value, undefined, true);
+        await saveCookies(email, tokenCookie.value, refreshCookie?.value);
         try { await context.close(); } catch { /* non-blocking */ }
         return true;
       }

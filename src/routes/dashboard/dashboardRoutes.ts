@@ -11,7 +11,6 @@ import {
   getAllAccountEmails,
   initAuth,
 } from "../../services/auth.ts";
-import { safeCompare } from "../../utils/auth.ts";
 import { projectPath } from "../../utils/paths.ts";
 import {
   deleteAllChats,

@@ -5,13 +5,19 @@
  */
 import crypto from 'crypto';
 import path from 'path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, unlinkSync, watch } from 'fs';
 import { loginFresh, saveCookies, accounts, type AccountEntry } from "./auth.ts";
 import { configureAccount } from './qwenModels.ts';
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
 import { projectPath } from '../utils/paths.ts';
+
+export const COOKIE_DIR = projectPath('qwen_profile', 'cookies');
 const ACCOUNTS_FILE = projectPath('qwen_profile', 'accounts.json');
+export function getCookieFilePath(email: string): string {
+  const hash = crypto.createHash('md5').update(email.toLowerCase().trim()).digest('hex');
+  return path.join(COOKIE_DIR, `${hash}.json`);
+}
 function getProfileDirForEmail(email: string): string {
   const safe = email.toLowerCase().trim().replace(/[^a-z0-9]/g, '_');
   return projectPath('qwen_profile', safe);
@@ -43,6 +49,38 @@ export function parseAccountsFromEnv(): Array<{ email: string; password: string 
   }
   return result;
 }
+export function discoverSavedAccounts(): Array<{ email: string; password: string }> {
+  try {
+    const diskAccounts: Array<{ email: string; password: string }> = [];
+    if (existsSync(COOKIE_DIR)) {
+      const files = readdirSync(COOKIE_DIR).filter((f: string) => f.endsWith('.json'));
+      for (const file of files) {
+        try {
+          const data: CookieData = JSON.parse(readFileSync(path.join(COOKIE_DIR, file), 'utf-8'));
+          if (data.email && data.token) {
+            diskAccounts.push({ email: data.email, password: '' });
+          }
+        } catch (err) {
+          console.error(`[Auth] Failed to parse saved account file ${file}:`, err);
+        }
+      }
+    }
+    const envAccounts = parseAccountsFromEnv();
+    const merged = [...diskAccounts];
+    for (const envAcct of envAccounts) {
+      const existing = merged.find(a => a.email.toLowerCase().trim() === envAcct.email.toLowerCase().trim());
+      if (existing) {
+        existing.password = envAcct.password;
+      } else {
+        merged.push({ email: envAcct.email, password: envAcct.password });
+      }
+    }
+    return merged;
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Decode a JWT token and return its payload, or null if invalid.
  */
@@ -175,6 +213,14 @@ export async function removeAccount(
   }
   accounts.splice(index, 1);
   saveAccountsToFile(accounts);
+  const cookieFile = getCookieFilePath(normalizedEmail);
+  if (existsSync(cookieFile)) {
+    try {
+      unlinkSync(cookieFile);
+    } catch (err: any) {
+      console.error(`[Auth] Failed to delete cookie file for ${normalizedEmail}:`, err.message);
+    }
+  }
   const profileDir = getProfileDirForEmail(normalizedEmail);
   if (existsSync(profileDir)) {
     try {
@@ -185,22 +231,101 @@ export async function removeAccount(
   }
 }
 /**
- * Reload accounts from accounts.json (no-op for now, kept for API compatibility)
+ * Re-scan COOKIE_DIR and merge changes into the live accounts array.
  */
 export async function reloadAccounts(): Promise<void> {
-  // No longer watches cookie files - accounts come from accounts.json only
+  if (accountWatcher && !watcherReady) {
+    return;
+  }
+  const discovered = discoverSavedAccounts();
+  const discoveredEmails = new Set(discovered.map(d => d.email.toLowerCase().trim()));
+  const existingEmails = new Set(accounts.map(a => a.email.toLowerCase().trim()));
+  let added = 0;
+  let removed = 0;
+  for (const d of discovered) {
+    const email = d.email.toLowerCase().trim();
+    if (!existingEmails.has(email)) {
+      const entry: AccountEntry = {
+        email,
+        password: d.password,
+        state: null,
+        lastUsed: 0,
+        throttledUntil: 0,
+        refreshInFlight: null,
+        loginAttempt: 0,
+        inFlight: 0,
+        totalRequests: 0,
+      };
+      const { loadSavedCookies } = await import('./auth.ts');
+      const savedState = await loadSavedCookies(email);
+      if (savedState) {
+        entry.state = savedState;
+      }
+      accounts.push(entry);
+      added++;
+    }
+  }
+  for (let i = accounts.length - 1; i >= 0; i--) {
+    const acct = accounts[i];
+    if (!discoveredEmails.has(acct.email.toLowerCase().trim())) {
+      const cookieFile = getCookieFilePath(acct.email);
+      if (existsSync(cookieFile)) {
+        continue;
+      }
+      if (acct.inFlight > 0) {
+        continue;
+      }
+      accounts.splice(i, 1);
+      removed++;
+    }
+  }
+}
+let accountWatcher: any = null;
+let reloadDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+let watcherReady = false;
+/**
+ * Set up fs.watch on COOKIE_DIR with 300ms debounce to detect account file changes.
+ */
+export function setupAccountWatcher(): void {
+  if (accountWatcher) return;
+  if (!existsSync(COOKIE_DIR)) {
+    mkdirSync(COOKIE_DIR, { recursive: true });
+  }
+  try {
+    accountWatcher = watch(COOKIE_DIR, (_eventType: string, filename: string | null) => {
+      if (!filename || !filename.endsWith('.json')) return;
+      if (reloadDebounceTimer) clearTimeout(reloadDebounceTimer);
+      reloadDebounceTimer = setTimeout(() => {
+        reloadDebounceTimer = null;
+        reloadAccounts().catch(err => {
+          console.error(`[Auth] Hot-reload failed: ${err.message}`);
+        });
+      }, 500);
+    });
+    accountWatcher.on('error', (err: any) => {
+      console.error(`[Auth] Account watcher error: ${err.message}`);
+      try { accountWatcher?.close(); } catch {
+        // non-blocking: watcher may already be closed
+      }
+      accountWatcher = null;
+      watcherReady = false;
+      setTimeout(() => {
+        setupAccountWatcher();
+      }, 10000).unref();
+    });
+    setTimeout(() => { watcherReady = true; }, 2000);
+  } catch (err: any) {
+    console.error(`[Auth] Failed to set up account watcher: ${err.message}`);
+  }
 }
 /**
- * Enable hot-reload (no-op - kept for API compatibility)
+ * Enable hot-reload by starting the account file watcher.
  */
 export function enableHotReload(): void {
-  // No longer watches cookie files
+  setupAccountWatcher();
 }
 export function resetWatcherState(): void {
-  // No-op
-}
-export function setupAccountWatcher(): void {
-  // No-op
+  watcherReady = false;
 }
 const DEFAULT_THROTTLE_MS = parseInt(config.get('RATE_LIMIT_COOLDOWN_MS', '120000'), 10);
 /** Promise-chain mutex to prevent TOCTOU races in pickAccount */
