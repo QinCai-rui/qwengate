@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Dashboard Script Injection**: Fixed critical bug where `serveHtml` broke all `<script src="...">` tags when injecting `window.APP_VERSION`, causing the entire dashboard to crash. The string-based `.replace("<script>", ...)` now uses regex `/(<script\b)/` to properly inject before existing script tags. ([#5](https://github.com/youssefvdel/qwen-gate/issues/5)) — reported and fixed by [@ericjoo98-ai](https://github.com/ericjoo98-ai)
+
 ## [0.2.0] - 2026-06-04
 
 ### Added
