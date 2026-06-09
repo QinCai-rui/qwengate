@@ -154,10 +154,8 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
     });
   }
 
-  for (let i = 0; i < accounts.length; i++) {
-    const acct = accounts[i];
-
-    // Try Chromium profile FIRST for the freshest session cookies
+  // Phase 1: Parallel — try profiles and saved cookies for ALL accounts at once
+  await Promise.allSettled(accounts.map(async (acct) => {
     const profileState = await loadCookiesFromProfile(acct.email);
     if (profileState) {
       acct.state = profileState;
@@ -165,25 +163,33 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       const savedState = await loadSavedCookies(acct.email);
       if (savedState) {
         acct.state = savedState;
-      } else if (acct.password) {
-        const newState = await loginFresh(acct.email, acct.password);
-        if (newState) {
-          acct.state = newState;
-          await saveCookies(acct.email, newState.token, newState.refreshToken, newState.expiresAt);
-        }
       }
     }
+  }));
 
+  // Phase 2: Sequential — password-based login for accounts that still need it
+  for (let i = 0; i < accounts.length; i++) {
+    const acct = accounts[i];
+    if (!acct.state && acct.password) {
+      const newState = await loginFresh(acct.email, acct.password);
+      if (newState) {
+        acct.state = newState;
+        await saveCookies(acct.email, newState.token, newState.refreshToken, newState.expiresAt);
+      }
+      if (i < accounts.length - 1) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+  }
+
+  // Phase 3: Sequential — post-login config for each authenticated account
+  for (const acct of accounts) {
     if (acct.state?.token && onAccountReady) {
       try {
         await onAccountReady(acct.email);
       } catch (err: any) {
         logStore.log('warn', 'auth', `Post-login config failed for ${acct.email}: ${err.message}`);
       }
-    }
-
-    if (i < accounts.length - 1) {
-      await new Promise(r => setTimeout(r, acct.password && !acct.state ? 2000 : 1000));
     }
   }
 
@@ -272,7 +278,19 @@ async function tryExtractCookies(profilePath: string, email: string, saveCookieF
     context = await launchPersistentContext({
       userDataDir: profilePath,
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--mute-audio'],
+      viewport: { width: 1920, height: 1080 },
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--mute-audio',
+        '--no-first-run',
+        '--disable-background-networking',
+        '--disable-default-apps',
+        '--disable-sync',
+        '--disable-translate',
+        '--disable-blink-features=AutomationControlled',
+      ],
     });
 
     let cookies: Array<{ name: string; value: string; expires?: number }> = await context.cookies();
