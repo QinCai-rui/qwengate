@@ -263,7 +263,7 @@ export async function loginViaTempContext(
           if (jsonToken && !capturedToken) capturedToken = jsonToken;
           if (jsonRefresh && !capturedRefresh) capturedRefresh = jsonRefresh;
         } catch {
-          // non-JSON response, fall through to cookie extraction
+          logStore.log('warn', 'auth', 'signin route fetch returned non-JSON response');
         }
 
         // Also check set-cookie headers as fallback
@@ -287,7 +287,7 @@ export async function loginViaTempContext(
     try {
       await page.goto(`${QWEN_CHAT_URL}/auth`, { waitUntil: 'domcontentloaded', timeout: 20_000 });
     } catch {
-      // non-blocking
+      logStore.log('warn', 'auth', `goto auth page failed for ${email}`);
     }
 
     try {
@@ -299,7 +299,7 @@ export async function loginViaTempContext(
         page.waitForURL(url => !url.toString().includes('/auth'), { timeout: 15_000 }).catch(() => {}),
       ]);
     } catch {
-      // non-blocking
+      logStore.log('warn', 'auth', `form fill/submit failed for ${email}`);
     }
 
     // Poll for token with shorter intervals instead of blind sleep
@@ -321,7 +321,7 @@ export async function loginViaTempContext(
         if (tokenCookie?.value) capturedToken = tokenCookie.value;
         if (refreshCookie?.value) capturedRefresh = refreshCookie.value;
       } catch {
-        // non-blocking
+        logStore.log('warn', 'auth', `cookie read failed during poll for ${email}`);
       }
     }
 

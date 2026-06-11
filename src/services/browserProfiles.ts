@@ -84,10 +84,10 @@ async function fillLoginForm(page: any, email: string, password: string): Promis
       const submitBtn = page.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Login"), button:has-text("Log in"), button:has-text("Continue")').first();
       await submitBtn.click({ timeout: 3000 });
     } catch {
-      // non-blocking: submit button may not exist on some login pages
+      logStore.log('warn', 'browser', 'submit button click failed for fillLoginForm');
     }
   } catch {
-    // non-blocking: form fill may fail if selector not found
+    logStore.log('warn', 'browser', 'form fill failed - selector not found for fillLoginForm');
   }
 }
 
@@ -116,10 +116,10 @@ async function tryCheckToken(context: any, email: string): Promise<LoginResult |
     const { saveCookies } = await import('./auth.ts');
     const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
     await saveCookies(email, tokenCookie.value, refreshCookie?.value);
-    try { await context.close(); } catch { /* non-blocking */ }
+    try { await context.close(); } catch { logStore.log('warn', 'browser', 'context.close failed in tryCheckToken success'); }
     return 'success';
   } catch {
-    try { await context.close(); } catch { /* non-blocking */ }
+    try { await context.close(); } catch { logStore.log('warn', 'browser', 'context.close failed in tryCheckToken error'); }
     return 'closed';
   }
 }
@@ -130,10 +130,10 @@ async function tryCheckCaptcha(page: any, context: any, attempt: number, headles
     const hasCaptcha = await detectCaptcha(page);
     if (!hasCaptcha) return null;
     if (headless) {
-      try { await context.close(); } catch { /* non-blocking */ }
+      try { await context.close(); } catch { logStore.log('warn', 'browser', 'context.close failed in tryCheckCaptcha'); }
       return 'captcha';
     }
-  } catch { /* captcha detection failure is non-blocking */ }
+  } catch { logStore.log('warn', 'browser', 'captcha detection failed in tryCheckCaptcha'); }
   return null;
 }
 
@@ -186,15 +186,11 @@ export async function openBrowserProfile(email: string, password?: string, optio
     }
 
     logStore.log('error', 'browser', `Headless timeout — no login detected for ${email}, closing browser`);
-    try { await context.close(); } catch {
-      // non-blocking
-    }
+    try { await context.close(); } catch { logStore.log('warn', 'browser', `context.close failed after timeout for ${email}`); }
     return 'error';
   } catch (err: any) {
     logStore.log('error', 'browser', `Error for ${email}: ${err.message}`);
-    if (context) { try { await context.close(); } catch {
-      // non-blocking
-    } }
+    if (context) { try { await context.close(); } catch { logStore.log('warn', 'browser', `context.close failed in outer catch for ${email}`); } }
     return 'error';
   }
 }
@@ -239,26 +235,19 @@ export async function refreshViaProfile(email: string): Promise<boolean> {
         const { saveCookies } = await import('./auth.ts');
         const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
         await saveCookies(email, tokenCookie.value, refreshCookie?.value);
-        try { await context.close(); } catch { /* non-blocking */ }
+        try { await context.close(); } catch { logStore.log('warn', 'browser', `context.close failed after token save for ${email}`); }
         return true;
       }
     }
 
     logStore.log('error', 'browser', `No valid token found after profile navigation for ${email}`);
-    try { await context.close(); } catch {
-      // intentional
-    }
+    try { await context.close(); } catch { logStore.log('warn', 'browser', `context.close failed after navigation for ${email}`); }
     return false;
   } catch (err: any) {
     logStore.log('error', 'browser', `Profile refresh error for ${email}: ${err.message}`);
-    if (context) { try { await context.close(); } catch {
-      // intentional
-    } }
+    if (context) { try { await context.close(); } catch { logStore.log('warn', 'browser', `context.close failed in outer catch for ${email}`); } }
     return false;
   }
 }
 
-export async function autoFillLogin(email: string, password: string): Promise<boolean> {
-  const result = await openBrowserProfile(email, password);
-  return result === 'success';
-}
+

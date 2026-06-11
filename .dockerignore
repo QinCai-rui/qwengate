@@ -1,0 +1,6 @@
+.git
+.qwen/
+logs/
+node_modules/
+src/
+tsconfig*.json

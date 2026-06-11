@@ -21,6 +21,7 @@ Thumbs.db
 
 # Testing and coverage
 coverage/
+.husky/_/
 .cache/
 playwright-report/
 

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
@@ -20,6 +21,11 @@ import { debugNetworkApp } from "./routes/debugNetwork.ts";
 import { registerDashboardRoutes } from "./routes/dashboard/dashboardRoutes.ts";
 import { projectPath } from "./utils/paths.ts";
 import { fileURLToPath } from "url";
+import { writeFileSync, unlinkSync, existsSync } from "fs";
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[FATAL] Unhandled Promise Rejection:', reason);
+});
+
 console.clear();
 process.stdout.write("\x1bc\x1b[3J\x1b[2J\x1b[H");
 
@@ -70,6 +76,8 @@ async function gracefulShutdown(_signal: string): Promise<void> {
   }
   try { await closePlaywright(); } catch (err: any) { console.error("[Shutdown] Playwright close error:", err.message); }
   stopAutoCleanup();
+  const pidFile = projectPath('.qwen', 'gate.pid');
+  try { if (existsSync(pidFile)) unlinkSync(pidFile); } catch { /* best effort */ }
   process.exit(0);
 }
 
@@ -155,6 +163,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   logStore.enableRequestFileLogging(projectPath("logs", "gate"));
 
   const port = parseInt(config.get("PORT"), 10) || 26405;
+  const hostArg = process.argv.indexOf('--host');
+  const host = hostArg !== -1 && process.argv[hostArg + 1]
+    ? process.argv[hostArg + 1]
+    : config.get("HOST") || "localhost";
 
   // Show banner immediately on startup
   process.stdout.write(`\x1b[31m
@@ -176,24 +188,44 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   ███    ███   ███    ███     ███       ███    ███
   ████████▀    ███    █▀     ▄████▀     ██████████
 
-  \x1b[0m\x1b[32m●\x1b[0m Port: ${port}
-  \x1b[32m●\x1b[0m API: localhost:${port}/v1
-  \x1b[32m●\x1b[0m Dashboard: http://localhost:${port}/dashboard (Ctrl+Click)\x1b[0m
+  \x1b[0m\x1b[32m●\x1b[0m Host: ${host}
+  \x1b[32m●\x1b[0m Port: ${port}
+  \x1b[32m●\x1b[0m API: ${host}:${port}/v1
+  \x1b[32m●\x1b[0m Dashboard: http://${host}:${port}/dashboard (Ctrl+Click)\x1b[0m
   `);
 
   initPlaywright(true, browserType)
     .then(async () => {
       // ── Phase 1: Start HTTP server FIRST so dashboard is live immediately ──
-      serverInstance = serve({
-        fetch: app.fetch,
-        port,
-        serverOptions: {
-          requestTimeout: 600_000,
-          keepAliveTimeout: 75_000,
-          headersTimeout: 65_000,
-        },
-      });
-      logStore.log("info", "server", "Server started on port " + port);
+      try {
+        serverInstance = serve({
+          fetch: app.fetch,
+          port,
+          hostname: host,
+          serverOptions: {
+            requestTimeout: 600_000,
+            keepAliveTimeout: 75_000,
+            headersTimeout: 65_000,
+          },
+        });
+      } catch (err: any) {
+        if (err.code === 'EADDRINUSE') {
+          console.warn(`Port ${port} in use, trying ${port + 1}...`);
+          serverInstance = serve({
+            fetch: app.fetch,
+            port: port + 1,
+            hostname: host,
+            serverOptions: {
+              requestTimeout: 600_000,
+              keepAliveTimeout: 75_000,
+              headersTimeout: 65_000,
+            },
+          });
+        } else { throw err; }
+      }
+      const pidFile = projectPath('.qwen', 'gate.pid');
+      try { writeFileSync(pidFile, String(process.pid)); } catch { /* best effort */ }
+      logStore.log("info", "server", `Server started on ${host}:${port}`);
 
       if (config.get("OPEN_DASHBOARD_ON_START") === "true") {
         const { exec } = await import("child_process");

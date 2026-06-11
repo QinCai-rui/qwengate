@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { bearerAuth } from "hono/bearer-auth";
 import { resolve } from "path";
 import { readFileSync, existsSync } from "fs";
 import { config, isValidKey } from "../../services/configService.ts";
@@ -25,8 +26,9 @@ import { settingsHtml } from "./settings.ts";
 import { APP_VERSION } from "../../utils/version.ts";
 
 const serveHtml = (html: string) => (c: any) => {
-  const scriptInjection = `<script>\nwindow.APP_VERSION = '${APP_VERSION}';\n</script>\n`;
+  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\n</script>\n`;
   const output = html.replace(/(<script\b)/, scriptInjection + "$1");
+  c.header("Content-Security-Policy", "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:;");
   return c.html(output);
 };
 
@@ -79,15 +81,19 @@ async function deleteAllChatsHandler(c: any) {
     async start(controller) {
       let deleted = 0;
       const errors: string[] = [];
+      const maskEmail = (e: string) => {
+        const at = e.indexOf('@');
+        return at > 0 ? e.slice(0, Math.min(at, 3)) + '***' + e.slice(at) : e;
+      };
       for (const email of emails) {
         try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "progress", email, status: "deleting" })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "progress", email: maskEmail(email), status: "deleting" })}\n\n`));
           await deleteAllChats(email);
           deleted++;
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "progress", email, status: "done" })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "progress", email: maskEmail(email), status: "done" })}\n\n`));
         } catch (err: any) {
-          errors.push(`${email}: ${err.message}`);
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "progress", email, status: "error", error: err.message })}\n\n`));
+          errors.push(`${maskEmail(email)}: ${err.message}`);
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "progress", email: maskEmail(email), status: "error", error: err.message })}\n\n`));
         }
       }
       controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "result", ok: true, deleted, total: emails.length, errors: errors.length ? errors : undefined })}\n\n`));
@@ -193,7 +199,7 @@ function logStreamHandler(c: any) {
         };
 
         for (const entry of logStore.getRecent(50)) {
-          if (!safeEnqueue(`data: ${JSON.stringify(entry)}\n\n`)) break;
+          if (!safeEnqueue(`data: ${JSON.stringify(sanitizeLogEntry(entry))}\n\n`)) break;
         }
 
         const heartbeat = setInterval(() => {
@@ -208,7 +214,7 @@ function logStreamHandler(c: any) {
         heartbeat.unref();
 
         const unsub = logStore.subscribe((entry) => {
-          if (!safeEnqueue(`data: ${JSON.stringify(entry)}\n\n`)) {
+          if (!safeEnqueue(`data: ${JSON.stringify(sanitizeLogEntry(entry))}\n\n`)) {
             unsub();
             clearInterval(heartbeat);
             try { controller.close(); } catch { /* stream already lost */ }
@@ -297,8 +303,8 @@ export function registerDashboardRoutes(app: Hono): void {
     return c.json(sessionPool.getStats());
   });
 
-  app.post("/admin/accounts/reload", accountsReloadHandler);
-  app.post("/dashboard/accounts/delete-all-chats", deleteAllChatsHandler);
+  app.post("/admin/accounts/reload", bearerAuth({ token: config.get("API_KEY") }), accountsReloadHandler);
+  app.post("/dashboard/accounts/delete-all-chats", bearerAuth({ token: config.get("API_KEY") }), deleteAllChatsHandler);
 
   app.get("/system/logs", systemLogsHandler);
   app.get("/metrics/model-health", modelHealthHandler);
@@ -311,7 +317,9 @@ export function registerDashboardRoutes(app: Hono): void {
   });
 
   app.get("/api/config", (c) => {
-    return c.json({ config: config.getAll() });
+    const all = config.getAll();
+    const safe = Object.fromEntries(Object.entries(all).filter(([k]) => !['API_KEY'].includes(k)));
+    return c.json({ config: safe });
   });
 
   app.put("/api/config", async (c) => {

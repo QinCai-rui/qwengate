@@ -46,7 +46,7 @@ export function scheduleCleanup(
     try { reader?.cancel(); } catch { /* ignore */ }
     try { reader?.releaseLock(); } catch { /* ignore */ }
     sessionPool.release(chatId, parentId, headers, email);
-  }, 200);
+  }, 0);
   return () => { cancelled = true; };
 }
 

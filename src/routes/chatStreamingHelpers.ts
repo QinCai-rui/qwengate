@@ -81,6 +81,7 @@ export interface StreamProcessingState {
   lastThinkingSnapshot: string;
   lastVStrRaw: string;
   loggedToolCalls: Set<string>;
+  lastParsePosition: number;
 }
 
 export interface StreamProcessingCtx {
@@ -196,7 +197,7 @@ export async function processStreamData(
   if (vStr === 'FINISHED') return 'continue';
 
   if (isThinkingChunk) {
-    state.reasoningBuffer += vStr;
+    if (state.reasoningBuffer.length < 20000) state.reasoningBuffer += vStr;
     state.deferredThinkingChunks.push(vStr);
     return 'continue';
   }
@@ -218,6 +219,7 @@ export async function processStreamData(
       rawText = '';
     } else {
       state.lastVStrRaw += vStr;
+      if (state.lastVStrRaw.length > 100000) state.lastVStrRaw = state.lastVStrRaw.slice(-100000);
     }
   } else {
     state.lastVStrRaw = vStr;
@@ -229,7 +231,8 @@ export async function processStreamData(
   }
 
   // Keep state.lastFullContent raw so partial <function=...> survives for the next chunk
-  const { toolCalls: xmlToolCalls } = parseXmlToolCalls(state.lastFullContent);
+  const newToolCallContent = state.lastFullContent.slice(state.lastParsePosition);
+  const { toolCalls: xmlToolCalls } = parseXmlToolCalls(newToolCallContent);
   if (xmlToolCalls.length > 0) {
     const newToolCalls = xmlToolCalls.filter(tc => {
       const key = `${tc.name}:${JSON.stringify(tc.parameters)}`;
@@ -247,9 +250,10 @@ export async function processStreamData(
     }
     
     for (const [i, tc] of newToolCalls.entries()) {
-      const parsed = xmlToolCallToParsed(tc, i);
-      await writeToolCallEvent(streamWriter, completionId, model, parsed, i);
+      const parsed = xmlToolCallToParsed(tc, ctx.emittedToolCallCount + i);
+      await writeToolCallEvent(streamWriter, completionId, model, parsed, ctx.emittedToolCallCount + i);
     }
+    ctx.emittedToolCallCount += newToolCalls.length;
   }
 
   // Truncate lastFullContent to prevent unbounded growth (M-10)
@@ -261,7 +265,12 @@ export async function processStreamData(
     state.lastFullContent = state.lastFullContent.slice(-80000);
     state.lastFilteredSnapshot = '';
     state.lastThinkingSnapshot = '';
+    state.lastParsePosition = 0;
   }
+
+  state.lastParsePosition = state.lastFullContent.length;
+
+  if (state.loggedToolCalls.size > 500) state.loggedToolCalls.clear();
 
   const pipelineResult = filterContentPipeline(state.lastFullContent, enableContentFiltering);
   const cleanedText = pipelineResult.cleanText;

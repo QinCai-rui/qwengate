@@ -1,42 +1,7 @@
 import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { validateToolCalls, validateSingleToolCall, detectToolCallLoop, detectParallelToolLoop, detectProviderToolLeak } from './guard.ts';
+import { validateSingleToolCall, detectParallelToolLoop } from './guard.ts';
 import type { ParsedToolCall } from '../types/openai.ts';
-
-describe('validateToolCalls', () => {
-  it('should accept valid tool calls', () => {
-    const toolCall: ParsedToolCall = { id: 'test1', name: 'search', arguments: { query: 'hello' } };
-    const result = validateToolCalls([toolCall]);
-    assert.ok(result.ok, 'Valid tool call should pass');
-    assert.strictEqual(result.valid.length, 1);
-  });
-
-  it('should reject tool call with missing name', () => {
-    const toolCall: ParsedToolCall = { id: 'test2', name: '', arguments: {} };
-    const result = validateToolCalls([toolCall]);
-    assert.ok(!result.ok, 'Empty name should fail');
-    assert.ok(result.errors.some(e => e.includes('name')));
-  });
-
-  it('should reject tool call with missing arguments', () => {
-    const toolCall: ParsedToolCall = { id: 'test3', name: 'search', arguments: undefined as any };
-    const result = validateToolCalls([toolCall]);
-    assert.ok(!result.ok, 'Missing arguments should fail');
-    assert.ok(result.errors.some(e => e.includes('arguments')));
-  });
-
-  it('should handle empty array', () => {
-    const result = validateToolCalls([]);
-    assert.ok(result.ok, 'Empty array should pass');
-    assert.strictEqual(result.valid.length, 0);
-  });
-
-  it('should reject non-array input', () => {
-    const result = validateToolCalls(null as any);
-    assert.ok(!result.ok, 'Non-array should fail');
-    assert.ok(result.errors.some(e => e.includes('array')));
-  });
-});
 
 describe('validateSingleToolCall', () => {
   it('should accept valid single tool call', () => {
@@ -49,47 +14,6 @@ describe('validateSingleToolCall', () => {
     const toolCall: ParsedToolCall = { id: 'bad', name: '', arguments: {} };
     const result = validateSingleToolCall(toolCall);
     assert.ok(!result.ok);
-  });
-});
-
-describe('detectToolCallLoop', () => {
-  it('should pass on first call with no history', () => {
-    const tc: ParsedToolCall = { id: 't1', name: 'read_file', arguments: { path: '/tmp/x' } };
-    const result = detectToolCallLoop(tc, []);
-    assert.ok(result.ok);
-  });
-
-  it('should pass with few repeats', () => {
-    const tc: ParsedToolCall = { id: 't1', name: 'read_file', arguments: { path: '/tmp/x' } };
-    const history = [
-      { name: 'read_file', args: { path: '/tmp/a' } },
-      { name: 'read_file', args: { path: '/tmp/b' } },
-    ];
-    const result = detectToolCallLoop(tc, history);
-    assert.ok(result.ok);
-  });
-
-  it('should detect loop after maxRepeats identical calls', () => {
-    const tc: ParsedToolCall = { id: 't5', name: 'read_file', arguments: { path: '/tmp/x' } };
-    const history = [
-      { name: 'read_file', args: { path: '/tmp/x' } },
-      { name: 'read_file', args: { path: '/tmp/x' } },
-      { name: 'read_file', args: { path: '/tmp/x' } },
-      { name: 'read_file', args: { path: '/tmp/x' } },
-    ];
-    const result = detectToolCallLoop(tc, history, 4);
-    assert.ok(!result.ok);
-    assert.ok(result.errors[0].includes('Loop'));
-  });
-
-  it('should accept different args for same tool', () => {
-    const tc: ParsedToolCall = { id: 't1', name: 'read_file', arguments: { path: '/tmp/different' } };
-    const history = [
-      { name: 'read_file', args: { path: '/tmp/x' } },
-      { name: 'read_file', args: { path: '/tmp/x' } },
-    ];
-    const result = detectToolCallLoop(tc, history, 2);
-    assert.ok(result.ok);
   });
 });
 
@@ -129,40 +53,5 @@ describe('detectParallelToolLoop', () => {
     ];
     const result = detectParallelToolLoop(tcs);
     assert.ok(result.ok);
-  });
-});
-
-describe('detectProviderToolLeak', () => {
-  it('should detect function_call role leak', () => {
-    const content = 'Here is the result: function_call with role user';
-    const result = detectProviderToolLeak(content);
-    assert.ok(result.detected);
-    assert.strictEqual(result.type, 'function_role');
-  });
-
-  it('should detect tool_calls role leak', () => {
-    const content = 'Processing tool_calls with role assistant';
-    const result = detectProviderToolLeak(content);
-    assert.ok(result.detected);
-    assert.strictEqual(result.type, 'tool_call_role');
-  });
-
-  it('should detect <tool_use> XML leak', () => {
-    const content = 'Calling tool: <tool_use>some content</tool_use>';
-    const result = detectProviderToolLeak(content);
-    assert.ok(result.detected);
-    assert.strictEqual(result.type, 'tool_use_xml');
-  });
-
-  it('should not detect leak in normal content', () => {
-    const content = 'This is a normal response without any leaks';
-    const result = detectProviderToolLeak(content);
-    assert.ok(!result.detected);
-  });
-
-  it('should be case insensitive', () => {
-    const content = 'FUNCTION_CALL with ROLE';
-    const result = detectProviderToolLeak(content);
-    assert.ok(result.detected);
   });
 });

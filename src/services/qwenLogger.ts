@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ParsedToolCall } from '../types/openai.ts';
 import type { QwenPayload } from './qwen.ts';
@@ -6,9 +6,33 @@ import { projectPath } from '../utils/paths.ts';
 
 const LOG_DIR = projectPath('logs', 'qwen');
 
+interface WriteEntry {
+  filepath: string;
+  data: string;
+}
+
+let writeQueue: WriteEntry[] = [];
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
 function ensureDir(): void {
   if (!existsSync(LOG_DIR)) {
     mkdirSync(LOG_DIR, { recursive: true });
+  }
+}
+
+function enqueueWrite(filepath: string, data: string): void {
+  writeQueue.push({ filepath, data });
+  if (!flushTimer) {
+    flushTimer = setTimeout(flushQueue, 500);
+  }
+}
+
+function flushQueue(): void {
+  flushTimer = null;
+  const batch = writeQueue;
+  writeQueue = [];
+  for (const entry of batch) {
+    writeFileSync(entry.filepath, entry.data);
   }
 }
 
@@ -25,7 +49,7 @@ export function logQwenRequest(
   const shortChat = chatId.substring(0, 8);
   const filename = `${dateStr}_${timeStr}_${shortChat}_request.json`;
   const filepath = join(LOG_DIR, filename);
-  writeFileSync(filepath, JSON.stringify(payload, null, 2));
+  enqueueWrite(filepath, JSON.stringify(payload, null, 2));
   return filepath;
 }
 
@@ -45,8 +69,20 @@ export function logQwenResponse(
     responsePreview: responsePreview.substring(0, 2000),
     timestamp: Date.now(),
   };
-  writeFileSync(responseFile, JSON.stringify(entry, null, 2));
+  enqueueWrite(responseFile, JSON.stringify(entry, null, 2));
 }
+
+setInterval(() => {
+  try {
+    const files = readdirSync(LOG_DIR).sort();
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    for (const f of files) {
+      const fp = join(LOG_DIR, f);
+      const stat = statSync(fp);
+      if (stat.mtimeMs < sevenDaysAgo) unlinkSync(fp);
+    }
+  } catch { /* non-blocking */ }
+}, 24 * 60 * 60 * 1000);
 
 export function logQwenSSE(
   logFile: string | undefined,
@@ -62,5 +98,5 @@ export function logQwenSSE(
     toolCalls,
     timestamp: Date.now(),
   };
-  writeFileSync(sseFile, JSON.stringify(entry, null, 2));
+  enqueueWrite(sseFile, JSON.stringify(entry, null, 2));
 }

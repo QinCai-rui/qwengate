@@ -3,6 +3,7 @@
 import { spawn } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = resolve(__dirname, 'index.tsx');
@@ -96,7 +97,7 @@ async function doUpdate() {
 async function checkStatus() {
   const port = process.env.PORT || '26405';
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/v1/models`);
+    const res = await fetch(`http://127.0.0.1:${port}/v1/models`, { signal: AbortSignal.timeout(5000) });
     if (res.ok) {
       out(`Server is running on port ${port}`);
       return;
@@ -108,17 +109,27 @@ async function checkStatus() {
   process.exit(1);
 }
 
+function getPidFilePath(): string {
+  return resolve(__dirname, '..', '.qwen', 'gate.pid');
+}
+
 async function restartServer() {
-  const isWin = process.platform === 'win32';
-  const killCmd = isWin
-    ? 'taskkill /F /IM tsx.exe 2>nul; taskkill /F /IM node.exe 2>nul || exit 0'
-    : 'pkill -f "tsx.*index.ts" 2>/dev/null; pkill -f "node.*dist/index.js" 2>/dev/null; exit 0';
+  const pidFile = getPidFilePath();
 
   out('Stopping server...');
-  await new Promise<void>((resolve) => {
-    const p = spawn(killCmd, { shell: true, stdio: 'ignore' });
-    p.on('close', () => resolve());
-  });
+  if (existsSync(pidFile)) {
+    try {
+      const pid = parseInt(readFileSync(pidFile, 'utf-8').trim(), 10);
+      if (!isNaN(pid)) {
+        try { process.kill(pid, 'SIGTERM'); } catch { /* process already dead */ }
+        // Wait for process to exit
+        for (let i = 0; i < 30; i++) {
+          try { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 200)); } catch { break; }
+        }
+      }
+      try { unlinkSync(pidFile); } catch { /* best effort */ }
+    } catch { /* pid file read error */ }
+  }
 
   await new Promise((r) => setTimeout(r, 1000));
   out('Starting server...');

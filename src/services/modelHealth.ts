@@ -5,9 +5,21 @@ export interface ModelHealthMetrics {
 }
 
 const MODEL_HEALTH_WINDOW_MS = 5 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 60 * 1000;
 const modelErrorCounts: Map<string, number> = new Map();
 const modelSuccessCounts: Map<string, number> = new Map();
 const modelHealthTimestamps: Map<string, number> = new Map();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [model, ts] of modelHealthTimestamps) {
+    if (now - ts > MODEL_HEALTH_WINDOW_MS) {
+      modelErrorCounts.delete(model);
+      modelSuccessCounts.delete(model);
+      modelHealthTimestamps.delete(model);
+    }
+  }
+}, CLEANUP_INTERVAL_MS);
 
 export function recordModelError(model: string): void {
   const count = modelErrorCounts.get(model) || 0;

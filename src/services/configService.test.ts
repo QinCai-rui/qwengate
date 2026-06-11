@@ -171,3 +171,38 @@ test('config.json with bad JSON - uses defaults', () => {
 
   try { unlinkSync(path); } catch { /* cleanup */ }
 });
+
+test('validate - warns on negative PORT values', () => {
+  const path = tmpFile('neg-port');
+  writeFileSync(path, JSON.stringify({ PORT: '-1' }), 'utf-8');
+  const svc = new ConfigService(path);
+
+  const warnings: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (msg: string) => { warnings.push(msg); };
+  try {
+    svc.validate();
+    assert.ok(warnings.some(w => w.includes('PORT') && w.includes('invalid')));
+  } finally {
+    console.warn = origWarn;
+  }
+
+  try { unlinkSync(path); } catch { /* cleanup */ }
+});
+
+test('load - warns on unknown config keys', () => {
+  const path = tmpFile('unknown-keys');
+  writeFileSync(path, JSON.stringify({ PORT: '26405', FOOBAR: 'baz' }), 'utf-8');
+
+  const warnings: string[] = [];
+  const origWarn = console.warn;
+  console.warn = (msg: string) => { warnings.push(msg); };
+  try {
+    new ConfigService(path);
+    assert.ok(warnings.some(w => w.includes('Unknown key') && w.includes('FOOBAR')));
+  } finally {
+    console.warn = origWarn;
+  }
+
+  try { unlinkSync(path); } catch { /* cleanup */ }
+});

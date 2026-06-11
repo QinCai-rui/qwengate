@@ -260,6 +260,11 @@ async function executeDeleteAllChats() {
 
 function showToast(msg, type) {
   var container = document.getElementById('toastContainer') || document.body;
+  var toasts = container.querySelectorAll('.toast');
+  while (toasts.length >= 5) {
+    toasts[0].remove();
+    toasts = container.querySelectorAll('.toast');
+  }
   var el = document.createElement('div');
   el.className = 'toast toast-' + type;
   el.textContent = msg;

@@ -15,7 +15,6 @@ import {
   getModelSpecs,
   acquireSessionWithCorrections,
   createQwenStreamWithRetry,
-  logIncomingRequest,
 } from "./chatHelpers.ts";
 
 export {
@@ -55,8 +54,6 @@ async function parseRequestBody(c: Context) {
   const cleanOutput = config.get("CLEAN_OUTPUT", "true") !== "false";
 
   const messages = body.messages || [];
-  logIncomingRequest(body, isStream, messages);
-
   handleImageModelFallback(body, messages);
   const { maxContext, maxOutput } = getModelSpecs(body);
 

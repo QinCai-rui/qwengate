@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { getBasicHeaders } from './playwright.ts';
-import { pickAccount, incrementInFlight, decrementInFlight, incrementTotalRequests, getAccountByEmail, throttleAccount, getAllAccountEmails } from './auth.ts';
+import { pickAccount, decrementInFlight, incrementTotalRequests, getAccountByEmail, throttleAccount, getAllAccountEmails } from './auth.ts';
 import { createNetworkEntry, recordResponse, completeEntry, errorEntry } from './networkDebug.ts';
 import { logStore } from './logStore.js';
 import { config } from './configService.ts';
@@ -47,6 +47,7 @@ export class SessionPool {
   private activeCount = 0;
   private readonly MAX_WAITING = 10;
   private readonly WAIT_TIMEOUT_MS = 60_000;
+  private releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   async initialize(): Promise<void> {
     if (process.env.TEST_MOCK_PLAYWRIGHT) {
@@ -69,10 +70,6 @@ export class SessionPool {
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const resolvedEmail = email || (await pickAccount())?.email;
-
-      if (resolvedEmail) {
-        incrementInFlight(resolvedEmail);
-      }
 
       try {
         const [{ cookie, userAgent, email: actualEmail }, chatId] = await Promise.all([
@@ -153,6 +150,8 @@ export class SessionPool {
       const waiterEmail = accountEmail || (await pickAccount())?.email;
       Promise.all([getBasicHeaders(waiterEmail), this.createSession(waiterEmail)])
         .then(([{ cookie, userAgent, email: actualEmail }, id]) => {
+          this.activeSessions.add(id);
+          this.activeCount++;
           waiter.resolve({ chatId: id, parentId: _newParentId, inUse: true, cachedHeaders: { cookie, userAgent }, accountEmail: actualEmail || waiterEmail });
         })
         .catch(err => {
@@ -162,7 +161,13 @@ export class SessionPool {
     }
     this.activeSessions.delete(chatId);
     if (this.activeCount > 0) this.activeCount--;
-    this.deleteSession(chatId, cachedHeaders, accountEmail);
+    const existingTimer = this.releaseTimers.get(chatId);
+    if (existingTimer) clearTimeout(existingTimer);
+    const timer = setTimeout(() => {
+      this.deleteSession(chatId);
+      this.releaseTimers.delete(chatId);
+    }, 60_000);
+    this.releaseTimers.set(chatId, timer);
     logStore.log('info', 'pool', 'Session released' + (accountEmail ? ': ' + accountEmail.split('@')[0] : ''));
   }
 
@@ -272,6 +277,7 @@ export class SessionPool {
         method: 'POST',
         headers: fetchHeaders,
         body: JSON.stringify({}),
+        signal: AbortSignal.timeout(30000),
       });
       recordResponse(debugEntry.id, response);
     } catch (err) {

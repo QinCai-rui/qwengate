@@ -39,7 +39,7 @@ function categoryCssClass(cat) {
 
 function durationClass(ms) {
   if (ms == null) return '';
-  return ms > 3000 ? 'slow' : (ms > 500 ? 'slow' : 'fast');
+  return ms > 500 ? 'slow' : 'fast';
 }
 
 function truncateUrl(url, maxLen) {
@@ -239,7 +239,7 @@ function toggleEntry(header) {
 /* ── Init ── */
 function init() {
   fetchNetworkEntries();
-  setInterval(fetchNetworkEntries, 2000);
+  createPoller(fetchNetworkEntries, 2000);
 }
 
 if (document.readyState === 'loading') {

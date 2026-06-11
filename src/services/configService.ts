@@ -3,6 +3,7 @@ import { projectPath } from '../utils/paths.ts';
 
 export interface ConfigSchema {
   PORT: string;
+  HOST: string;
   API_KEY: string;
   BROWSER: string;
   TOOL_CALLING: string;
@@ -28,6 +29,7 @@ export interface ConfigSchema {
 
 export const DEFAULT_CONFIG: ConfigSchema = {
   PORT: '26405',
+  HOST: '',
   API_KEY: '',
   BROWSER: 'chromium',
   TOOL_CALLING: 'true',
@@ -78,6 +80,13 @@ export class ConfigService {
         const raw = readFileSync(filePath, 'utf-8');
         const parsed = JSON.parse(raw);
 
+        // Warn about unknown keys
+        for (const key of Object.keys(parsed)) {
+          if (!CONFIG_KEYS.has(key)) {
+            console.warn(`[config] Unknown key "${key}" in config.json — ignoring`);
+          }
+        }
+
         // Only accept known keys
         const clean: Partial<ConfigSchema> = {};
         for (const key of Object.keys(DEFAULT_CONFIG) as (keyof ConfigSchema)[]) {
@@ -86,6 +95,7 @@ export class ConfigService {
           }
         }
         this._data = clean;
+        this.validate();
       } catch {
         // Bad JSON or read failure → use defaults
         this._data = {};
@@ -99,6 +109,30 @@ export class ConfigService {
         // If we can't write (e.g. readonly fs in test), just keep empty _data
       }
     }
+  }
+
+  validate(): void {
+    const port = parseInt(this.get('PORT'), 10);
+    if (isNaN(port) || port < 1 || port > 65535) {
+      console.warn(`[config] PORT "${this.get('PORT')}" is invalid, using default ${DEFAULT_CONFIG.PORT}`);
+    }
+
+    const checkPositive = (key: keyof ConfigSchema, name: string): void => {
+      const val = parseInt(this.get(key), 10);
+      if (!isNaN(val) && val < 0) {
+        console.warn(`[config] ${name} (${key}) is negative (${val}), using default ${DEFAULT_CONFIG[key]}`);
+      }
+    };
+
+    checkPositive('AUTH_TOKEN_MAX_AGE_MS', 'AUTH_TOKEN_MAX_AGE_MS');
+    checkPositive('MAX_LOGS', 'MAX_LOGS');
+    checkPositive('QWEN_FETCH_TIMEOUT_MS', 'QWEN_FETCH_TIMEOUT_MS');
+    checkPositive('RATE_LIMIT_COOLDOWN_MS', 'RATE_LIMIT_COOLDOWN_MS');
+    checkPositive('RETRY_MAX_ATTEMPTS', 'RETRY_MAX_ATTEMPTS');
+    checkPositive('RETRY_BASE_DELAY_MS', 'RETRY_BASE_DELAY_MS');
+    checkPositive('RETRY_MAX_DELAY_MS', 'RETRY_MAX_DELAY_MS');
+    checkPositive('AUTH_REFRESH_BEFORE_MS', 'AUTH_REFRESH_BEFORE_MS');
+    checkPositive('MAX_TOOL_CALLS_PER_RESPONSE', 'MAX_TOOL_CALLS_PER_RESPONSE');
   }
 
   get<K extends keyof ConfigSchema>(key: K, defaultValue?: string): string {

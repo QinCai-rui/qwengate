@@ -1,9 +1,8 @@
 import { chromium, firefox, webkit, BrowserContext, Page, Cookie, Browser } from 'playwright';
 import { launch as cloakLaunch } from 'cloakbrowser';
 import crypto from 'crypto';
-import { getTokenWithAccount, pickAccount } from "./auth.ts";
 import { logStore } from './logStore.ts';
-export { getProfileDir, openBrowserProfile, refreshViaProfile, autoFillLogin } from './browserProfiles.ts';
+export { getProfileDir, openBrowserProfile, refreshViaProfile } from './browserProfiles.ts';
 export type { LoginResult, BrowserProfileOptions } from './browserProfiles.ts';
 
 const QWEN_BASE_URL = 'https://chat.qwen.ai';
@@ -25,7 +24,7 @@ let cachedCookies: string | null = null;
 let lastCookiesTime = 0;
 const COOKIES_TTL = 30 * 1000;
 let cookiesInFlight: Promise<string> | null = null;
-const COOKIE_REFRESH_INTERVAL = 30 * 1000;
+const COOKIE_REFRESH_INTERVAL = 120 * 1000;
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export function validateQwenUrl(url: string): void {
   let parsed: URL;
@@ -81,13 +80,14 @@ export async function getCookies(email?: string): Promise<string> {
     if (cachedCookies && (Date.now() - lastCookiesTime < COOKIES_TTL)) {
       return cachedCookies;
     }
+    const allCookieStrings: string[] = [];
     for (const accCtx of accountContexts.values()) {
       const cookies = await accCtx.context.cookies();
-      cachedCookies = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-      lastCookiesTime = Date.now();
-      return cachedCookies!;
+      allCookieStrings.push(cookies.map(c => `${c.name}=${c.value}`).join('; '));
     }
-    return '';
+    cachedCookies = allCookieStrings.join('; ');
+    lastCookiesTime = Date.now();
+    return cachedCookies;
   })().finally(() => { cookiesInFlight = null; });
   return cookiesInFlight;
 }
@@ -102,19 +102,24 @@ export interface BasicHeaders {
 export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return { cookie: 'token=mock', userAgent: 'mock', bxV: '2.5.36', bxUmidtoken: '', bxUa: '', email: 'mock@test' };
   await initPlaywright();
-  if (!cachedUserAgent) {
-    for (const accCtx of accountContexts.values()) {
-      cachedUserAgent = await Promise.race([
-        accCtx.page.evaluate(() => navigator.userAgent),
-        new Promise<string>((_, reject) => setTimeout(() => reject(new Error('UserAgent timeout')), 10_000)),
-      ]);
-      break;
+    if (!cachedUserAgent) {
+    try {
+      for (const accCtx of accountContexts.values()) {
+        cachedUserAgent = await Promise.race([
+          accCtx.page.evaluate(() => navigator.userAgent),
+          new Promise<string>((_, reject) => setTimeout(() => reject(new Error('UserAgent timeout')), 10_000)),
+        ]);
+        break;
+      }
+    } catch (err) {
+      console.error('[Playwright] UserAgent extraction failed:', err);
     }
     if (!cachedUserAgent) {
       cachedUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
     }
   }
   let cookieStr = await getCookies(email);
+  const { getTokenWithAccount } = await import('./auth.ts');
   const tokenInfo = await getTokenWithAccount(email);
   if (tokenInfo) {
     const tokenEntry = `token=${tokenInfo.token}`;
@@ -240,7 +245,7 @@ async function createContextInternal(email: string, cookies?: Record<string, str
     try { await refreshAccountCookies(email); } catch (err) {
       console.error(`[AccountContext] Refresh failed for ${email}:`, err);
     }
-  }, COOKIE_REFRESH_INTERVAL);
+  }, COOKIE_REFRESH_INTERVAL + Math.random() * 30000);
   return accCtx;
 }
 export async function refreshAccountCookies(email: string): Promise<void> {
@@ -297,7 +302,6 @@ export async function refreshAccountCookies(email: string): Promise<void> {
         accCtx.lastRefresh = Date.now();
         return;
       }
-      postCookies.splice(0, postCookies.length, ...postCookies);
     }
     const freshCookies = await context.cookies();
     const cookieRecord: Record<string, string> = {};
@@ -308,6 +312,16 @@ export async function refreshAccountCookies(email: string): Promise<void> {
     console.error(`[AccountContext] Refresh error for ${email}:`, err);
   }
 }
+export function removeAccountContext(email: string): void {
+  const accCtx = accountContexts.get(email);
+  if (!accCtx) return;
+  if (accCtx.refreshInterval) {
+    clearInterval(accCtx.refreshInterval);
+  }
+  accCtx.context.close().catch(() => {});
+  accountContexts.delete(email);
+}
+
 export async function closePlaywright() {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return;
   for (const [_email, accCtx] of accountContexts.entries()) {
@@ -323,63 +337,13 @@ export async function closePlaywright() {
 export function getCachedUserAgent(): string | null { return cachedUserAgent; }
 export function getCachedCookies(): string | null { return cachedCookies; }
 export function getLastCookiesTime(): number { return lastCookiesTime; }
-export function setCachedCookies(cookies: string, timestamp: number) { cachedCookies = cookies; lastCookiesTime = timestamp; }
-export function setCachedUserAgent(ua: string) { cachedUserAgent = ua; }
-export async function injectCookies(email: string, cookies: Array<{name: string, value: string, domain?: string, path?: string}>) {
-  if (process.env.TEST_MOCK_PLAYWRIGHT) return;
-  const accCtx = accountContexts.get(email);
-  if (!accCtx) throw new Error(`No context for account ${email}`);
-  await accCtx.context.addCookies(cookies);
-  accCtx.lastRefresh = Date.now();
-  cachedCookies = null;
-  lastCookiesTime = 0;
-}
 export function getActivePage(email?: string): Page | null {
   if (email) return accountContexts.get(email)?.page || null;
   for (const accCtx of accountContexts.values()) { return accCtx.page; }
   return null;
 }
-export function getBrowserContext(email?: string): BrowserContext | null {
-  if (!email) return null;
-  return accountContexts.get(email)?.context || null;
-}
 export function getBrowser(): Browser | null {
   return defaultBrowser || null;
-}
-export async function loginToQwen(email: string, password: string): Promise<boolean> {
-  if (!getActivePage()) throw new Error('Playwright not initialized');
-  const release = await uiMutex.acquire();
-  try {
-    const page = getActivePage()!;
-    validateQwenUrl(`${QWEN_BASE_URL}/auth`);
-    await page.goto(`${QWEN_BASE_URL}/auth`, { waitUntil: 'domcontentloaded' });
-    const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
-    const result = await page.evaluate(async ({ email, password }) => {
-      try {
-        const response = await fetch(`${QWEN_BASE_URL}/api/v2/auths/signin`, {
-          method: "POST",
-          headers: {
-            "accept": "application/json, text/plain, */*",
-            "content-type": "application/json",
-            "source": "web",
-            "timezone": new Date().toString().split(' (')[0],
-            "x-request-id": crypto.randomUUID()
-          },
-          body: JSON.stringify({ email, password })
-        });
-        const data = await response.json();
-        return { ok: response.ok, data };
-      } catch (e: any) { return { ok: false, error: e.message }; }
-    }, { email, password: hashedPassword });
-    if (result.ok) {
-      validateQwenUrl(`${QWEN_BASE_URL}/`);
-      await page.goto(QWEN_BASE_URL, { waitUntil: 'domcontentloaded' });
-      const isLogged = !(page.url().includes('auth') || page.url().includes('login'));
-      if (isLogged) return true;
-    }
-    console.error('[Playwright] Login failed:', result.data || result.error);
-    return false;
-  } finally { release(); }
 }
 async function captureBxHeaders(accCtx: AccountContext): Promise<void> {
   try {
@@ -408,6 +372,7 @@ export async function getQwenHeaders(email?: string): Promise<{ headers: Record<
     };
   }
   await initPlaywright();
+  const { pickAccount, getTokenWithAccount } = await import('./auth.ts');
   const targetEmail = email || (await pickAccount())?.email;
   if (!targetEmail) throw new Error('No account available for header extraction');
   let accCtx = accountContexts.get(targetEmail);

@@ -1,3 +1,5 @@
+import crypto from 'node:crypto';
+
 export interface ParsedXmlToolCall {
   name: string;
   parameters: Record<string, string>;
@@ -14,7 +16,7 @@ export function parseXmlToolCalls(text: string): { toolCalls: ParsedXmlToolCall[
   const unique = new Set<string>();
   let cleanedText = text;
 
-  const re = /<function=[^\s>]+[\s\S]*?>[\s\S]*?<\/function>/g;
+  const re = /<function=[^\s>]+[\s\S]*?>[\s\S]*?(?:<\/function>|$)/g;
   const sections: string[] = [];
   let lastIdx = 0;
   let match: RegExpExecArray | null;

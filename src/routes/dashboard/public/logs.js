@@ -263,11 +263,24 @@ function addRequestEntry(entry) {
     var excess = logEntries.pop();
     var excessEl = document.getElementById(excess);
     if (excessEl) {
-      excessEl.remove();
-      delete logEntryMap[excess];
+      excessEl.classList.add('hidden');
+      hiddenEntries.push(excess);
     }
   }
 
+  updateCounts();
+}
+
+/* ── Load More ── */
+function loadMore() {
+  while (hiddenEntries.length > 0) {
+    var id = hiddenEntries.shift();
+    var el = document.getElementById(id);
+    if (el) {
+      el.classList.remove('hidden');
+      logEntries.push(id);
+    }
+  }
   updateCounts();
 }
 
@@ -276,6 +289,10 @@ function updateCounts() {
   var total = logEntries.length + hiddenEntries.length;
   var countEl = document.getElementById('entryCount');
   if (countEl) countEl.textContent = total + (total === 1 ? ' entry' : ' entries');
+  var hiddenCountEl = document.getElementById('hiddenCount');
+  if (hiddenCountEl) hiddenCountEl.textContent = hiddenEntries.length;
+  var loadMoreBtn = document.getElementById('loadMoreBtn');
+  if (loadMoreBtn) loadMoreBtn.style.display = hiddenEntries.length > 0 ? '' : 'none';
 }
 
 /* ── Clear Log ── */
@@ -337,7 +354,7 @@ function init() {
 
   /* Fetch existing entries + poll every 2 seconds for auto-refresh */
   pollLogs();
-  setInterval(pollLogs, 2000);
+  createPoller(pollLogs, 2000);
 }
 
 if (document.readyState === 'loading') {

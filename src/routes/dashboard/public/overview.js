@@ -86,19 +86,18 @@ async function refreshModelHealth() {
   tbody.innerHTML = rows;
 }
 /* ── System Logs ── */
-var _lastLogCount = 0;
+var _lastSysLogId = '';
 async function refreshSysLogs() {
-  var data = await apiFetch('/system/logs?limit=10');
+  var data = await apiFetch('/system/logs');
   var container = document.getElementById('sysLogsContainer');
   var empty = document.getElementById('sysLogsEmpty');
-  if (!data || !Array.isArray(data) || data.length === 0) {
-    empty.style.display = '';
-    return;
-  }
+  if (!data || !Array.isArray(data) || data.length === 0) return;
   empty.style.display = 'none';
   var html = '';
+  var maxId = _lastSysLogId;
   for (var i = 0; i < data.length; i++) {
     var l = data[i];
+    if (!l.id || l.id <= _lastSysLogId) continue;
     var lvl = (l.level || 'info').toLowerCase();
     var cls = lvl === 'debug' ? 'log-debug' : lvl === 'warn' || lvl === 'warning' ? 'log-warn' : lvl === 'error' ? 'log-error' : 'log-info';
     html += '<div class="sys-log-entry">'
@@ -107,23 +106,22 @@ async function refreshSysLogs() {
       + '<span class="sys-log-cat">' + escHtml(l.category || '') + '</span>'
       + '<span class="sys-log-msg">' + escHtml(l.message || '') + '</span>'
       + '</div>';
-  }
-  container.innerHTML = html;
-  container.appendChild(empty);
-  if (data.length > _lastLogCount) {
-    var newEntries = data.slice(0, data.length - _lastLogCount);
-    for (var ni = 0; ni < newEntries.length; ni++) {
-      var nl = newEntries[ni];
-      var nlv = (nl.level || '').toLowerCase();
-      if (nlv === 'error' || nlv === 'warn') {
-        showNotif(nlv, nl.category || '', nl.message || '');
-      }
+    if (lvl === 'error' || lvl === 'warn') {
+      showNotif(lvl, l.category || '', l.message || '');
     }
+    if (l.id > maxId) maxId = l.id;
   }
-  _lastLogCount = data.length;
+  if (!html) return;
+  container.insertAdjacentHTML('afterbegin', html);
+  _lastSysLogId = maxId;
 }
 function showNotif(level, category, message) {
   var container = document.getElementById('notifContainer') || document.body;
+  var notifs = container.querySelectorAll('.notif');
+  while (notifs.length >= 5) {
+    notifs[0].remove();
+    notifs = container.querySelectorAll('.notif');
+  }
   var el = document.createElement('div');
   el.className = 'notif notif-' + level;
   el.innerHTML = '<strong>' + escHtml(level.toUpperCase()) + '</strong>'
@@ -138,10 +136,10 @@ function init() {
   refreshPool();
   refreshModelHealth();
   refreshSysLogs();
-  setInterval(refreshHealth, 2000);
-  setInterval(refreshPool, 2000);
-  setInterval(refreshSysLogs, 2000);
-  setInterval(refreshModelHealth, 3000);
+  createPoller(refreshHealth, 2000);
+  createPoller(refreshPool, 2000);
+  createPoller(refreshSysLogs, 2000);
+  createPoller(refreshModelHealth, 3000);
   setInterval(updateUptime, 1000);
 }
 if (document.readyState === 'loading') {

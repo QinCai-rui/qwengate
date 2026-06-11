@@ -312,10 +312,4 @@ export async function createQwenStreamWithRetry(
   }
 }
 
-export function logIncomingRequest(
-  _body: any,
-  _isStream: boolean,
-  _messages: any[],
-): void {
-  // Debug logging intentionally disabled
-}
+

@@ -5,6 +5,7 @@ import { throttleAccount, pickAccount } from './auth.ts';
 import { createNetworkEntry, recordResponse, recordStreamChunk, completeEntry, errorEntry } from './networkDebug.ts';
 import { config } from './configService.ts';
 import { logQwenRequest, logQwenResponse } from './qwenLogger.ts';
+import { logStore } from './logStore.ts';
 
 export { fetchQwenModels, disableNativeTools, disablePersonalization, setCustomInstruction, configureAccount, deleteAllChats } from './qwenModels.ts';
 
@@ -163,9 +164,9 @@ export async function createQwenStream(
     ...(tools?.length ? { tools, tool_choice: toolChoice || 'auto', parallel_tool_calls: true } : {})
   };
 
-  const url = chatId
-    ? `${QWEN_CHAT_COMPLETIONS_URL}?chat_id=${chatId}`
-    : QWEN_CHAT_COMPLETIONS_URL;
+  const urlObj = new URL(QWEN_CHAT_COMPLETIONS_URL);
+  if (chatId) urlObj.searchParams.set('chat_id', chatId);
+  const url = urlObj.href;
 
   const retryConfig = {
     maxRetries: Math.max(0, parseInt(config.get('RETRY_MAX_ATTEMPTS', '3'), 10)),
@@ -247,8 +248,12 @@ export async function createQwenStream(
         }
       }
     }
+    const sanitizedErrText = errText
+      .replace(/eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g, '[JWT_REDACTED]')
+      .replace(/eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g, '[JWT_REDACTED]')
+      .slice(0, 500);
     throw new UpstreamStatusError(
-      `Failed to fetch from Qwen: ${response.status} ${response.statusText} - ${errText}`,
+      `Failed to fetch from Qwen: ${response.status} ${response.statusText} - ${sanitizedErrText}`,
       response.status
     );
   }
@@ -290,6 +295,10 @@ export async function createQwenStream(
           if (makeRequestQwenLogFile) logQwenResponse(makeRequestQwenLogFile, response.status, response.statusText, respHeaders, '');
         } finally { cleanup(); }
       } catch (fetchErr: unknown) {
+        if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
+          logStore.log('warn', 'qwen', 'Request timed out');
+          throw new RetryableQwenStreamError('Request timed out', 0);
+        }
         const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
         errorEntry(debugEntry.id, msg);
         throw fetchErr;

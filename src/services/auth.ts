@@ -6,7 +6,8 @@
  */
 
 import crypto from 'crypto';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { getActivePage, getBrowser } from './playwright.ts';
 import { logStore } from './logStore.js';
 import {
@@ -32,6 +33,7 @@ export {
 
 export const AUTH_TOKEN_MAX_AGE_MS = parseInt(config.get('AUTH_TOKEN_MAX_AGE_MS', '28800000'), 10);
 export const AUTH_REFRESH_BEFORE_MS = parseInt(config.get('AUTH_REFRESH_BEFORE_MS', '300000'), 10);
+const TOKEN_DIR = join(process.cwd(), '.qwen', 'tokens');
 
 const AUTH_FETCH_TIMEOUT_MS = parseInt(config.get('QWEN_FETCH_TIMEOUT_MS', '30000'), 10);
 
@@ -122,7 +124,6 @@ export async function loginFresh(email: string, password: string): Promise<AuthS
 
 export async function initAuth(onAccountReady?: (email: string) => Promise<void>): Promise<void> {
   if (initDone) return;
-  initDone = true;
 
   migrateFromOldPaths();
 
@@ -142,6 +143,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
   }
 
   if (merged.length === 0) {
+    initDone = true;
     logStore.log('warn', 'auth', 'No saved accounts found. Run: npm run login user@example.com');
     return;
   }
@@ -161,60 +163,70 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
     });
   }
 
-  // Phase 1: Load tokens from browser profiles — max 3 concurrent Chromium instances
-  const MAX_CONCURRENT_PROFILE_LOADS = 3;
-  const loadResults: Array<{ acct: typeof accounts[0]; source: string | null }> = [];
-  
-  for (let i = 0; i < accounts.length; i += MAX_CONCURRENT_PROFILE_LOADS) {
-    const batch = accounts.slice(i, i + MAX_CONCURRENT_PROFILE_LOADS);
-    const batchResults = await Promise.allSettled(
-      batch.map(async (acct) => {
-        const profileState = await loadCookiesFromProfile(acct.email);
-        if (profileState) {
-          acct.state = profileState;
-          return { acct, source: 'profile' as const };
-        }
-        return { acct, source: null as string | null };
-      })
-    );
-    for (const r of batchResults) {
-      if (r.status === 'fulfilled') loadResults.push(r.value);
-    }
-  }
-
-  // Phase 2: Login accounts that don't have tokens yet — all in parallel
-  const needLogin = accounts.filter(a => !a.state?.token && a.password);
-  if (needLogin.length > 0) {
-    logStore.log('info', 'auth', `Logging in ${needLogin.length} accounts in parallel...`);
-    const loginPromises = needLogin.map(async (acct) => {
-      const newState = await loginFresh(acct.email, acct.password);
-      if (newState) {
-        acct.state = newState;
-        await saveCookies(acct.email, newState.token, newState.refreshToken, newState.expiresAt);
+  try {
+    // Phase 1: Load tokens from browser profiles — max 3 concurrent Chromium instances
+    const MAX_CONCURRENT_PROFILE_LOADS = 3;
+    const loadResults: Array<{ acct: typeof accounts[0]; source: string | null }> = [];
+    
+    for (let i = 0; i < accounts.length; i += MAX_CONCURRENT_PROFILE_LOADS) {
+      const batch = accounts.slice(i, i + MAX_CONCURRENT_PROFILE_LOADS);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (acct) => {
+          const profileState = await loadCookiesFromProfile(acct.email);
+          if (profileState) {
+            acct.state = profileState;
+            return { acct, source: 'profile' as const };
+          }
+          return { acct, source: null as string | null };
+        })
+      );
+      for (const r of batchResults) {
+        if (r.status === 'fulfilled') loadResults.push(r.value);
       }
-      return { acct, success: !!newState };
-    });
-    await Promise.allSettled(loginPromises);
+    }
+
+    // Phase 2: Login accounts that don't have tokens yet — max 3 concurrent
+    const needLogin = accounts.filter(a => !a.state?.token && a.password);
+    if (needLogin.length > 0) {
+      logStore.log('info', 'auth', `Logging in ${needLogin.length} accounts (max ${MAX_CONCURRENT_PROFILE_LOADS} concurrent)...`);
+      for (let i = 0; i < needLogin.length; i += MAX_CONCURRENT_PROFILE_LOADS) {
+        const batch = needLogin.slice(i, i + MAX_CONCURRENT_PROFILE_LOADS);
+        await Promise.allSettled(
+          batch.map(async (acct) => {
+            const newState = await loginFresh(acct.email, acct.password);
+            if (newState) {
+              acct.state = newState;
+              await saveCookies(acct.email, newState.token, newState.refreshToken, newState.expiresAt);
+            }
+          })
+        );
+      }
+    }
+
+    // Phase 3: Run post-login callbacks in parallel
+    if (onAccountReady) {
+      const readyPromises = accounts
+        .filter(a => a.state?.token)
+        .map(async (acct) => {
+          try {
+            await onAccountReady(acct.email);
+          } catch (err: any) {
+            logStore.log('warn', 'auth', `Post-login config failed for ${acct.email}: ${err.message}`);
+          }
+        });
+      await Promise.allSettled(readyPromises);
+    }
+
+    const successCount = accounts.filter(a => a.state !== null && a.state.token).length;
+    logStore.log('info', 'auth', successCount + '/' + accounts.length + ' accounts authenticated');
+
+    setupAccountWatcherImpl();
+
+    initDone = true;
+  } catch (err) {
+    initDone = false;
+    throw err;
   }
-
-  // Phase 3: Run post-login callbacks in parallel
-  if (onAccountReady) {
-    const readyPromises = accounts
-      .filter(a => a.state?.token)
-      .map(async (acct) => {
-        try {
-          await onAccountReady(acct.email);
-        } catch (err: any) {
-          logStore.log('warn', 'auth', `Post-login config failed for ${acct.email}: ${err.message}`);
-        }
-      });
-    await Promise.allSettled(readyPromises);
-  }
-
-  const successCount = accounts.filter(a => a.state !== null && a.state.token).length;
-  logStore.log('info', 'auth', successCount + '/' + accounts.length + ' accounts authenticated');
-
-  setupAccountWatcherImpl();
 }
 
 export async function autoLoginAllAccounts(): Promise<void> {
@@ -275,30 +287,13 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
         const result = await openBrowserProfile(email, password, { headless: true });
         
         if (result === 'success') {
-          // openBrowserProfile already called saveCookies() via tryCheckToken,
-          // so the in-memory acct.state is already set. Just return it.
           const updated = accounts.find(a => a.email.toLowerCase().trim() === email.toLowerCase().trim());
           if (updated?.state) {
             logStore.log('info', 'auth', `✓ Authorized ${email} via browser profile`);
             return updated.state;
           }
-          // Fallback: re-open profile to read cookie (may not be flushed yet)
-          logStore.log('info', 'auth', `Reading cookie from profile for ${email}...`);
-          const authContext = await launchPersistentContext({
-            userDataDir: profileDir,
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--mute-audio', '--no-first-run', '--disable-background-networking', '--disable-default-apps', '--disable-sync', '--disable-translate', '--disable-blink-features=AutomationControlled'],
-          });
-          try {
-            cookies = await authContext.cookies();
-            authCookie = cookies.find(c => {
-              const n = c.name.toLowerCase();
-              if (n.includes('refresh')) return false;
-              return n.includes('token') || n.includes('session');
-            });
-          } finally {
-            try { await authContext.close(); } catch { /* non-blocking */ }
-          }
+          logStore.log('warn', 'auth', `Profile auth succeeded but no state for ${email}, letting caller retry`);
+          return null;
         } else {
           logStore.log('warn', 'auth', `Profile authorization failed for ${email}: ${result}`);
           return null;
@@ -328,7 +323,10 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
       try { await context.close(); } catch { /* non-blocking */ }
     }
   } catch (err: any) {
-    if (err?.message?.toLowerCase().includes('lock')) return null;
+    if (err?.message?.toLowerCase().includes('lock')) {
+      logStore.log('warn', 'auth', `Profile lock error for ${email}`);
+      return null;
+    }
     logStore.log('warn', 'auth', `Profile cookie load failed for ${email}: ${err.message}`);
   }
   return null;
@@ -357,6 +355,16 @@ export async function saveCookies(email: string, token: string, refreshToken?: s
       if (acct.throttledUntil > Date.now()) {
         acct.throttledUntil = 0;
       }
+
+      // Fire-and-forget disk persistence
+      try {
+        mkdirSync(TOKEN_DIR, { recursive: true });
+        writeFileSync(
+          join(TOKEN_DIR, `${normalizedEmail}.json`),
+          JSON.stringify({ token, refreshToken, expiresAt: jwtExpiresAt }),
+          'utf-8'
+        );
+      } catch { /* non-blocking */ }
     }
   } catch (err: any) {
     logStore.log('error', 'auth', `Failed to save cookies for ${normalizedEmail}: ${err.message}`);

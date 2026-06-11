@@ -46,11 +46,16 @@ function compressJson(content: string, trimmed: string): string | null {
   try { parsed = JSON.parse(trimmed); } catch { return null; }
   if (parsed === null) return null;
   if (Array.isArray(parsed)) {
-    const sample = parsed.slice(0, 3);
-    const remaining = parsed.length - 3;
-    return remaining > 0
-      ? `${JSON.stringify(sample, null, 2)}\n... [${remaining} more items omitted — ${parsed.length} total] ...`
-      : trimmed;
+    const len = parsed.length;
+    if (len <= 5) return trimmed;
+    const head = parsed.slice(0, 2);
+    const mid = parsed.slice(Math.floor(len / 2) - 1, Math.floor(len / 2) + 1);
+    const tail = parsed.slice(-2);
+    const midLabel = `... middle (2 of ${len}) ...`;
+    const omitted = len - 6;
+    const sample = `${JSON.stringify(head, null, 2)}\n... [${omitted} more items omitted — ${len} total] ...\n${JSON.stringify(tail, null, 2)}`;
+    return sample.length < content.length * 0.7 ? sample
+      : `${JSON.stringify(head, null, 2)}\n... [${omitted} more items omitted — ${len} total] ...\n${JSON.stringify(tail, null, 2)}`;
   }
   if (trimmed.length < 3000) return trimmed;
   return null;

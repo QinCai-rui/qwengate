@@ -8,6 +8,11 @@ function fmtTTL(ms) {
 
 function showToast(message, type) {
   var container = document.getElementById('toastContainer');
+  var toasts = container.querySelectorAll('.toast');
+  while (toasts.length >= 5) {
+    toasts[0].remove();
+    toasts = container.querySelectorAll('.toast');
+  }
   var toast = document.createElement('div');
   toast.className = 'toast ' + (type || 'info');
   toast.textContent = message;
@@ -168,12 +173,7 @@ function handleManualLogin(email) {
       if (!res.ok) {
         throw new Error(result && result.error && result.error.message ? result.error.message : 'Login failed (' + res.status + ')');
       }
-      if (result && result.authenticated) {
-        showToast('Profile authorized for ' + email, 'success');
-      } else {
-        showToast('Authorization in progress for ' + email + '...', 'warning');
-        pollAuth(email, 30);
-}
+      showToast('Browser opened for ' + email + '. Complete login manually.', 'info');
       pollAuth(email, 30);
     } catch (e) {
       setError(e.message);
@@ -183,24 +183,31 @@ function handleManualLogin(email) {
 }
 
 /* ── Poll Auth ── */
+var activePollTimers = {};
 function pollAuth(email, maxAttempts) {
+  if (activePollTimers[email]) {
+    clearInterval(activePollTimers[email]);
+    delete activePollTimers[email];
+  }
   var attempt = 0;
   var timer = setInterval(async function() {
     attempt++;
     try {
       var data = await apiFetch('/accounts');
-      if (!Array.isArray(data)) { clearInterval(timer); return; }
+      if (!Array.isArray(data)) { clearInterval(timer); delete activePollTimers[email]; return; }
       for (var i = 0; i < data.length; i++) {
         if (data[i].email === email && data[i].authenticated) {
           clearInterval(timer);
+          delete activePollTimers[email];
           showToast('Login completed for ' + email, 'success');
           loadAccounts();
           return;
         }
       }
-    } catch(e) { clearInterval(timer); }
-    if (attempt >= maxAttempts) { clearInterval(timer); loadAccounts(); }
+    } catch(e) { clearInterval(timer); delete activePollTimers[email]; }
+    if (attempt >= maxAttempts) { clearInterval(timer); delete activePollTimers[email]; loadAccounts(); }
   }, 2000);
+  activePollTimers[email] = timer;
 }
 
 /* ── Init ── */
@@ -209,7 +216,7 @@ function init() {
   loadAccounts();
 
   /* Auto-poll every 2 seconds */
-  setInterval(loadAccounts, 2000);
+  createPoller(loadAccounts, 2000);
 
   /* Add form submit */
   document.getElementById('addForm').addEventListener('submit', function(e) {

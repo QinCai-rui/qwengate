@@ -124,31 +124,20 @@ accountsRouter.get('/:email/autofill', async (c) => {
   try {
     const email = decodeURIComponent(c.req.param('email'));
     const account = getAccountByEmail(email);
+    if (!account) return c.json({ error: { message: `Account ${email} not found` } }, 404);
+    if (!account.password) return c.json({ error: { message: 'No password stored' } }, 400);
 
-    if (!account) {
-      return c.json({ error: { message: `Account ${email} not found` } }, 404);
-    }
-
-    if (!account.password) {
-      return c.json({ error: { message: 'No password stored for this account' } }, 400);
-    }
-
-    // Open browser in non-headless mode, wait for login, save cookie in profile
-    const { openBrowserProfile } = await import('../services/playwright.ts');
-    const loginResult = await openBrowserProfile(account.email, account.password, { headless: false });
-
-    if (loginResult === 'success') {
-      const { loadCookiesFromProfile } = await import('../services/auth.ts');
-      const profileState = await loadCookiesFromProfile(account.email);
-      if (profileState) {
-        account.state = profileState;
+    (async () => {
+      const { openBrowserProfile } = await import('../services/playwright.ts');
+      const loginResult = await openBrowserProfile(account.email, account.password, { headless: false });
+      if (loginResult === 'success') {
+        const { loadCookiesFromProfile } = await import('../services/auth.ts');
+        const profileState = await loadCookiesFromProfile(account.email);
+        if (profileState) account.state = profileState;
       }
-      return c.json({ success: true, email: account.email, authenticated: true });
-    } else if (loginResult === 'captcha') {
-      return c.json({ error: { message: 'CAPTCHA required — please complete in the browser' } }, 400);
-    } else {
-      return c.json({ error: { message: 'Login failed' } }, 500);
-    }
+    })();
+
+    return c.json({ success: true, email: account.email, message: 'Browser opened. Complete login manually.' });
   } catch (err: any) {
     console.error('[Accounts] AUTOFILL failed:', err.message);
     return c.json({ error: { message: 'Auto-fill login failed' } }, 500);

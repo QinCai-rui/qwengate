@@ -5,7 +5,8 @@
  *
  * System-level logging has been extracted to SystemLogger (systemLogger.ts).
  */
-import { mkdirSync, writeFileSync } from "fs";
+import { mkdirSync, readdirSync, unlinkSync } from "fs";
+import { writeFile } from "fs/promises";
 import { join } from "path";
 import {
   recordModelError as _recordModelError,
@@ -383,7 +384,15 @@ export class RequestLogStore extends SystemLogger {
         amplificationTriggeredInput: entry.amplificationTriggeredInput || null,
       };
       const fileName = `${dateStr}_${timeStr}.json`;
-      writeFileSync(join(this.requestLogDir, fileName), JSON.stringify(payload, null, 2));
+      const filePath = join(this.requestLogDir, fileName);
+      const files = readdirSync(this.requestLogDir).sort();
+      if (files.length >= 1000) {
+        const toRemove = files.slice(0, files.length - 999);
+        for (const f of toRemove) unlinkSync(join(this.requestLogDir, f));
+      }
+      writeFile(filePath, JSON.stringify(payload, null, 2)).catch(err =>
+        console.error('[LogStore] Failed to write request log:', err.message)
+      );
     } catch {
       /* disk write best-effort */
     }

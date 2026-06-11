@@ -2,7 +2,7 @@
 import { validateSingleToolCall } from "../tools/guard.ts";
 import { logStore } from "../services/logStore.ts";
 
-export function safeTruncate(val: any, maxLen = 200): any {
+function safeTruncate(val: any, maxLen = 200): any {
   if (typeof val === "string") {
     if (val.length > maxLen) return val.substring(0, maxLen) + "...";
     return val;
@@ -159,6 +159,7 @@ export class ToolSpamGuard {
     const recent = this.history.slice(-this.window);
     const count = recent.filter((h) => h.key === key).length + 1;
     this.history.push({ key });
+    if (this.history.length > this.window * 2) this.history = this.history.slice(-this.window);
     if (count > this.threshold) {
       return {
         ok: false,
@@ -269,18 +270,17 @@ export interface ToolCallProcessingOptions {
   maxToolCalls: number;
 }
 
-const MAX_TOOL_CALLS_PER_TURN = 8;
-
 export function processToolCallsThroughGuard(
   toolCalls: any[],
   toolCallsOut: any[],
   options: ToolCallProcessingOptions,
 ): void {
   const { label, logParsed = false, logId, toolSpamGuard, correctionPrompts, maxToolCalls } = options;
+  const effectiveMax = maxToolCalls ?? 8;
 
-  if (toolCalls.length > MAX_TOOL_CALLS_PER_TURN) {
-    console.warn(`  [🛑 TOOL LIMIT${label ? " " + label : ""}] Truncating ${toolCalls.length} tool calls to first ${MAX_TOOL_CALLS_PER_TURN}`);
-    toolCalls = toolCalls.slice(0, MAX_TOOL_CALLS_PER_TURN);
+  if (toolCalls.length > effectiveMax) {
+    console.warn(`  [🛑 TOOL LIMIT${label ? " " + label : ""}] Truncating ${toolCalls.length} tool calls to first ${effectiveMax}`);
+    toolCalls = toolCalls.slice(0, effectiveMax);
   }
 
   for (const tc of toolCalls) {
