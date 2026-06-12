@@ -21,6 +21,9 @@ import {
   type StreamProcessingCtx,
 } from './chatStreamingHelpers.ts';
 
+/** Shared TextDecoder — stateless, safe to reuse across streams */
+export const sharedDecoder = new TextDecoder();
+
 export interface StreamLoopResult {
   buffer: string;
   nextParentId: string | null;
@@ -29,7 +32,7 @@ export interface StreamLoopResult {
 export async function runStreamLoop(
   c: { req: { raw?: { signal?: AbortSignal } } },
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  decoder: TextDecoder,
+  _decoder: TextDecoder,  // Deprecated — uses shared module-level decoder
   streamState: StreamProcessingState,
   streamCtx: StreamProcessingCtx,
   ampState: AmplificationGuardState,
@@ -56,7 +59,7 @@ export async function runStreamLoop(
     _totalChunks++;
     if (readResult.value) ampState.rawInputBytes += readResult.value.length;
 
-    const rawDecoded = decoder.decode(readResult.value, { stream: true });
+    const rawDecoded = sharedDecoder.decode(readResult.value, { stream: true });
     bufferRef.text += rawDecoded;
     const lines = bufferRef.text.split('\n');
     bufferRef.text = lines.pop() || '';

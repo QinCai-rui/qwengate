@@ -1,5 +1,4 @@
 import 'dotenv/config';
-import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { bearerAuth } from "hono/bearer-auth";
@@ -10,6 +9,7 @@ import {
   BrowserType,
   getQwenHeaders,
   closePlaywright,
+  getBrowser,
 } from "./services/playwright.ts";
 import { initAuth } from "./services/auth.ts";
 import { accountsRouter } from "./routes/accounts.ts";
@@ -22,6 +22,10 @@ import { registerDashboardRoutes } from "./routes/dashboard/dashboardRoutes.ts";
 import { projectPath } from "./utils/paths.ts";
 import { fileURLToPath } from "url";
 import { writeFileSync, unlinkSync, existsSync } from "fs";
+
+// ── Runtime detection ───────────────────────────────────────────────
+const isBun = typeof Bun !== 'undefined';
+
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[FATAL] Unhandled Promise Rejection:', reason);
 });
@@ -45,7 +49,7 @@ export const app = new Hono();
 
 let inFlightRequests = 0;
 let isShuttingDown = false;
-let serverInstance: ReturnType<typeof serve> | null = null;
+let serverStop: (() => void | Promise<void>) | null = null;
 const SHUTDOWN_TIMEOUT_MS = 30_000;
 
 app.use("*", async (c, next) => {
@@ -65,8 +69,8 @@ async function gracefulShutdown(_signal: string): Promise<void> {
     process.exit(1);
   }
   isShuttingDown = true;
-  if (serverInstance) {
-    try { serverInstance.close(); } catch { /* intentional */ }
+  if (serverStop) {
+    try { await serverStop(); } catch { /* intentional */ }
   }
   if (inFlightRequests > 0) {
     const start = Date.now();
@@ -85,6 +89,23 @@ process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 app.use("*", cors({ origin: ['http://localhost:26405', 'http://127.0.0.1:26405'] }));
+
+// Health check — reports actual system status (Playwright readiness, uptime)
+app.get('/health', (c) => {
+  const browser = getBrowser();
+  const playwrightReady = browser !== null;
+  return c.json({
+    status: playwrightReady ? 'ok' : 'degraded',
+    playwright: playwrightReady,
+    uptime: process.uptime(),
+  });
+});
+// Ping — lightweight static response
+const PING_RESPONSE = new Response('OK', {
+  status: 200,
+  headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-cache' },
+});
+app.get('/ping', () => PING_RESPONSE);
 
 // API Key protection for OpenAI-compatible routes
 app.use("/v1/*", async (c, next) => {
@@ -198,22 +219,21 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     .then(async () => {
       // ── Phase 1: Start HTTP server FIRST so dashboard is live immediately ──
       try {
-        serverInstance = serve({
-          fetch: app.fetch,
-          port,
-          hostname: host,
-          serverOptions: {
-            requestTimeout: 600_000,
-            keepAliveTimeout: 75_000,
-            headersTimeout: 65_000,
-          },
-        });
-      } catch (err: any) {
-        if (err.code === 'EADDRINUSE') {
-          console.warn(`Port ${port} in use, trying ${port + 1}...`);
-          serverInstance = serve({
+        if (isBun) {
+          // Bun native HTTP server — faster, no adapter needed
+          const bunServer = Bun.serve({
             fetch: app.fetch,
-            port: port + 1,
+            port,
+            hostname: host,
+            idleTimeout: 0,  // disable idle timeout for SSE streaming
+          });
+          serverStop = () => bunServer.stop(false);  // graceful drain
+        } else {
+          // Node.js fallback via @hono/node-server
+          const { serve } = await import('@hono/node-server');
+          const nodeServer = serve({
+            fetch: app.fetch,
+            port,
             hostname: host,
             serverOptions: {
               requestTimeout: 600_000,
@@ -221,8 +241,50 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
               headersTimeout: 65_000,
             },
           });
+          serverStop = () => new Promise<void>((resolve) => nodeServer.close(() => resolve()));
+        }
+      } catch (err: any) {
+        if (err.code === 'EADDRINUSE') {
+          const fallbackPort = port + 1;
+          console.warn(`Port ${port} in use, trying ${fallbackPort}...`);
+          if (isBun) {
+            const bunServer = Bun.serve({
+              fetch: app.fetch,
+              port: fallbackPort,
+              hostname: host,
+              idleTimeout: 0,
+            });
+            serverStop = () => bunServer.stop(false);
+          } else {
+            const { serve } = await import('@hono/node-server');
+            const nodeServer = serve({
+              fetch: app.fetch,
+              port: fallbackPort,
+              hostname: host,
+              serverOptions: {
+                requestTimeout: 600_000,
+                keepAliveTimeout: 75_000,
+                headersTimeout: 65_000,
+              },
+            });
+            serverStop = () => new Promise<void>((resolve) => nodeServer.close(() => resolve()));
+          }
         } else { throw err; }
       }
+
+      // Pre-warm DNS and TCP connection to Qwen upstream
+      if (isBun) {
+        try {
+          // @ts-ignore — Bun-specific API
+          Bun.dns?.prefetch?.('chat.qwen.ai', 443);
+          // @ts-ignore
+          fetch.preconnect?.('https://chat.qwen.ai');
+          logStore.log('info', 'boot', 'DNS prefetch + TCP preconnect initiated');
+        } catch {
+          // Not all Bun versions support these — silently skip
+        }
+      }
+
       const pidFile = projectPath('.qwen', 'gate.pid');
       try { writeFileSync(pidFile, String(process.pid)); } catch { /* best effort */ }
       logStore.log("info", "server", `Server started on ${host}:${port}`);
@@ -237,6 +299,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         logStore.log("info", "server", `Opening dashboard at ${url}`);
       }
       startAutoCleanup();
+
+      // Force GC after Playwright init — browser profile loading allocates heavily
+      if (isBun) {
+        Bun.gc(true);
+        logStore.log('info', 'boot', 'GC triggered after Playwright init');
+      }
+
       logStore.log(
         "info",
         "boot",

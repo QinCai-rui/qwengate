@@ -25,7 +25,7 @@ test('Health check returns degraded when Playwright not initialized', async () =
 
 test('Models endpoint returns qwen3.6-plus and qwen3.6-plus-no-thinking', async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: any) => {
+  (globalThis as any).fetch = async (input: any) => {
     const url = typeof input === 'string' ? input : input.url;
     if (url.includes('/api/models')) {
       return new Response(JSON.stringify({ data: [{ id: 'qwen3.6-plus', owned_by: 'qwen' }] }), { status: 200 });
@@ -51,7 +51,7 @@ test('Models endpoint returns qwen3.6-plus and qwen3.6-plus-no-thinking', async 
 
 test('Chat Completions endpoint with qwen3.6-plus (thinking enabled)', async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: any) => {
+  (globalThis as any).fetch = async (input: any) => {
     const url = typeof input === 'string' ? input : input.url;
     if (url.includes('/api/models')) {
       return new Response(JSON.stringify({ data: [{ id: 'qwen3.6-plus', owned_by: 'qwen' }] }), { status: 200 });
@@ -142,7 +142,7 @@ test('Chat Completions endpoint with qwen3.6-plus (thinking enabled)', async () 
 
 test('Chat Completions returns explicit error for non-SSE upstream JSON errors', async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: any) => {
+  (globalThis as any).fetch = async (input: any) => {
     const url = typeof input === 'string' ? input : input.url;
     if (url.includes('/api/v2/chat/completions')) {
       return new Response(JSON.stringify({
@@ -184,7 +184,7 @@ test('Chat Completions returns explicit error for non-SSE upstream JSON errors',
 
 test('Chat Completions returns a JSON chat.completion object for non-streaming requests', async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: any) => {
+  (globalThis as any).fetch = async (input: any) => {
     const url = typeof input === 'string' ? input : input.url;
     if (url.includes('/api/v2/chat/completions')) {
       const stream = new ReadableStream({
@@ -245,7 +245,7 @@ test('API Key protection', async () => {
     // 3. Test request with correct API Key
     // Mock fetch for models list
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => new Response(JSON.stringify({ data: [] }), { status: 200 });
+    (globalThis as any).fetch = async () => new Response(JSON.stringify({ data: [] }), { status: 200 });
 
     try {
       const req3 = new Request('http://localhost/v1/models', {
@@ -263,7 +263,7 @@ test('API Key protection', async () => {
 
 test('Chat Completions endpoint - Non-streaming (stream: false)', async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: any) => {
+  (globalThis as any).fetch = async (input: any) => {
     const url = typeof input === 'string' ? input : input.url;
     if (url.includes('/api/models')) {
       return new Response(JSON.stringify({ data: [{ id: 'qwen3.6-plus', owned_by: 'qwen' }] }), { status: 200 });

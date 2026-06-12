@@ -1,91 +1,164 @@
-# Qwen Gate Windows Installer
+# qwen-gate Windows Installer
 # Run: powershell -ExecutionPolicy Bypass -c "curl.exe -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.ps1 | iex"
 
 $ErrorActionPreference = "Stop"
 $Repo = "https://github.com/youssefvdel/qwen-gate.git"
 $Dir = "$PWD\qwen-gate"
+$DefaultPort = 26405
 
-function Info  { Write-Host "→ $args" -ForegroundColor Cyan }
-function Ok    { Write-Host "✓ $args" -ForegroundColor Green }
-function Fail  { Write-Host "✗ $args" -ForegroundColor Red; exit 1 }
+# ── Helpers ──────────────────────────────────────────────────────────
 
-# ── Prerequisites ──
+function Info  { Write-Host "  -> " -ForegroundColor Cyan -NoNewline; Write-Host $args }
+function Ok    { Write-Host "  OK " -ForegroundColor Green -NoNewline; Write-Host $args }
+function Warn  { Write-Host "  !! " -ForegroundColor Yellow -NoNewline; Write-Host $args }
+function Fail  { Write-Host "  ERROR " -ForegroundColor Red -NoNewline; Write-Host $args; exit 1 }
 
-Info "Checking prerequisites..."
+function Test-Command {
+  param([string]$Name)
+  $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+}
 
-try { $null = Get-Command git -ErrorAction Stop } catch { Fail "git is required (https://git-scm.com)" }
-try { $null = Get-Command node -ErrorAction Stop } catch { Fail "Node.js is required (https://nodejs.org)" }
-try { $null = Get-Command npm -ErrorAction Stop } catch { Fail "npm is required (installed with Node.js)" }
+# ── Banner ───────────────────────────────────────────────────────────
 
-$NodeVer = (node -v) -replace 'v', '' -replace '\..*', ''
-if ([int]$NodeVer -lt 18) { Fail "Node.js >= 18 required (found v$(node -v))" }
+Write-Host ""
+Write-Host "  ========================================" -ForegroundColor Cyan
+Write-Host "         qwen-gate Windows Installer" -ForegroundColor Cyan
+Write-Host "  ========================================" -ForegroundColor Cyan
+Write-Host ""
 
-Ok "Prerequisites met (Node.js $(node -v), npm $(npm -v))"
+# ── 1. Git (required) ───────────────────────────────────────────────
 
-# ── Clone ──
+Info "Checking for git..."
+if (-not (Test-Command "git")) {
+  Fail "git is required but not found. Install from https://git-scm.com"
+}
+Ok "git $(git --version)"
+
+# ── 2. Bun (preferred) / Node.js (fallback) ────────────────────────
+
+$UseBun = $false
+$UseNode = $false
+
+Info "Checking for Bun..."
+if (Test-Command "bun") {
+  $UseBun = $true
+  Ok "bun v$(bun --version)"
+} else {
+  Warn "Bun not found — attempting install..."
+  try {
+    irm bun.sh/install.ps1 | iex
+    if (Test-Command "bun") {
+      $UseBun = $true
+      Ok "Bun installed (v$(bun --version))"
+    }
+  } catch {
+    Warn "Auto-install failed. Trying npm -g bun..."
+    try {
+      npm install -g bun 2>$null
+      if (Test-Command "bun") {
+        $UseBun = $true
+        Ok "Bun installed via npm (v$(bun --version))"
+      }
+    } catch { }
+  }
+
+  if (-not $UseBun) {
+    Warn "Bun not available — falling back to Node.js"
+    if (-not (Test-Command "node")) {
+      Fail "Neither Bun nor Node.js found. Install Bun: https://bun.sh"
+    }
+    if (-not (Test-Command "npm")) {
+      Fail "Node.js found but npm is missing. Reinstall Node.js from https://nodejs.org"
+    }
+    $NodeVer = (node -v) -replace 'v', '' -split '\.' | Select-Object -First 1
+    if ([int]$NodeVer -lt 18) {
+      Fail "Node.js >= 18 required (found v$(node -v))"
+    }
+    Ok "node v$(node -v), npm v$(npm -v) (fallback)"
+    $UseNode = $true
+  }
+}
+
+# ── 3. Clone or update ──────────────────────────────────────────────
 
 if (Test-Path "$Dir") {
-  Info "Updating existing installation..."
-  git -C "$Dir" pull --ff-only
-  if ($LASTEXITCODE -ne 0) { Fail "git pull failed" }
+  Info "Existing installation found — updating..."
+  git -C "$Dir" pull --ff-only 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    Warn "git pull failed — using existing code"
+  } else {
+    Ok "Repository updated"
+  }
 } else {
-  Info "Cloning $Repo"
-  git clone "$Repo" "$Dir"
-  if ($LASTEXITCODE -ne 0) { Fail "git clone failed — check internet or permissions" }
+  Info "Cloning $Repo..."
+  git clone "$Repo" "$Dir" 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    Fail "git clone failed — check your internet connection"
+  }
+  Ok "Repository cloned"
 }
-Ok "Repository ready"
 
-# ── Install ──
+# ── 4. Install dependencies ─────────────────────────────────────────
 
 Info "Installing dependencies..."
 Set-Location "$Dir"
-npm install
-if ($LASTEXITCODE -ne 0) { Fail "npm install failed — check Node.js/npm version" }
 
-if (-not (Test-Path "$Dir\node_modules") -or ((Get-ChildItem "$Dir\node_modules").Count -eq 0)) {
-  Info "Retrying npm install..."
-  npm install
-  if ($LASTEXITCODE -ne 0) { Fail "npm install failed on retry" }
+if ($UseBun) {
+  bun install --frozen-lockfile 2>$null
+  if ($LASTEXITCODE -ne 0) { bun install }
+  if ($LASTEXITCODE -ne 0) { Fail "bun install failed" }
+  Ok "Dependencies installed via bun"
+} else {
+  npm install 2>$null
+  if ($LASTEXITCODE -ne 0) { Fail "npm install failed" }
+  Ok "Dependencies installed via npm"
 }
-$pkgCount = (Get-ChildItem "$Dir\node_modules" -Directory).Count
-Ok "Dependencies installed ($pkgCount packages)"
 
-# ── Build ──
-Info "Running npm run build..."
-try { npm run build 2>$null; Ok "Build complete" } catch { Info "Skipping build (tsx will compile on the fly)" }
-
-Info "CloakBrowser binary will auto-download on first launch"
-
-# ── Configuration ──
+# ── 5. Configuration ────────────────────────────────────────────────
 
 if (-not (Test-Path "$Dir\config.json")) {
-  Copy-Item "$Dir\config.example.jsonc" "$Dir\config.json"
-  Info "Created config.json from example — edit it before starting"
+  if (Test-Path "$Dir\config.example.jsonc") {
+    Copy-Item "$Dir\config.example.jsonc" "$Dir\config.json"
+    Ok "Created config.json from config.example.jsonc"
+  } else {
+    Warn "config.example.jsonc not found — create config.json manually"
+  }
 } else {
-  Ok "config.json already exists"
+  Ok "config.json already exists (skipped)"
 }
 
-# ── PATH Add ──
+# ── 6. Add bin/ to user PATH ────────────────────────────────────────
 
 $BinDir = "$Dir\bin"
-$CurrentPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($CurrentPath -notlike "*$BinDir*") {
-  [Environment]::SetEnvironmentVariable("Path", "$CurrentPath;$BinDir", "User")
-  Info "Added $BinDir to your PATH (restart terminal for changes)"
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+
+if ($UserPath -notlike "*$BinDir*") {
+  [Environment]::SetEnvironmentVariable("Path", "$UserPath;$BinDir", "User")
+  $env:Path = "$env:Path;$BinDir"
+  Ok "Added $BinDir to user PATH"
+} else {
+  Ok "bin/ already in PATH"
 }
-Ok "CLI available as qg, qwengate, qwen-gate"
 
-# ── Done ──
+# ── 7. Success banner ───────────────────────────────────────────────
 
-$Port = if ($env:PORT) { $env:PORT } else { "26405" }
-
-Write-Host "`n╔══════════════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "║       Qwen Gate installed successfully      ║" -ForegroundColor Green
-Write-Host "╚══════════════════════════════════════════════╝" -ForegroundColor Green
-
-Write-Host "`n  Start:     qg" -ForegroundColor White
-Write-Host "  Update:    qg update" -ForegroundColor White
-Write-Host "  Restart:   qg restart" -ForegroundColor White
-Write-Host "  API:       http://localhost:$Port/v1"
-Write-Host "  Dashboard: http://localhost:$Port/dashboard"
-Write-Host "`n  Add your Qwen accounts via the Dashboard -> Accounts page.`n"
+Write-Host ""
+Write-Host "  ========================================" -ForegroundColor Green
+Write-Host "     qwen-gate installed successfully!" -ForegroundColor Green
+Write-Host "  ========================================" -ForegroundColor Green
+Write-Host ""
+Write-Host "  Runtime:   $(if ($UseBun) { 'Bun' } else { 'Node.js' })" -ForegroundColor White
+Write-Host "  Directory: $Dir" -ForegroundColor White
+Write-Host "  Port:      $DefaultPort" -ForegroundColor White
+Write-Host ""
+Write-Host "  Commands:" -ForegroundColor Yellow
+Write-Host "    qg              Start the server"
+Write-Host "    qg update       Update to latest"
+Write-Host "    qg restart      Restart server"
+Write-Host "    qg status       Check if running"
+Write-Host ""
+Write-Host "  Dashboard: http://localhost:$DefaultPort/dashboard" -ForegroundColor Cyan
+Write-Host "  API:       http://localhost:$DefaultPort/v1" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  Restart your terminal, then run 'qg' to start." -ForegroundColor Gray
+Write-Host ""

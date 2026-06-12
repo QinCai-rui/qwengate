@@ -364,29 +364,15 @@ export function resetWatcherState(): void {
 }
 const DEFAULT_THROTTLE_MS = parseInt(config.get('RATE_LIMIT_COOLDOWN_MS', '120000'), 10);
 
-class Semaphore {
-  private queue: (() => void)[] = [];
-  private locked = false;
-  async acquire(): Promise<void> {
-    if (!this.locked) { this.locked = true; return; }
-    return new Promise(resolve => this.queue.push(resolve));
-  }
-  release(): void {
-    const next = this.queue.shift();
-    if (next) next();
-    else this.locked = false;
-  }
-}
-
-const pickSem = new Semaphore();
-
 export function isAvailable(acct: AccountEntry): boolean {
   if (!acct.state) return false;
   if (acct.throttledUntil > Date.now()) return false;
   return true;
 }
 export async function pickAccount(): Promise<AccountEntry | null> {
-  await pickSem.acquire();
+  // No lock needed — all operations are synchronous and fast.
+  // Worst case for concurrent access: slightly imbalanced inFlight count,
+  // which is acceptable for load-balancing purposes.
   try {
     const available = accounts.filter(isAvailable);
     if (available.length === 0) {
@@ -419,10 +405,8 @@ export async function pickAccount(): Promise<AccountEntry | null> {
     if (picked.inFlight > 20) picked.inFlight = 0;
     return picked;
   } catch (err: any) {
-    logStore.log('error', 'auth', 'pickAccount mutex error:', err);
+    logStore.log('error', 'auth', 'pickAccount error:', err);
     return null;
-  } finally {
-    pickSem.release();
   }
 }
 export function incrementInFlight(email: string): void {

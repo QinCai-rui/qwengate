@@ -21,11 +21,8 @@ export function stripToolCallArtifacts(text: string): string {
   text = text.replace(/<\/\w+tool_result\s*>/g, '');
   // Strip partial / incomplete tool tags at end of text (streaming boundaries).
   // These are conservatively matched — only unambiguous tool tag prefixes.
-  text = text.replace(/\n?<tool_result(?:\s[^>]*)?$/g, '');
-  text = text.replace(/\n?<tool_call(?:\s[^>]*)?$/g, '');
-  text = text.replace(/\n?<tool_use(?:\s[^>]*)?$/g, '');
-  text = text.replace(/\n?<function(?:\s[^>]*)?$/g, '');
-  text = text.replace(/\n?<parameter(?:\s[^>]*)?$/g, '');
+  // Combined into a single regex to avoid 5 separate .replace() passes.
+  text = text.replace(/\n?<(?:tool_result|tool_call|tool_use|function|parameter)(?:\s[^>]*)?$/g, '');
   // Strip any remaining </tool or </tool_result prefix (with > requirement to avoid
   // matching </toolbox, </toolkit etc.)
   text = text.replace(/<\/tool(?:_result)?>/g, '');

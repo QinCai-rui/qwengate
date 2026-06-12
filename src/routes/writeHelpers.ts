@@ -27,12 +27,12 @@ export function makeChoice(delta: any, finishReason: string | null = null) {
  * Build the SSE event skeleton shared by every chunk.
  */
 export function buildChunkEvent(
-  completionId: string, model: string, choices: any[], extra?: Record<string, unknown>,
+  completionId: string, model: string, choices: any[], extra?: Record<string, unknown>, created?: number,
 ) {
   return {
     id: completionId,
     object: 'chat.completion.chunk',
-    created: Math.floor(Date.now() / 1000),
+    created: created ?? Math.floor(Date.now() / 1000),
     model,
     system_fingerprint: 'fp_qwen_gate',
     service_tier: 'default',

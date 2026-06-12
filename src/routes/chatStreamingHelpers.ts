@@ -80,6 +80,8 @@ export interface StreamProcessingState {
   lastFilteredSnapshot: string;
   lastThinkingSnapshot: string;
   lastVStrRaw: string;
+  lastFilteredFullContent: string;
+  lastDeltaThinkingFull: string;
   loggedToolCalls: Set<string>;
   lastParsePosition: number;
 }
@@ -265,6 +267,8 @@ export async function processStreamData(
     state.lastFullContent = state.lastFullContent.slice(-80000);
     state.lastFilteredSnapshot = '';
     state.lastThinkingSnapshot = '';
+    state.lastFilteredFullContent = '';
+    state.lastDeltaThinkingFull = '';
     state.lastParsePosition = 0;
   }
 
@@ -278,9 +282,18 @@ export async function processStreamData(
   // or thinking-only chunks that don't add answer text.
   if (!rawText) return 'continue';
 
-  const pipelineResult = filterContentPipeline(state.lastFullContent, enableContentFiltering);
-  const cleanedText = pipelineResult.cleanText;
-  const filteredThinking = pipelineResult.thinking;
+  // Incremental filtering: process only the new delta through the filter
+  // pipeline instead of re-scanning the full accumulated buffer (up to 100KB)
+  // on every chunk. Accumulate filtered output for snapshot diffing.
+  const filterDelta = filterContentPipeline(rawText, enableContentFiltering);
+  const deltaCleaned = filterDelta.cleanText;
+  const deltaThinking = filterDelta.thinking;
+
+  if (deltaCleaned) state.lastFilteredFullContent = (state.lastFilteredFullContent || '') + deltaCleaned;
+  if (deltaThinking) state.lastDeltaThinkingFull = (state.lastDeltaThinkingFull || '') + deltaThinking;
+
+  const cleanedText = state.lastFilteredFullContent || null;
+  const filteredThinking = state.lastDeltaThinkingFull || '';
 
   if (state.deferredThinkingChunks.length > 0) {
     await writeDeferredThinking(streamWriter, completionId, model, state.deferredThinkingChunks);

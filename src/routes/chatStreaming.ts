@@ -19,6 +19,7 @@ import {
 import {
   runStreamLoop,
   handlePostStreamCompletion,
+  sharedDecoder,
 } from './streamLoop.ts';
 
 export interface StreamingContext {
@@ -68,7 +69,7 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
 
       streamReader = stream.getReader();
       const reader: ReadableStreamDefaultReader<Uint8Array> = streamReader;
-      const decoder = new TextDecoder();
+      // decoder no longer needed per-request — streamLoop uses shared module-level TextDecoder
       const enableContentFiltering = cleanOutput;
       const streamState = buildInitialStreamState(finalPrompt, ctx.initialParentId);
 
@@ -81,7 +82,7 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       };
 
       const bufferRef = { text: '' };
-      const loopResult = await runStreamLoop(c, reader, decoder, streamState, streamCtx, ampState, bufferRef);
+      const loopResult = await runStreamLoop(c, reader, sharedDecoder, streamState, streamCtx, ampState, bufferRef);
 
       await handlePostStreamCompletion(
         {
@@ -136,6 +137,8 @@ function buildInitialStreamState(finalPrompt: string, initialParentId: string | 
     lastFilteredSnapshot: '',
     lastThinkingSnapshot: '',
     lastVStrRaw: '',
+    lastFilteredFullContent: '',
+    lastDeltaThinkingFull: '',
     loggedToolCalls: new Set(),
     lastParsePosition: 0,
   };

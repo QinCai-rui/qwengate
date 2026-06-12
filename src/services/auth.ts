@@ -30,6 +30,7 @@ export {
   incrementTotalRequests, hasInFlight, getAccountByEmail,
   getToken, getTokenWithAccount, throttleAccount, isAccountThrottled,
   getAccountStats, getAccountCount, getAvailableCount, getAllAccountEmails, getAccounts,
+  rebuildEmailIndex,
 } from './accountManager.ts';
 
 export const AUTH_TOKEN_MAX_AGE_MS = parseInt(config.get('AUTH_TOKEN_MAX_AGE_MS', '28800000'), 10);
@@ -389,7 +390,12 @@ export function clearAuth(): void {
 
 export async function ensureAuthenticated(): Promise<boolean> {
   if (accounts.length === 0) {
-    await initAuth();
+    await initAuth(async (email) => {
+      const { configureAccount } = await import('./qwenModels.ts');
+      await configureAccount(email).catch((err: any) =>
+        logStore.log('warn', 'auth', `Post-login config failed for ${email}: ${err.message}`)
+      );
+    });
   }
   await ensureAllFresh();
   return accounts.some(a => a.state !== null);

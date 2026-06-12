@@ -11,18 +11,20 @@
   "scripts": {
     "postinstall": "node scripts/setup.js || exit 0",
     "build": "tsc -p tsconfig.build.json",
-    "start": "node --import tsx src/index.tsx",
-    "start:prod": "node dist/index.js",
-    "dev": "node --import tsx src/index.tsx",
-    "start:firefox": "node --import tsx src/index.tsx --browser=firefox",
-    "start:chrome": "node --import tsx src/index.tsx --browser=chrome",
-    "start:edge": "node --import tsx src/index.tsx --browser=edge",
+    "start": "bun src/index.tsx",
+    "start:prod": "bun dist/index.js",
+    "start:node": "node --import tsx src/index.tsx",
+    "dev": "bun --watch src/index.tsx",
+    "start:firefox": "bun src/index.tsx --browser=firefox",
+    "start:chrome": "bun src/index.tsx --browser=chrome",
+    "start:edge": "bun src/index.tsx --browser=edge",
+    "cluster": "bun src/cluster.ts",
     "setup": "node scripts/setup.js",
-    "test": "tsx --test src/**/*.test.ts",
-    "test:coverage": "node --experimental-test-coverage --import tsx src/**/*.test.ts",
+    "test": "bun test",
+    "test:coverage": "bun test --coverage",
     "husky-init": "npx husky init",
-    "qg": "tsx src/cli.ts",
-    "qg:restart": "tsx src/cli.ts restart"
+    "qg": "bun src/cli.ts",
+    "qg:restart": "bun src/cli.ts restart"
   },
   "keywords": [
     "qwen",
@@ -49,11 +51,12 @@
     "cloakbrowser": "^0.3.31",
     "dotenv": "^16.6.1",
     "hono": "^4.12.21",
-    "playwright": "^1.60.0",
-    "tsx": "^4.22.3"
+    "playwright": "^1.60.0"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.14",
     "@types/node": "^25.9.1",
+    "tsx": "^4.22.3",
     "typescript": "^6.0.3"
   },
   "type": "module"

@@ -8,7 +8,7 @@
     "strict": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "types": ["node"],
+    "types": ["node", "bun"],
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,

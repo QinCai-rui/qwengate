@@ -12,21 +12,25 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── Ensure dependencies are installed ────────────────────────────────
-# npm is fast when everything is cached — this always ensures deps exist
-
-(cd "$PROJECT_ROOT" && npm install) </dev/null || {
+(cd "$PROJECT_ROOT" && npm install --ignore-scripts) </dev/null || {
   echo "[qg] npm install failed. Run 'npm install' manually in $PROJECT_ROOT" >&2
   exit 1
 }
 
+# ── Detect runtime ───────────────────────────────────────────────────
+
+has_cmd() { command -v "$1" &>/dev/null; }
+
 # ── Run CLI ──────────────────────────────────────────────────────────
 
-# Try tsx first (dev), fall back to dist/index.js (built)
-if command -v npx &>/dev/null; then
+# Priority: bun > npx tsx > node dist
+if has_cmd bun; then
+  exec bun "$PROJECT_ROOT/src/cli.ts" "$@"
+elif has_cmd npx; then
   exec npx tsx "$PROJECT_ROOT/src/cli.ts" "$@"
 elif [ -f "$PROJECT_ROOT/dist/index.js" ]; then
   exec node "$PROJECT_ROOT/dist/index.js" "$@"
 else
-  echo "[qg] Error: Qwen Gate not built. Run 'npm run build' or 'npx tsx src/cli.ts $*'" >&2
+  echo "[qg] Error: No runtime found. Install Bun (https://bun.sh) or Node.js" >&2
   exit 1
 fi

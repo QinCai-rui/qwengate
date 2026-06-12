@@ -127,7 +127,7 @@ export async function disablePersonalization(): Promise<void> {
     }
     personalizationDisabled = true;
   })();
-  return disablingPersonalizationInProgress;
+  try { return await disablingPersonalizationInProgress; } finally { disablingPersonalizationInProgress = null; }
 }
 
 let customInstructionApplied = false;
@@ -164,9 +164,12 @@ export async function setCustomInstruction(instruction: string): Promise<void> {
         console.error(`[Qwen] Error setting custom instruction for ${email}: ${err.message}`);
       }
     }
-    customInstructionApplied = true;
-  })();
-  return applyingCustomInstructionInProgress;
+    customInstructionApplied = successCount > 0;
+    if (!customInstructionApplied) {
+      console.error('[Qwen] Custom instruction failed for all accounts — will retry on next call');
+    }
+  })(); 
+  try { return await applyingCustomInstructionInProgress; } finally { applyingCustomInstructionInProgress = null; }
 }
 
 export async function configureAccount(email: string, instruction?: string): Promise<void> {

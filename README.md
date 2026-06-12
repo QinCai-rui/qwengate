@@ -5,7 +5,7 @@
 </p>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
+[![Bun](https://img.shields.io/badge/Bun-1.3+-pink.svg)](https://bun.sh/)
 [![GitHub Release](https://img.shields.io/github/v/release/youssefvdel/qwen-gate)](https://github.com/youssefvdel/qwen-gate/releases)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-blue)](https://www.typescriptlang.org/)
 [![Playwright](https://img.shields.io/badge/Powered%20by-Playwright-blueviolet)](https://playwright.dev/)
@@ -35,7 +35,8 @@ Then open [http://localhost:26405/dashboard](http://localhost:26405/dashboard) t
 - **Content Filter Pipeline** — Strips thinking tags and filters internal artifacts from model output.
 - **Web Dashboard** — Real-time monitoring with 5 pages: overview, request log, account manager, network debug, and settings.
 - **Stealth Browser Automation** — Uses CloakBrowser with anti-detection patches to maintain session integrity.
-- **No Build Step** — TypeScript executed directly via `tsx`. Run from source with no compilation needed.
+- **No Build Step** — TypeScript executed directly via Bun. Run from source with no compilation needed.
+- **Bun-Powered** — Native TypeScript execution, built-in test runner, and cluster mode for multi-core utilization.
 
 ## Installation
 
@@ -61,7 +62,7 @@ Or clone manually:
 git clone https://github.com/youssefvdel/qwen-gate.git
 cd qwen-gate
 copy config.example.jsonc config.json
-npm install
+bun install
 ```
 
 Then run `qg` to start the server.
@@ -72,7 +73,7 @@ Then run `qg` to start the server.
 git clone https://github.com/youssefvdel/qwen-gate.git
 cd qwen-gate
 cp config.example.jsonc config.json
-npm install
+bun install
 ```
 
 ### Start the Server
@@ -84,7 +85,7 @@ qg
 Or:
 
 ```bash
-npm start
+bun start
 ```
 
 The server starts on [http://localhost:26405](http://localhost:26405).
@@ -220,7 +221,7 @@ Account management is done via the web dashboard → Accounts page.
 qg update
 ```
 
-This runs `git pull --ff-only && npm install`. Then restart the server:
+This runs `git pull --ff-only && bun install`. Then restart the server:
 
 ```bash
 qg restart
@@ -229,7 +230,7 @@ qg restart
 ### Manual
 
 ```bash
-git pull && npm install && qg restart
+git pull && bun install && qg restart
 ```
 
 ### Re-run the installer
@@ -284,10 +285,10 @@ src/
 ## Testing
 
 ```bash
-npm test
+bun test
 ```
 
-Uses the `node:test` runner. Covers content filtering, tool-call parsing, echo detection, and spam guard behavior.
+Uses Bun's built-in test runner. Covers content filtering, tool-call parsing, echo detection, and spam guard behavior.
 
 ## Documentation
 

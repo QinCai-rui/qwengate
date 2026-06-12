@@ -11,6 +11,7 @@ import {
   throttleAccount,
   isAvailable,
   accounts,
+  rebuildEmailIndex,
 } from './auth.js';
 
 describe('account inFlight and totalRequests tracking', () => {
@@ -44,10 +45,12 @@ describe('saveCookies and account state', () => {
       inFlight: 0,
       totalRequests: 0,
     });
+    rebuildEmailIndex();
   });
 
   afterEach(() => {
     accounts.length = 0;
+    rebuildEmailIndex();
   });
 
   test('saveCookies updates account state', async () => {
@@ -66,10 +69,12 @@ describe('getAccountByEmail', () => {
       { email: 'MixedCase@Example.com', password: 'p1', state: null, lastUsed: 0, throttledUntil: 0, refreshInFlight: null, loginAttempt: 0, inFlight: 0, totalRequests: 0 },
       { email: 'lowercase@example.com', password: 'p2', state: null, lastUsed: 0, throttledUntil: 0, refreshInFlight: null, loginAttempt: 0, inFlight: 0, totalRequests: 0 },
     );
+    rebuildEmailIndex();
   });
 
   afterEach(() => {
     accounts.length = 0;
+    rebuildEmailIndex();
   });
 
   test('finds account regardless of case', () => {
@@ -102,10 +107,12 @@ describe('throttleAccount and isAvailable', () => {
       inFlight: 0,
       totalRequests: 0,
     });
+    rebuildEmailIndex();
   });
 
   afterEach(() => {
     accounts.length = 0;
+    rebuildEmailIndex();
   });
 
   test('account is available when not throttled and has state', () => {

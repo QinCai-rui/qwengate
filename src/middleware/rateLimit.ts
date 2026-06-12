@@ -23,8 +23,6 @@ export class TokenBucket {
   private key: string;
   private config: RateLimitConfig;
   private maxTokens: number;
-  /** Promise-chain mutex to serialize concurrent tryConsume calls */
-  private lock: Promise<void> = Promise.resolve();
 
   constructor(key: string, config: Partial<RateLimitConfig> = {}) {
     this.key = key;
@@ -65,20 +63,15 @@ export class TokenBucket {
     return Math.max(0.1, tokensNeeded / tokensPerSecond);
   }
 
-  async tryConsume(tokens: number = this.config.tokens_per_request): Promise<boolean> {
-    return new Promise((resolve) => {
-      this.lock = this.lock.then(() => {
-        const bucket = this.getBucket();
-        this.refill(bucket);
+  tryConsume(tokens: number = this.config.tokens_per_request): boolean {
+    const bucket = this.getBucket();
+    this.refill(bucket);
 
-        if (bucket.tokens >= tokens) {
-          bucket.tokens -= tokens;
-          resolve(true);
-        } else {
-          resolve(false);
-        }
-      });
-    });
+    if (bucket.tokens >= tokens) {
+      bucket.tokens -= tokens;
+      return true;
+    }
+    return false;
   }
 
   getHeaders(): Record<string, string> {
@@ -94,13 +87,20 @@ export class TokenBucket {
   }
 }
 
+// Singleton cache: reuse existing TokenBucket instances per key
+const bucketInstances = new Map<string, TokenBucket>();
+
 export async function rateLimitMiddleware(
   c: Context,
   key: string,
   config?: Partial<RateLimitConfig>
 ): Promise<Response | null> {
-  const bucket = new TokenBucket(key, config);
-  const consumed = await bucket.tryConsume();
+  let bucket = bucketInstances.get(key);
+  if (!bucket) {
+    bucket = new TokenBucket(key, config);
+    bucketInstances.set(key, bucket);
+  }
+  const consumed = bucket.tryConsume();
   
   if (!consumed) {
     const headers = bucket.getHeaders();
@@ -127,6 +127,7 @@ export function cleanupIdleBuckets(maxIdleMinutes: number = 60): void {
   for (const [key, bucket] of buckets.entries()) {
     if (now - bucket.lastRefill > maxIdleMs) {
       buckets.delete(key);
+      bucketInstances.delete(key);
     }
   }
 }
