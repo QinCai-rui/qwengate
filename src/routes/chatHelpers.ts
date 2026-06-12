@@ -307,7 +307,8 @@ export async function createQwenStreamWithRetry(
     return { stream: result.stream, abortController: result.abortController, qwenLogFile: result.qwenLogFile };
   } catch (err: any) {
     modelRouter.recordError(routedModel);
-    sessionPool.release(chatId, nextParentId, undefined, resolvedEmail);
+    // Release session without counting as a successful request
+    sessionPool.release(chatId, nextParentId, undefined, resolvedEmail, false);
     throw err;
   }
 }

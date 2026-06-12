@@ -4,7 +4,7 @@ import { OpenAIRequest } from "../types/openai.ts";
 import { config } from "../services/configService.ts";
 import { logStore } from "../services/logStore.ts";
 import { modelRouter } from "../services/modelRouter.ts";
-import { pickAccount, decrementInFlight } from "../services/auth.ts";
+import { pickAccount } from "../services/auth.ts";
 import { checkContextWindow, estimateTokens } from "../utils/tokenEstimator.ts";
 import { handleStreamingRequest } from "./chatStreaming.ts";
 import { handleNonStreamingRequest } from "./chatNonStreaming.ts";
@@ -111,8 +111,9 @@ async function setupSession(
       processedMessages,
     );
   } catch (err) {
-    // pickAccount already incremented inFlight — decrement on acquire failure
-    if (accountEmail) decrementInFlight(accountEmail);
+    // NOTE: sessionPool.acquire() already decrements inFlight on failure,
+    // so we do NOT decrement here to avoid double-decrement (which would
+    // drive inFlight negative and corrupt load balancing).
     throw err;
   }
   const { session, qwenMessages: sessionMessages, nextParentId, sessionHeaders, resolvedEmail } =

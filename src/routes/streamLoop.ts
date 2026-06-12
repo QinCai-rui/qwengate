@@ -123,7 +123,7 @@ export async function handlePostStreamCompletion(
     await streamWriter.write('data: [DONE]\n\n');
     logStore.updateEntry(logId, entry => { entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' }; entry.finalResponse.finishReason = 'upstream_error'; });
     logStore.finalizeRequest(logId);
-    scheduleCleanup(reader, heartbeatInterval, chatId, streamState?.nextParentId, sessionHeaders, email, sessionPool);
+    scheduleCleanup(reader, heartbeatInterval, chatId, streamState?.nextParentId, sessionHeaders, email, sessionPool, false);
     return;
   }
 

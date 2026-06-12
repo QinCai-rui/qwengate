@@ -339,7 +339,7 @@ export async function handleNonStreamingRequest(ctx: NonStreamingContext): Promi
     try { state.reader.cancel(); } catch { /* reader already cancelled */ }
     try { state.reader.releaseLock(); } catch { /* reader already cancelled */ }
     if (!nonStreamReleased) {
-      sessionPool.release(session.chatId, state.nextParentId, sessionHeaders, resolvedEmail);
+      sessionPool.release(session.chatId, state.nextParentId, sessionHeaders, resolvedEmail, false);
     }
   }
 }

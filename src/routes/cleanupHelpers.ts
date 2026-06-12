@@ -36,8 +36,9 @@ export function scheduleCleanup(
   headers: any,
   email: string,
   sessionPool: {
-    release: (chatId: string, parentId: string | null, headers: any, email: string) => void;
+    release: (chatId: string, parentId: string | null, headers: any, email: string, isSuccess?: boolean) => void;
   },
+  isSuccess: boolean = true,
 ): () => void {
   let cancelled = false;
   setTimeout(() => {
@@ -45,7 +46,7 @@ export function scheduleCleanup(
     clearInterval(heartbeatInterval);
     try { reader?.cancel(); } catch { /* ignore */ }
     try { reader?.releaseLock(); } catch { /* ignore */ }
-    sessionPool.release(chatId, parentId, headers, email);
+    sessionPool.release(chatId, parentId, headers, email, isSuccess);
   }, 0);
   return () => { cancelled = true; };
 }
@@ -61,13 +62,14 @@ export function cleanupImmediately(
   headers: any,
   email: string,
   sessionPool: {
-    release: (chatId: string, parentId: string | null, headers: any, email: string) => void;
+    release: (chatId: string, parentId: string | null, headers: any, email: string, isSuccess?: boolean) => void;
   },
+  isSuccess: boolean = true,
 ) {
   clearInterval(heartbeatInterval);
   if (streamReader) {
     try { streamReader.cancel(); } catch { /* ignore */ }
     try { streamReader.releaseLock(); } catch { /* ignore */ }
   }
-  sessionPool.release(chatId, parentId, headers, email);
+  sessionPool.release(chatId, parentId, headers, email, isSuccess);
 }

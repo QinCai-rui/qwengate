@@ -131,7 +131,7 @@ export class SessionPool {
     });
   }
 
-  async release(chatId: string, _newParentId: string | null, cachedHeaders?: { cookie: string; userAgent: string }, accountEmail?: string): Promise<void> {
+  async release(chatId: string, _newParentId: string | null, cachedHeaders?: { cookie: string; userAgent: string }, accountEmail?: string, isSuccess: boolean = true): Promise<void> {
     // Idempotency guard: if chatId not tracked as active, this session was already released.
     // Prevents double-release from competing cleanup paths (setTimeout + finally).
     if (!this.activeSessions.has(chatId)) {
@@ -139,9 +139,12 @@ export class SessionPool {
     }
 
     // Track completed request — decrement in-flight, bump total count
+    // Only count successful completions toward totalRequests
     if (accountEmail) {
       decrementInFlight(accountEmail);
-      incrementTotalRequests(accountEmail);
+      if (isSuccess) {
+        incrementTotalRequests(accountEmail);
+      }
     }
 
     const waiter = this.waiting.shift();
@@ -156,6 +159,8 @@ export class SessionPool {
         })
         .catch(err => {
           console.error('[SessionPool] Failed to create session for waiter:', err.message);
+          // pickAccount() incremented inFlight — decrement on failure to prevent leak
+          if (waiterEmail) decrementInFlight(waiterEmail);
           waiter.reject(err);
         });
     }

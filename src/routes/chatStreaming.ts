@@ -113,7 +113,7 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
           entry.finalResponse.finishReason = entry.finalResponse.finishReason || 'stop';
         });
         logStore.finalizeRequest(ctx.logId);
-        cleanupImmediately(streamReader, heartbeatInterval, session.chatId, ctx.initialParentId, sessionHeaders, resolvedEmail, sessionPool);
+        cleanupImmediately(streamReader, heartbeatInterval, session.chatId, ctx.initialParentId, sessionHeaders, resolvedEmail, sessionPool, false);
       }
     }
   });
