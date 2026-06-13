@@ -155,11 +155,24 @@ describe('filterContentPipeline — per-chunk XML tool call preservation', () =>
     assert.strictEqual(result.thinking, '', 'no thinking content in tool-call-only text');
   });
 
-  test('cleanThinkTags strips complete <function=...> tags but not partial <function', () => {
+  test('cleanThinkTags strips tool call tags including partial prefixes at chunk boundaries', () => {
+    // Complete tags are stripped
     assert.strictEqual(cleanThinkTags('<function=read>\n'), '\n', 'complete <function=read> tag stripped');
     assert.strictEqual(cleanThinkTags('</function>'), '', 'closing function tag stripped');
-    assert.strictEqual(cleanThinkTags('<function'), '<function', 'partial <function survives cleanThinkTags');
-    assert.strictEqual(cleanThinkTags('=read>\n'), '=read>\n', 'orphaned fragment survives cleanThinkTags');
+    assert.strictEqual(cleanThinkTags('</parameter>'), '', 'closing parameter tag stripped');
+    // Partial tags (chunk-boundary splits) are now also stripped via prefix matching
+    assert.strictEqual(cleanThinkTags('<function'), '', 'partial <function stripped by prefix matcher');
+    assert.strictEqual(cleanThinkTags('<fun'), '', 'partial <fun stripped by prefix matcher');
+    assert.strictEqual(cleanThinkTags('<par'), '', 'partial <par stripped by prefix matcher');
+    assert.strictEqual(cleanThinkTags('</fun'), '', 'partial </fun stripped by prefix matcher');
+    // Continuation tails (after a prefix of MIN_TOOL_PREFIX_LEN was stripped)
+    // "function" sans "fun" → "ction", "parameter" sans "par" → "ameter"
+    assert.strictEqual(cleanThinkTags('ction=filePath>'), '', 'tail "ction=filePath>" stripped');
+    assert.strictEqual(cleanThinkTags('ction=name>\n'), '', 'tail "ction=name>" stripped');
+    assert.strictEqual(cleanThinkTags('ameter=300>'), '', 'tail "ameter=300>" stripped');
+    // Orphaned fragments that don't match known tails survive (unavoidable without state)
+    assert.strictEqual(cleanThinkTags('=read>\n'), '=read>\n', 'bare =read> tail survives (no context)');
+    assert.strictEqual(cleanThinkTags('ion=test>\n'), 'ion=test>\n', 'short tail ion= survives (could be normal text)');
   });
 
   test('cleanTextOfXmlArtifacts on full text correctly extracts tool calls and strips markup', () => {

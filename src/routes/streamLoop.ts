@@ -137,6 +137,18 @@ export async function handlePostStreamCompletion(
       : 0;
     const effectiveToolCallCount = Math.max(emittedToolCallCount, finalToolCalls);
 
+    // Populate parsedToolCalls from full accumulated content (per-chunk extraction
+    // never sees complete blocks since individual SSE deltas are too small).
+    if (streamState.lastFullContent && effectiveToolCallCount > emittedToolCallCount) {
+      const parsed = parseXmlToolCalls(streamState.lastFullContent).toolCalls;
+      // Avoid double-counting: only add tool calls that weren't already emitted
+      for (const tc of parsed.slice(emittedToolCallCount)) {
+        logStore.updateEntry(logId, entry => {
+          entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.parameters) });
+        });
+      }
+    }
+
     const pipelineResult = filterContentPipeline(streamState.lastFullContent, enableContentFiltering);
     const flushCleaned = pipelineResult.cleanText;
     const flushThinking = pipelineResult.thinking;

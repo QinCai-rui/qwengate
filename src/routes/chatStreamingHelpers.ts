@@ -246,7 +246,7 @@ export async function processStreamData(
   }
 
   // Keep state.lastFullContent raw so partial <function=...> survives for the next chunk
-  const newToolCallContent = state.lastFullContent.slice(state.lastParsePosition);
+  const newToolCallContent = state.lastFullContent;
   const { toolCalls: xmlToolCalls } = parseXmlToolCalls(newToolCallContent);
   if (xmlToolCalls.length > 0) {
     const newToolCalls = xmlToolCalls.filter(tc => {

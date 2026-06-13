@@ -120,13 +120,50 @@ const THINK_TAG_PATTERN = /<\/?(?:think(?:ing)?|thought)(?:\s[^>]*)?\/?>/gi;
 /** Matches tool result tag fragments (requires closing > to avoid false stripping of /toolbox /toolkit etc). */
 const TOOL_RESULT_TAG_PATTERN = /<\/tool(?:_result)?>/gi;
 
+/**
+ * Data-driven regex builder for tool call XML tag & tail stripping.
+ * Qwen's tool call format uses `<keyword=value>` and `</keyword>` patterns
+ * where keyword is known (function, parameter). The SSE tokenizer can split
+ * these at arbitrary byte boundaries (e.g., `<func` + `tion=name>`).
+ *
+ * Instead of hardcoding every possible split, we generate regexes from the
+ * known keywords, computing:
+ *  - Tag prefixes: all substrings ≥ MIN chars (handles chunk-boundary splits)
+ *  - Continuation tails: what survives after the prefix was stripped
+ *
+ * Add new keywords to the array when Qwen's tool call format changes.
+ */
+const MIN_TOOL_PREFIX_LEN = 3;
+const [TOOL_TAG_RE, TOOL_TAIL_RE] = (() => {
+  const keywords = ['function', 'parameter'];
+  const tagPrefixes: string[] = [];
+  const tailPrefixes: string[] = [];
+
+  for (const kw of keywords) {
+    for (let i = MIN_TOOL_PREFIX_LEN; i <= kw.length; i++) {
+      const p = kw.slice(0, i);
+      tagPrefixes.push(p);     // fun, funct, ..., /fun, /funct, ...
+      tagPrefixes.push('/' + p);
+    }
+    const tail = kw.slice(MIN_TOOL_PREFIX_LEN); // "ction" for "function"
+    if (tail) tailPrefixes.push(tail);
+  }
+
+  tagPrefixes.sort((a, b) => b.length - a.length);
+  const tagRe = new RegExp(`<(?:${tagPrefixes.join('|')})[^>]*(?:>|$)`, 'gi');
+  const tailRe = tailPrefixes.length > 0
+    ? new RegExp(`^(?:${tailPrefixes.join('|')})(?:[=][^\n>]*[=>]?|>)\\n?`, 'gm')
+    : /(?!)/;
+  return [tagRe, tailRe];
+})();
+
 export function cleanThinkTags(t: string): string {
   let s = t.replace(THINK_TAG_PATTERN, "");
   s = s.replace(TOOL_RESULT_TAG_PATTERN, "");
-  // Strip any remaining <function=...> or </function> markup that may have
-  // leaked from partial/incomplete tool call XML in Qwen's output
-  s = s.replace(/<function=[^>]*(?:>|(?=\n|$))/g, '');
-  s = s.replace(/<\/?function>/g, '');
+  // Strip tool call XML tags (complete + partial at chunk boundaries)
+  s = s.replace(TOOL_TAG_RE, '');
+  // Strip continuation tails after partial tag removal
+  s = s.replace(TOOL_TAIL_RE, '');
   return s;
 }
 
