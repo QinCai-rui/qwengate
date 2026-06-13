@@ -70,7 +70,8 @@ export function filterContent(raw: string): FilterResult {
   for (const para of paragraphs) {
     const paraLines = para.split('\n').filter(l => l.trim().length > 0);
     if (paraLines.length === 0) {
-      cleanParagraphs.push('');
+      // Preserve whitespace-only paragraphs (e.g., standalone newlines between content)
+      cleanParagraphs.push(para);
       continue;
     }
 
