@@ -16,6 +16,7 @@ import {
   getAllModelHealth as _getAllModelHealth,
 } from "./modelHealth.ts";
 import { config } from "./configService.ts";
+import { monitorStore } from "./monitorStore.ts";
 import { SystemLogger, __registerLogStore } from "./systemLogger.ts";
 export { logStore, SystemLogger } from "./systemLogger.ts";
 export type { LogLevel, SystemLogEntry, SystemLogFilter } from "./systemLogger.ts";
@@ -336,6 +337,21 @@ export class RequestLogStore extends SystemLogger {
     }
     if (config.get("SAVE_REQUEST_LOGS") === "true") {
       this.saveRequestLog(id);
+    }
+
+    // Record to persistent monitor store (survives restarts)
+    const entry = this.entryMap.get(id);
+    if (entry && entry.accountEmail) {
+      const hasErrors = (entry.errors && entry.errors.length > 0) || !!entry.error
+        || entry.finalResponse?.finishReason === 'error';
+      monitorStore.record({
+        accountEmail: entry.accountEmail,
+        model: entry.model || 'unknown',
+        stream: entry.stream,
+        success: !hasErrors,
+        latencyMs: entry.latency_ms,
+        error: entry.error || (entry.errors?.length ? entry.errors[0] : null),
+      });
     }
   }
 

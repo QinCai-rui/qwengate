@@ -4,6 +4,7 @@ import { resolve } from "path";
 import { readFileSync, existsSync } from "fs";
 import { config, isValidKey } from "../../services/configService.ts";
 import { logStore } from "../../services/logStore.ts";
+import { monitorStore } from "../../services/monitorStore.ts";
 import { sessionPool } from "../../services/sessionPool.ts";
 import {
   getAccountStats,
@@ -23,6 +24,7 @@ import { logsHtml } from "./logs.ts";
 import { accountsHtml } from "./accounts.ts";
 import { networkHtml } from "./network.ts";
 import { settingsHtml } from "./settings.ts";
+import { monitorHtml } from "./monitor.ts";
 import { APP_VERSION } from "../../utils/version.ts";
 
 const serveHtml = (html: string) => (c: any) => {
@@ -34,12 +36,14 @@ const serveHtml = (html: string) => (c: any) => {
 
 function dashboardStaticHandler(c: any) {
   const file = c.req.param("file");
-  if (!/^[a-z0-9_-]+\.(css|js)$/i.test(file)) return c.json({ error: "Invalid file" }, 400);
+  if (!/^[a-z0-9_-]+\.(css|js|svg)$/i.test(file)) return c.json({ error: "Invalid file" }, 400);
   const DASHBOARD_STATIC = projectPath("src", "routes", "dashboard", "public");
   const filePath = resolve(DASHBOARD_STATIC, file);
   if (!filePath.startsWith(DASHBOARD_STATIC) || !existsSync(filePath)) return c.json({ error: "Not found" }, 404);
-  const ext = file.endsWith(".css") ? "text/css" : "application/javascript";
-  return c.text(readFileSync(filePath, "utf-8"), 200, { "Content-Type": ext });
+  const mime: Record<string, string> = { css: "text/css", js: "application/javascript", svg: "image/svg+xml" };
+  const ext = file.split(".").pop() || "";
+  const contentType = mime[ext] || "application/octet-stream";
+  return c.text(readFileSync(filePath, "utf-8"), 200, { "Content-Type": contentType });
 }
 
 function healthHandler(c: any) {
@@ -181,6 +185,14 @@ function modelHealthHandler(c: any) {
   return c.json(logStore.getAllModelHealth());
 }
 
+function monitorHandler(c: any) {
+  try {
+    return c.json(monitorStore.getSummary());
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+}
+
 function logStreamHandler(c: any) {
   return new Response(
     new ReadableStream({
@@ -291,6 +303,7 @@ export function registerDashboardRoutes(app: Hono): void {
   app.get("/dashboard/accounts", serveHtml(accountsHtml));
   app.get("/dashboard/network", serveHtml(networkHtml));
   app.get("/dashboard/settings", serveHtml(settingsHtml));
+  app.get("/dashboard/monitor", serveHtml(monitorHtml));
 
   app.get("/dashboard/static/:file", dashboardStaticHandler);
 
@@ -316,6 +329,7 @@ export function registerDashboardRoutes(app: Hono): void {
 
   app.get("/system/logs", systemLogsHandler);
   app.get("/metrics/model-health", modelHealthHandler);
+  app.get("/metrics/monitor", monitorHandler);
 
   app.get("/log", (c) => c.redirect("/dashboard/logs"));
   app.get("/log/json", logJsonHandler);
