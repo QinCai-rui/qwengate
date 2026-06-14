@@ -14,6 +14,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 logs/
+.logs/
 
 # OS files
 .DS_Store
@@ -87,3 +88,5 @@ qwen-gate/
 github_reply
 toolcall_study
 extract output qwen/
+research
+token-usage-output.txt

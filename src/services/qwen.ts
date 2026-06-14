@@ -23,6 +23,7 @@ export function buildFeatureConfig(enableThinking: boolean): Record<string, any>
     auto_thinking: false,
     thinking_mode: 'Thinking',
     thinking_format: 'full',
+    thinking_budget: 65536,
     auto_search: false,
   };
 }

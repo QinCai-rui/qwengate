@@ -182,7 +182,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
 
   // Enable per-request file logging
-  logStore.enableRequestFileLogging(projectPath("logs", "gate"));
+  logStore.enableRequestFileLogging(projectPath(".logs"));
 
   const port = parseInt(config.get("PORT"), 10) || 26405;
   const hostArg = process.argv.indexOf('--host');

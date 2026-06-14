@@ -114,29 +114,22 @@ function sanitizeLogEntry(entry: any): any {
   const sanitized = { ...entry };
 
   // Mask email addresses (keep first 3 chars)
-  if (sanitized.accountEmail) {
-    const [local, domain] = sanitized.accountEmail.split('@');
-    sanitized.accountEmail = local.substring(0, 3) + '***@' + (domain || '***');
+  if (sanitized.account) {
+    const [local, domain] = sanitized.account.split('@');
+    sanitized.account = local.substring(0, 3) + '***@' + (domain || '***');
   }
 
   // Mask prompt content that might contain credentials
-  if (sanitized.messages) {
-    sanitized.messages = sanitized.messages.map((m: any) => {
-      if (typeof m.content === 'string' && m.content.length > 200) {
-        return { ...m, content: m.content.substring(0, 200) + '...[truncated]' };
-      }
-      return m;
-    });
-  }
-
-  // Truncate rawRequestBody if present
-  if (sanitized.rawRequestBody) {
-    const rawStr = typeof sanitized.rawRequestBody === 'string'
-      ? sanitized.rawRequestBody
-      : JSON.stringify(sanitized.rawRequestBody);
-    if (rawStr.length > 500) {
-      sanitized.rawRequestBody = rawStr.substring(0, 500) + '...[truncated]';
-    }
+  if (sanitized.input?.messages) {
+    sanitized.input = {
+      ...sanitized.input,
+      messages: sanitized.input.messages.map((m: any) => {
+        if (typeof m.content === 'string' && m.content.length > 200) {
+          return { ...m, content: m.content.substring(0, 200) + '...[truncated]' };
+        }
+        return m;
+      }),
+    };
   }
 
   // Truncate long text fields that may contain sensitive data
@@ -146,27 +139,16 @@ function sanitizeLogEntry(entry: any): any {
     }
   }
 
-  // Truncate prompt preview
-  if (sanitized.promptToQwen?.preview && typeof sanitized.promptToQwen.preview === 'string') {
-    sanitized.promptToQwen = {
-      ...sanitized.promptToQwen,
-      preview: sanitized.promptToQwen.preview.length > 200
-        ? sanitized.promptToQwen.preview.substring(0, 200) + '...[truncated]'
-        : sanitized.promptToQwen.preview,
-    };
+  // Truncate raw_output and proccessed_output
+  if (sanitized.raw_output && sanitized.raw_output.length > 1000) {
+    sanitized.raw_output = sanitized.raw_output.substring(0, 1000) + '...[truncated]';
   }
-
-  // Sanitize client request messages
-  if (sanitized.clientRequest?.messages) {
-    sanitized.clientRequest = {
-      ...sanitized.clientRequest,
-      messages: sanitized.clientRequest.messages.map((m: any) => {
-        if (typeof m.content === 'string' && m.content.length > 200) {
-          return { ...m, content: m.content.substring(0, 200) + '...[truncated]' };
-        }
-        return m;
-      }),
-    };
+  if (sanitized.proccessed_output && sanitized.proccessed_output.length > 1000) {
+    sanitized.proccessed_output = sanitized.proccessed_output.substring(0, 1000) + '...[truncated]';
+  }
+  // Truncate thinking_content
+  if (sanitized.thinking_content && sanitized.thinking_content.length > 2000) {
+    sanitized.thinking_content = sanitized.thinking_content.substring(0, 2000) + '...[truncated]';
   }
 
   return sanitized;
@@ -265,24 +247,18 @@ function logJsonHandler(c: any) {
     return {
       id: e.id,
       timestamp: e.timestamp,
-      model: e.model,
       account: e.accountEmail,
+      model: e.model,
+      finish_reason: e.finalResponse?.finishReason || null,
       stream: e.stream,
       latency_ms: e.latency_ms,
-      tokens: e.tokens,
-      finish_reason: e.finalResponse?.finishReason || null,
-      tool_calls: toolCalls,
+      thinking_content: e.reasoningContent || "",
+      raw_output: e.rawFullContent || "",
+      proccessed_output: e.processedApiOutput || "",
       tool_call_count: toolCalls.length,
-      content: e.processedApiOutput || "",
-      raw_output_preview: (e.rawFullContent || '').substring(0, 500),
+      tool_calls: toolCalls,
       errors: e.errors || [],
-      reasoningContent: e.reasoningContent || "",
-      request_id: e.request_id,
-      remainingText: e.remainingText || undefined,
-      finalResponse: e.finalResponse || undefined,
-      promptToQwen: e.promptToQwen || undefined,
-      networkTiming: e.networkTiming || undefined,
-      amplificationRatio: e.amplificationRatio,
+      chunks: e.qwenRawChunks || [],
       input: e.clientRequest || {},
     };
   });

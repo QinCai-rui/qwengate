@@ -299,6 +299,16 @@ export function extractDeltaContent(
         vStr = delta.content || "";
         if (vStr) foundStr = true;
       }
+    } else if (delta.reasoning_content !== undefined && delta.reasoning_content) {
+      // OpenAI-compatible format (no phase field): reasoning_content for thinking
+      isThinkingChunk = true;
+      vStr = delta.reasoning_content;
+      if (vStr) foundStr = true;
+    } else if (delta.content !== undefined && delta.content && !delta.phase) {
+      // OpenAI-compatible format (no phase field): content for answer
+      isThinkingChunk = false;
+      vStr = delta.content;
+      if (vStr) foundStr = true;
     }
   }
   return { vStr, foundStr, isThinkingChunk, currentThoughtIndex: newThoughtIndex };
