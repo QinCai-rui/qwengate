@@ -202,6 +202,7 @@ export async function handlePostStreamCompletion(
       const startedAt = new Date(entry.timestamp).getTime();
       if (startedAt) entry.latency_ms = now - startedAt;
       if (streamState.lastFullContent) entry.remainingText = streamState.lastFullContent;
+      if (streamState.reasoningBuffer) entry.reasoningContent = streamState.reasoningBuffer;
       entry.finalResponse = {
         finishReason: finalFinishReason || 'stop',
         toolCallCount: effectiveToolCallCount,
@@ -213,6 +214,12 @@ export async function handlePostStreamCompletion(
   } catch (err) {
     console.error('[Chat] handlePostStreamCompletion error:', err);
     logStore.addError(logId, err instanceof Error ? err.message : String(err));
+    // Preserve data that was set before flush (content, reasoning, etc.)
+    logStore.updateEntry(logId, (entry) => {
+      if (streamState.lastFullContent) entry.remainingText = streamState.lastFullContent;
+      if (streamState.reasoningBuffer) entry.reasoningContent = streamState.reasoningBuffer;
+      entry.finalResponse = entry.finalResponse || { finishReason: 'error', toolCallCount: 0, contentPreview: '' };
+    });
     logStore.finalizeRequest(logId);
   } finally {
     // Always release session to prevent pool exhaustion, even if writeEvent fails

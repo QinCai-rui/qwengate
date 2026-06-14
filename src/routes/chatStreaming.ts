@@ -92,6 +92,8 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
         })]));
         await streamWriter.write('data: [DONE]\n\n');
         logStore.updateEntry(logId, entry => {
+          if (streamState.reasoningBuffer) entry.reasoningContent = streamState.reasoningBuffer;
+          if (streamState.lastFullContent) entry.remainingText = streamState.lastFullContent;
           entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
           entry.finalResponse.finishReason = 'error';
         });

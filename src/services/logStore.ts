@@ -35,7 +35,6 @@ export interface LogEntry {
   rawRequestBody?: Record<string, unknown> | string; // Full OpenAI request body
   rawResponse?: string; // Full raw response from Qwen (not truncated)
   processedResponse?: string; // After content filtering/tool parsing
-  error?: string | null;
   toolCalls?: Array<{
     name: string;
     arguments: Record<string, unknown>;
@@ -85,6 +84,7 @@ export interface LogEntry {
     contentPreview: string;
   };
   errors: string[];
+  reasoningContent?: string;
   amplificationRatio?: number;
   amplificationTriggeredInput?: string;
 }
@@ -342,7 +342,7 @@ export class RequestLogStore extends SystemLogger {
     // Record to persistent monitor store (survives restarts)
     const entry = this.entryMap.get(id);
     if (entry && entry.accountEmail) {
-      const hasErrors = (entry.errors && entry.errors.length > 0) || !!entry.error
+      const hasErrors = (entry.errors && entry.errors.length > 0)
         || entry.finalResponse?.finishReason === 'error';
       monitorStore.record({
         accountEmail: entry.accountEmail,
@@ -350,7 +350,7 @@ export class RequestLogStore extends SystemLogger {
         stream: entry.stream,
         success: !hasErrors,
         latencyMs: entry.latency_ms,
-        error: entry.error || (entry.errors?.length ? entry.errors[0] : null),
+        error: entry.errors?.length ? entry.errors[0] : null,
       });
     }
   }
@@ -369,36 +369,35 @@ export class RequestLogStore extends SystemLogger {
     const dateStr = `${y}-${M}-${day}`;
     const timeStr = `${h}-${min}-${s}`;
     try {
+      const toolCalls = (entry.parsedToolCalls || []).map((tc) => {
+        let args: unknown = tc.args;
+        try { args = JSON.parse(tc.args); } catch { /* keep string */ }
+        return { name: tc.name, arguments: args };
+      });
       const payload = {
         id: entry.id,
-        date: dateStr,
-        time: timeStr,
+        timestamp: entry.timestamp,
         model: entry.model,
-        turnId: entry.turnId || "",
+        account: entry.accountEmail,
         stream: entry.stream,
-        accountEmail: entry.accountEmail,
         latency_ms: entry.latency_ms,
         tokens: entry.tokens,
-        request_id: entry.request_id,
-        raw_output: entry.rawFullContent || "",
-        processed_output: {
-          content: entry.processedApiOutput || "",
-          tool_calls: (entry.parsedToolCalls || []).map((tc) => {
-            let args: unknown = tc.args;
-            try { args = JSON.parse(tc.args); } catch { /* keep string */ }
-            return { name: tc.name, arguments: args };
-          }),
-        },
-        chunks: entry.qwenRawChunks || [],
-        input: entry.clientRequest || {},
-        remainingText: entry.remainingText || "",
-        finalResponse: entry.finalResponse || null,
+        finish_reason: entry.finalResponse?.finishReason || null,
+        tool_calls: toolCalls,
+        tool_call_count: toolCalls.length,
+        content: entry.processedApiOutput || "",
+        raw_output_preview: (entry.rawFullContent || '').substring(0, 500),
         errors: entry.errors || [],
-        promptToQwen: entry.promptToQwen || null,
-        networkTiming: entry.networkTiming || null,
-        timestamp: entry.timestamp,
-        amplificationRatio: entry.amplificationRatio ?? null,
-        amplificationTriggeredInput: entry.amplificationTriggeredInput || null,
+        reasoningContent: entry.reasoningContent || "",
+        request_id: entry.request_id,
+        chunks: entry.qwenRawChunks || [],
+        remainingText: entry.remainingText || undefined,
+        input: entry.clientRequest || {},
+        finalResponse: entry.finalResponse || undefined,
+        promptToQwen: entry.promptToQwen || undefined,
+        networkTiming: entry.networkTiming || undefined,
+        amplificationRatio: entry.amplificationRatio ?? undefined,
+        amplificationTriggeredInput: entry.amplificationTriggeredInput || undefined,
       };
       const fileName = `${dateStr}_${timeStr}.json`;
       const filePath = join(this.requestLogDir, fileName);

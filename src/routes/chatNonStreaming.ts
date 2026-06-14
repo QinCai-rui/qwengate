@@ -142,6 +142,18 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
     return;
   }
 
+  // Detect upstream Qwen SSE error payload mid-stream
+  if (chunk.error) {
+    const errMsg = typeof chunk.error === 'string' ? chunk.error : chunk.error.message || JSON.stringify(chunk.error);
+    logStore.addError(ctx.logId, `Qwen upstream SSE error: ${errMsg}`);
+    return;
+  }
+  const deltaStatus = chunk.choices?.[0]?.delta?.status;
+  if (deltaStatus === 'error') {
+    logStore.addError(ctx.logId, 'Qwen stream delta returned error status');
+    return;
+  }
+
   if (chunk['response.created']?.response_id) {
     if (!state.targetResponseId) state.targetResponseId = chunk['response.created'].response_id;
     state.nextParentId = chunk['response.created'].response_id;
@@ -212,9 +224,7 @@ function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
   if (!loopCheck.ok) {
     console.warn(`  [🔄 PARALLEL LOOP] ${loopCheck.errors[0]}`);
     state.correctionPrompts.push(loopCheck.correctionPrompt);
-    logStore.updateEntry(logId, entry => {
-      entry.errors.push(`Parallel loop: ${loopCheck.errors[0]}`);
-    });
+    logStore.addError(logId, `Parallel loop: ${loopCheck.errors[0]}`);
     // Filter out duplicate tool calls from the response
     if (loopCheck.valid && loopCheck.valid.length < parsedForLoopCheck.length) {
       const validIds = new Set(loopCheck.valid.map(v => v.id));
@@ -267,8 +277,11 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
         : state.lastFullContent,
     };
     entry.remainingText = state.lastFullContent;
-    if (state.correctionPrompts.length > 0) entry.errors.push(...state.correctionPrompts);
   });
+
+  for (const prompt of state.correctionPrompts) {
+    logStore.addError(logId, prompt);
+  }
 
   logStore.addProcessedOutput(logId, filteredContent);
 

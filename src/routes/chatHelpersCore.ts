@@ -231,8 +231,12 @@ setInterval(() => {
 export function parseQwenErrorPayload(
   raw: string,
 ): { message: string; status: import("hono/utils/http-status").ContentfulStatusCode } | null {
-  const text = raw.trim();
-  if (!text || text.startsWith("data: ")) return null;
+  let text = raw.trim();
+  if (!text) return null;
+  // Strip SSE data: prefix if present — used when checking full buffer content
+  if (text.startsWith("data: ")) text = text.slice(6).trim();
+  // Skip SSE control lines and [DONE]
+  if (text === "[DONE]" || text.startsWith(":")) return null;
   try {
     const payload = JSON.parse(text);
     if (payload && payload.success === false) {
@@ -247,7 +251,7 @@ export function parseQwenErrorPayload(
       return { message: `Qwen upstream error: ${msg}`, status: 502 };
     }
   } catch {
-    return { message: `Qwen upstream returned non-SSE response: ${text.slice(0, 300)}`, status: 502 };
+    return null;
   }
   return null;
 }

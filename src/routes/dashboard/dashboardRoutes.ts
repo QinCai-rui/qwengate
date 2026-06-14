@@ -257,41 +257,33 @@ function logStreamHandler(c: any) {
 function logJsonHandler(c: any) {
   const entries = logStore.getRecent(50);
   const serialized = entries.map((e) => {
-    const dt = new Date(e.timestamp);
-    const datePart = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
-    const timePart = `${String(dt.getHours()).padStart(2, "0")}-${String(dt.getMinutes()).padStart(2, "0")}-${String(dt.getSeconds()).padStart(2, "0")}`;
+    const toolCalls = (e.parsedToolCalls || []).map((tc) => {
+      let args: unknown = tc.args;
+      try { args = JSON.parse(tc.args); } catch { /* keep as string */ }
+      return { name: tc.name, arguments: args };
+    });
     return {
       id: e.id,
-      date: datePart,
-      time: timePart,
       timestamp: e.timestamp,
+      model: e.model,
+      account: e.accountEmail,
       stream: e.stream,
-      accountEmail: e.accountEmail,
       latency_ms: e.latency_ms,
       tokens: e.tokens,
+      finish_reason: e.finalResponse?.finishReason || null,
+      tool_calls: toolCalls,
+      tool_call_count: toolCalls.length,
+      content: e.processedApiOutput || "",
+      raw_output_preview: (e.rawFullContent || '').substring(0, 500),
+      errors: e.errors || [],
+      reasoningContent: e.reasoningContent || "",
       request_id: e.request_id,
-      errors: e.errors?.length > 0 ? e.errors : undefined,
-      model: e.model,
-      turnId: e.turnId || "",
-      raw_output: e.rawFullContent || "",
-      processed_output: {
-        content: e.processedApiOutput || "",
-        tool_calls: (e.parsedToolCalls || []).map((tc) => {
-          let args: unknown = tc.args;
-          try { args = JSON.parse(tc.args); } catch { /* keep as string */ }
-          return { name: tc.name, arguments: args };
-        }),
-      },
-      chunks: (e.qwenRawChunks || []) as string[],
-      finalResponse: e.finalResponse || undefined,
       remainingText: e.remainingText || undefined,
+      finalResponse: e.finalResponse || undefined,
       promptToQwen: e.promptToQwen || undefined,
-      rawRequestBody: e.rawRequestBody || undefined,
       networkTiming: e.networkTiming || undefined,
       amplificationRatio: e.amplificationRatio,
-      amplificationTriggeredInput: e.amplificationTriggeredInput || undefined,
-      input: e.input || undefined,
-      client_request: e.clientRequest || {},
+      input: e.clientRequest || {},
     };
   });
   return c.json(serialized.map(sanitizeLogEntry));

@@ -158,36 +158,55 @@ export async function processStreamData(
     logId, resolvedEmail, ampState,
   } = ctx;
 
-    if (data.choices?.[0]?.delta?.status === 'finished') {
-    const deltaPhase = data.choices[0].delta.phase;
-    if (deltaPhase !== 'thinking_summary') {
-      // Extract and emit local MCP tool calls before breaking the stream
-      if (deltaPhase === 'local_tool') {
-        const localToolCalls = extractLocalMcpToolCalls(data);
-        const newToolCalls = localToolCalls.filter(tc => {
-          const key = `${tc.name}:${JSON.stringify(tc.arguments)}`;
-          if (state.loggedToolCalls.has(key)) return false;
-          state.loggedToolCalls.add(key);
-          return true;
-        });
-        
-        if (newToolCalls.length > 0) {
-          logStore.updateEntry(logId, entry => {
-            for (const tc of newToolCalls) {
-              entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
-            }
-          });
-          for (let i = 0; i < newToolCalls.length; i++) {
-            await writeToolCallEvent(streamWriter, completionId, model, newToolCalls[i], i);
-          }
-        }
-        if (ctx.qwenLogFile && localToolCalls.length > 0) {
-          logQwenSSE(ctx.qwenLogFile, ctx.sseEventCount || 0, localToolCalls.length, localToolCalls);
-        }
-      }
+    // Check for upstream Qwen error sent as SSE data chunk
+    if (data.error) {
+      const errMsg = typeof data.error === 'string' ? data.error : data.error.message || JSON.stringify(data.error);
+      logStore.addError(logId, `Qwen upstream SSE error: ${errMsg}`);
+      logStore.updateEntry(logId, entry => {
+        entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
+        entry.finalResponse.finishReason = 'error';
+      });
       return 'break_stream';
     }
-  }
+    const deltaStatus = data.choices?.[0]?.delta?.status;
+    if (deltaStatus === 'error') {
+      logStore.addError(logId, `Qwen stream delta returned error status`);
+      logStore.updateEntry(logId, entry => {
+        entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
+        entry.finalResponse.finishReason = 'error';
+      });
+      return 'break_stream';
+    }
+    if (deltaStatus === 'finished') {
+      const deltaPhase = data.choices[0].delta.phase;
+      if (deltaPhase !== 'thinking_summary') {
+        // Extract and emit local MCP tool calls before breaking the stream
+        if (deltaPhase === 'local_tool') {
+          const localToolCalls = extractLocalMcpToolCalls(data);
+          const newToolCalls = localToolCalls.filter(tc => {
+            const key = `${tc.name}:${JSON.stringify(tc.arguments)}`;
+            if (state.loggedToolCalls.has(key)) return false;
+            state.loggedToolCalls.add(key);
+            return true;
+          });
+          
+          if (newToolCalls.length > 0) {
+            logStore.updateEntry(logId, entry => {
+              for (const tc of newToolCalls) {
+                entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
+              }
+            });
+            for (let i = 0; i < newToolCalls.length; i++) {
+              await writeToolCallEvent(streamWriter, completionId, model, newToolCalls[i], i);
+            }
+          }
+          if (ctx.qwenLogFile && localToolCalls.length > 0) {
+            logQwenSSE(ctx.qwenLogFile, ctx.sseEventCount || 0, localToolCalls.length, localToolCalls);
+          }
+        }
+        return 'break_stream';
+      }
+    }
 
   // Track SSE events for logging
   ctx.sseEventCount = (ctx.sseEventCount || 0) + 1;
