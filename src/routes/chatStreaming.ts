@@ -93,6 +93,9 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
           entry.finalResponse.finishReason = 'error';
         });
         logStore.finalizeRequest(ctx.logId);
+        // Release session and trigger deleteSession() — without this, the session
+        // leaks in the pool and the chat persists on Qwen's servers indefinitely.
+        cleanupImmediately(streamReader, heartbeatInterval, session.chatId, ctx.initialParentId, sessionHeaders, resolvedEmail, sessionPool, false);
         streamReleased = true;
         return;
       }
