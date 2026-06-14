@@ -337,9 +337,17 @@ export async function processStreamData(
   // Incremental filtering: process only the new delta through the filter
   // pipeline instead of re-scanning the full accumulated buffer (up to 100KB)
   // on every chunk. Accumulate filtered output for snapshot diffing.
-  const filterDelta = filterContentPipeline(rawText, enableContentFiltering, true);
-  const deltaCleaned = filterDelta.cleanText;
-  const deltaThinking = filterDelta.thinking;
+  //
+  // Skip entirely when inside a tool call block (depth > 0): the filter
+  // pipeline result would be discarded anyway (line 347 checks toolCallDepth),
+  // but running it wastes regex cycles on content like "=filePath>" fragments.
+  let deltaCleaned: string | null = null;
+  let deltaThinking = '';
+  if (state.toolCallDepth === 0) {
+    const filterDelta = filterContentPipeline(rawText, enableContentFiltering, true);
+    deltaCleaned = filterDelta.cleanText;
+    deltaThinking = filterDelta.thinking;
+  }
 
   // Only accumulate filtered content when outside a tool call block.
   // Inside a tool call (depth > 0), fragments like "-edit" or "=filePath>" would
