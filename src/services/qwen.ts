@@ -13,6 +13,19 @@ export { fetchQwenModels, disableNativeTools, disablePersonalization, setCustomI
 export const QWEN_API_BASE = 'https://chat.qwen.ai';
 export const QWEN_CHAT_COMPLETIONS_URL = `${QWEN_API_BASE}/api/v2/chat/completions`;
 export const QWEN_SETTINGS_URL = `${QWEN_API_BASE}/api/v2/users/user/settings/update`;
+
+/** Build shared feature_config for Qwen message payloads. */
+export function buildFeatureConfig(enableThinking: boolean): Record<string, any> {
+  return {
+    thinking_enabled: enableThinking,
+    output_schema: 'phase',
+    research_mode: 'normal',
+    auto_thinking: false,
+    thinking_mode: 'Thinking',
+    thinking_format: 'full',
+    auto_search: false,
+  };
+}
 export const QWEN_CHATS_URL = `${QWEN_API_BASE}/api/v2/chats/`;
 export const QWEN_MODELS_URL = `${QWEN_API_BASE}/api/models`;
 
@@ -132,15 +145,7 @@ export async function createQwenStream(
     timestamp: msg.timestamp || timestamp,
     models: msg.models || [model],
     chat_type: msg.chat_type || 't2t',
-    feature_config: msg.feature_config || {
-      thinking_enabled: enableThinking,
-      output_schema: 'phase',
-      research_mode: 'normal',
-      auto_thinking: false,
-      thinking_mode: 'Thinking',
-      thinking_format: 'summary',
-      auto_search: false
-    },
+    feature_config: msg.feature_config || buildFeatureConfig(enableThinking),
     extra: msg.extra || { meta: { subChatType: 't2t' } },
     sub_chat_type: msg.sub_chat_type || 't2t',
     parent_id: msg.parent_id ?? (i === 0 ? actualParentId : null),

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { logStore } from "../services/logStore.ts";
 import { sessionPool } from "../services/sessionPool.ts";
-import { createQwenStream } from "../services/qwen.ts";
+import { createQwenStream, buildFeatureConfig } from "../services/qwen.ts";
 import { modelRouter } from "../services/modelRouter.ts";
 import modelSpecs from "../models.json" with { type: "json" };
 import type { ModelSpec } from "../types/openai.ts";
@@ -167,15 +167,7 @@ export function buildQwenMessages(
     }
   }
 
-  const featureConfig: Record<string, any> = {
-    thinking_enabled: true,
-    output_schema: "phase",
-    research_mode: "normal",
-    auto_thinking: false,
-    thinking_mode: "Thinking",
-    thinking_format: "summary",
-    auto_search: false,
-  };
+  const featureConfig = buildFeatureConfig(true);
 
   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
     const localMcp: Record<string, any> = {};
