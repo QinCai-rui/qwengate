@@ -234,6 +234,10 @@ export async function processStreamData(
   if (isThinkingChunk) {
     if (state.reasoningBuffer.length < 20000) state.reasoningBuffer += vStr;
     state.deferredThinkingChunks.push(vStr);
+    // Write thinking content immediately for real-time reasoning_content streaming
+    if (vStr) {
+      await writeReasoningEvent(streamWriter, completionId, model, vStr);
+    }
     return 'continue';
   }
 

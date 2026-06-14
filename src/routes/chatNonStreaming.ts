@@ -80,18 +80,32 @@ function buildQwenRequest(ctx: NonStreamingContext): StreamProcessorState {
 }
 
 function processThinkingDelta(delta: any, state: StreamProcessorState): void {
-  const thoughts = delta.extra?.summary_thought?.content;
-  if (!thoughts) return;
+  // Handle thinking_summary format (thinking_format: "summary")
+  // Content is in extra.summary_thought.content[] array
+  if (delta.phase === 'thinking_summary') {
+    const thoughts = delta.extra?.summary_thought?.content;
+    if (!thoughts) return;
 
-  const rawNew = thoughts.slice(state.currentThoughtIndex).join('\n');
-  if (!rawNew) return;
+    const rawNew = thoughts.slice(state.currentThoughtIndex).join('\n');
+    if (!rawNew) return;
 
-  const commonLen = commonPrefixLen(rawNew, state.reasoningBuffer);
-  const vStr = rawNew.substring(commonLen);
-  if (!vStr) return;
+    const commonLen = commonPrefixLen(rawNew, state.reasoningBuffer);
+    const vStr = rawNew.substring(commonLen);
+    if (!vStr) return;
 
-  state.currentThoughtIndex = thoughts.length;
-  state.reasoningBuffer += vStr;
+    state.currentThoughtIndex = thoughts.length;
+    state.reasoningBuffer += vStr;
+    return;
+  }
+
+  // Handle think format (thinking_format: "full")
+  // Content is in delta.content (token-by-token)
+  if (delta.phase === 'think') {
+    if (delta.content !== undefined && delta.content !== '') {
+      state.reasoningBuffer += delta.content;
+    }
+    return;
+  }
 }
 
 function processAnswerDelta(delta: any, state: StreamProcessorState, ctx: NonStreamingContext): void {
