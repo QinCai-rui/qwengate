@@ -45,7 +45,6 @@ export interface QwenMessage {
 
 export interface BuildQwenMessagesResult {
   qwenMessages: QwenMessage[];
-  toolResultContents: string[];
 }
 
 // ── Business logic ───────────────────────────────────────────────
@@ -56,7 +55,6 @@ export function buildQwenMessages(
   availableTokens: number,
   _toolCalling: boolean,
 ): BuildQwenMessagesResult {
-  const toolResultContents: string[] = [];
   const timestamp = Math.floor(Date.now() / 1000);
   const model = (body.model || "").replace("-no-thinking", "");
 
@@ -147,8 +145,6 @@ export function buildQwenMessages(
       }
 
       const truncated = compressToolResult(contentStr || "");
-      const canary = `[tc-${randomUUID().substring(0, 8)}]`;
-
       const qwenResultStr = JSON.stringify([{
         type: "function",
         tool: toolName || "unknown",
@@ -161,9 +157,6 @@ export function buildQwenMessages(
       }]);
 
       segments.push(qwenResultStr);
-
-      const canaryContent = `${canary}\n${truncated}`;
-      toolResultContents.push(canaryContent);
     }
   }
 
@@ -201,7 +194,7 @@ export function buildQwenMessages(
     parent_id: null,
   }];
 
-  return { qwenMessages, toolResultContents };
+  return { qwenMessages };
 }
 
 export function handleImageModelFallback(body: any, messages: any[]): void {

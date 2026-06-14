@@ -93,7 +93,7 @@ async function setupSession(
   toolCalling: boolean,
   logId: string,
 ) {
-  const { qwenMessages: processedMessages, toolResultContents } = buildQwenMessages(
+  const { qwenMessages: processedMessages } = buildQwenMessages(
     messages,
     body,
     availableTokens,
@@ -164,7 +164,6 @@ async function setupSession(
   });
 
   return {
-    toolResultContents,
     sessionMessages,
     session,
     nextParentId,
@@ -215,7 +214,7 @@ export async function chatCompletions(c: Context) {
       );
     }
 
-    const { toolResultContents, session, nextParentId, sessionHeaders, resolvedEmail, stream, qwenAbortController } =
+    const { session, nextParentId, sessionHeaders, resolvedEmail, stream, qwenAbortController } =
       await setupSession(
         messages,
         body,
@@ -239,7 +238,6 @@ export async function chatCompletions(c: Context) {
         sessionHeaders,
         toolCalling,
         cleanOutput,
-        toolResultContents,
       });
     }
 
@@ -256,7 +254,6 @@ export async function chatCompletions(c: Context) {
       sessionHeaders,
       toolCalling,
       cleanOutput,
-      toolResultContents,
     });
   } catch (err: any) {
     console.error("Error in chatCompletions:", err);

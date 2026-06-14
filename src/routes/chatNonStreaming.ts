@@ -29,7 +29,6 @@ export interface NonStreamingContext {
   sessionHeaders: any;
   toolCalling: boolean;
   cleanOutput: boolean;
-  toolResultContents: string[];
 }
 
 interface StreamProcessorState {
@@ -248,7 +247,7 @@ function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
 }
 
 function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingContext): Response {
-  const { c, logId, completionId, body, session, cleanOutput, toolResultContents: _toolResultContents } = ctx;
+  const { c, logId, completionId, body, session, cleanOutput } = ctx;
 
   const reasoningTokensEstimate = state.reasoningBuffer ? Math.ceil(state.reasoningBuffer.length / 4) : 0;
   const usage = {

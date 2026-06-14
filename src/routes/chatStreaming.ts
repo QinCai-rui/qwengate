@@ -34,7 +34,6 @@ export interface StreamingContext {
   sessionHeaders: any;
   toolCalling: boolean;
   cleanOutput: boolean;
-  toolResultContents: string[];
   qwenLogFile?: string;
 }
 
