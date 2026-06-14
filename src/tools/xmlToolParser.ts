@@ -6,10 +6,18 @@ export interface ParsedXmlToolCall {
   parameters: Record<string, string>;
 }
 
+// ── Pre-compiled regexes for parse path ──
+// Lifted to module-level to avoid recompilation on every parseXmlToolCalls() call
+// (called 50-200 times per streaming request).
+const FKW = TOOL_CALL_KEYWORDS[0]; // 'function' — the block-level keyword
+const PKW = TOOL_CALL_KEYWORDS[1]; // 'parameter' — the parameter keyword
+const FUNCTION_BLOCK_RE = new RegExp(`<${FKW}=[^\\s>]+[\\s\\S]*?>[\\s\\S]*?(?:<\\/${FKW}>|$)`, 'g');
+const PARAM_RE = new RegExp(`<${PKW}=([^\\s>]+)>([\\s\\S]*?)<\\/${PKW}>`, 'g');
+const FUNC_NAME_RE = new RegExp(`^<${FKW}=([^\\s>]+)>`);
+
 function functionNameFromTag(tag: string): string | null {
   // Match function name from <KEYWORD=NAME...> — NAME can be any non-whitespace, non-> chars
-  const kw = TOOL_CALL_KEYWORDS[0];
-  const m = tag.match(new RegExp(`^<${kw}=([^\\s>]+)>`));
+  const m = tag.match(FUNC_NAME_RE);
   return m ? m[1] : null;
 }
 
@@ -22,11 +30,9 @@ export function parseXmlToolCalls(text: string): { toolCalls: ParsedXmlToolCall[
   const hasToolCallStart = TOOL_CALL_KEYWORDS.some(kw => text.includes(`<${kw}=`));
   if (!hasToolCallStart) return { toolCalls, cleanedText };
 
-  const fkw = TOOL_CALL_KEYWORDS[0]; // 'function' — the block-level keyword
-  const pkw = TOOL_CALL_KEYWORDS[1]; // 'parameter' — the parameter keyword
   // Semantics: <keyword=NAME...chars...> body </keyword>
   // Matches the opening <keyword=, captures until first >, then lazily until </keyword> or end.
-  const re = new RegExp(`<${fkw}=[^\\s>]+[\\s\\S]*?>[\\s\\S]*?(?:<\\/${fkw}>|$)`, 'g');
+  const re = new RegExp(FUNCTION_BLOCK_RE.source, 'g');
   const sections: string[] = [];
   let lastIdx = 0;
   let match: RegExpExecArray | null;
@@ -38,13 +44,13 @@ export function parseXmlToolCalls(text: string): { toolCalls: ParsedXmlToolCall[
     const name = functionNameFromTag(match[0]);
     if (!name) continue;
 
-    const closingTag = `</${fkw}>`;
+    const closingTag = `</${FKW}>`;
     const closingIndex = match[0].lastIndexOf(closingTag);
     if (closingIndex === -1) continue; // malformed — no closing tag
     const body = match[0].slice(match[0].indexOf('>') + 1, closingIndex);
 
     const parameters: Record<string, string> = {};
-    const paramRe = new RegExp(`<${pkw}=([^\\s>]+)>([\\s\\S]*?)<\\/${pkw}>`, 'g');
+    const paramRe = new RegExp(PARAM_RE.source, 'g');
     let pm: RegExpExecArray | null;
     while ((pm = paramRe.exec(body)) !== null) {
       parameters[pm[1].trim()] = pm[2].trim();

@@ -271,13 +271,18 @@ export async function processStreamData(
     state.lastFullContent += rawText;
   }
 
+  // Performance: skip all downstream work when there's no new raw content.
+  // This avoids the expensive parseXmlToolCalls (100KB buffer) and
+  // filterContentPipeline on thinking-only or empty chunks.
+  if (!rawText) return 'continue';
+
   // Track tool call depth to suppress content leaks from chunk-boundary fragments
   // When inside a tool call block (depth > 0), don't accumulate into
   // lastFilteredFullContent or emit content deltas to the client. The flush
   // path handles the clean version of the tool call text.
   const FKW = TOOL_CALL_KEYWORDS[0];
-  const tagOpen  = new RegExp(`<${FKW}(?:[=\\s]|$)`, 'i').test(rawText);
-  const tagClose = new RegExp(`<\\/${FKW}\\s*>`, 'i').test(rawText);
+  const tagOpen  = rawText.includes(`<${FKW}=`);
+  const tagClose = rawText.includes(`</${FKW}>`);
   if (tagOpen)  state.toolCallDepth++;
   if (tagClose) state.toolCallDepth = Math.max(0, state.toolCallDepth - 1);
 
@@ -313,23 +318,21 @@ export async function processStreamData(
   // When truncation IS triggered, also reset the snapshot trackers so
   // filterContentPipeline rebuilds from scratch for the next chunk.
   if (state.lastFullContent.length > 100000) {
+    const trimmedAmount = state.lastFullContent.length - 80000;
     state.lastFullContent = state.lastFullContent.slice(-80000);
+    // Adjust parse position relative to the trim (don't reset to 0 — that
+    // would re-parse the entire 80KB buffer, causing duplicate tool calls
+    // and a burst of replayed content to the client).
+    state.lastParsePosition = Math.max(0, state.lastParsePosition - trimmedAmount);
     state.lastFilteredSnapshot = '';
     state.lastThinkingSnapshot = '';
     state.lastFilteredFullContent = '';
     state.lastDeltaThinkingFull = '';
-    state.lastParsePosition = 0;
   }
 
   state.lastParsePosition = state.lastFullContent.length;
 
   if (state.loggedToolCalls.size > 500) state.loggedToolCalls.clear();
-
-  // Performance: only run the expensive content filter pipeline when there
-  // is genuinely new raw content since the last pipeline invocation. This
-  // avoids O(n²) work (regex chains on the full 100KB buffer) on empty
-  // or thinking-only chunks that don't add answer text.
-  if (!rawText) return 'continue';
 
   // Incremental filtering: process only the new delta through the filter
   // pipeline instead of re-scanning the full accumulated buffer (up to 100KB)
