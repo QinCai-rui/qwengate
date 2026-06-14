@@ -118,9 +118,11 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       streamReleased = true;
     } finally {
       if (!streamReleased) {
+        // Always write [DONE] so the SSE stream terminates cleanly, even on error
+        try { await streamWriter.write('data: [DONE]\n\n'); } catch { /* stream may already be closed */ }
         logStore.updateEntry(logId, entry => {
           entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
-          entry.finalResponse.finishReason = entry.finalResponse.finishReason || 'stop';
+          entry.finalResponse.finishReason = entry.finalResponse.finishReason || 'error';
         });
         logStore.finalizeRequest(ctx.logId);
         cleanupImmediately(streamReader, heartbeatInterval, session.chatId, ctx.initialParentId, sessionHeaders, resolvedEmail, sessionPool, false);

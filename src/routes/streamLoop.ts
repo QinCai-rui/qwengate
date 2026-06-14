@@ -221,6 +221,8 @@ export async function handlePostStreamCompletion(
       entry.finalResponse = entry.finalResponse || { finishReason: 'error', toolCallCount: 0, contentPreview: '' };
     });
     logStore.finalizeRequest(logId);
+    // Always write [DONE] so the SSE stream terminates cleanly, even on error
+    try { await streamWriter.write('data: [DONE]\n\n'); } catch { /* stream may already be closed */ }
   } finally {
     // Always release session to prevent pool exhaustion, even if writeEvent fails
     scheduleCleanup(reader, heartbeatInterval, chatId, streamState.nextParentId, sessionHeaders, email, sessionPool);
