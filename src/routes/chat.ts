@@ -101,77 +101,94 @@ async function setupSession(
   );
 
   const isThinkingModel = !body.model.includes("no-thinking");
+  const MAX_ACCOUNT_RETRIES = 5;
+  let lastError: any;
 
-  const selectedAccount = await pickAccount();
-  const accountEmail = selectedAccount?.email;
+  for (let attempt = 0; attempt < MAX_ACCOUNT_RETRIES; attempt++) {
+    const selectedAccount = await pickAccount();
+    // If no accounts available AND none are throttled, there are simply no accounts configured.
+    // Fall through to acquireSessionWithCorrections with undefined email (mock Playwright path).
+    const accountEmail = selectedAccount?.email;
+    if (!selectedAccount && attempt > 0) {
+      // On retry: if still no accounts, all are throttled — stop retrying
+      throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
+    }
 
-  let sessionResult;
-  try {
-    sessionResult = await acquireSessionWithCorrections(
-      accountEmail,
-      processedMessages,
-    );
-  } catch (err) {
-    // NOTE: sessionPool.acquire() already decrements inFlight on failure,
-    // so we do NOT decrement here to avoid double-decrement (which would
-    // drive inFlight negative and corrupt load balancing).
-    throw err;
-  }
-  const { session, qwenMessages: sessionMessages, nextParentId, sessionHeaders, resolvedEmail } =
-    sessionResult;
+    let sessionResult;
+    try {
+      sessionResult = await acquireSessionWithCorrections(
+        accountEmail,
+        processedMessages,
+      );
+    } catch (err) {
+      lastError = err;
+      continue; // Try next account
+    }
+    const { session, qwenMessages: sessionMessages, nextParentId, sessionHeaders, resolvedEmail } =
+      sessionResult;
 
-  // Populate the account that served this request
-  logStore.updateEntry(logId, (entry) => {
-    entry.accountEmail = resolvedEmail;
-  });
+    // Populate the account that served this request
+    logStore.updateEntry(logId, (entry) => {
+      entry.accountEmail = resolvedEmail;
+    });
 
-  let routedModel;
-  let streamResult;
-  try {
-    routedModel = await modelRouter.route(body.model);
-    streamResult = await createQwenStreamWithRetry(
+    let routedModel;
+    let streamResult;
+    try {
+      routedModel = await modelRouter.route(body.model);
+      streamResult = await createQwenStreamWithRetry(
+        sessionMessages,
+        isThinkingModel,
+        routedModel,
+        session.chatId,
+        nextParentId,
+        resolvedEmail,
+        body.tools,
+        body.tool_choice,
+      );
+    } catch (err: any) {
+      // Release the acquired session to prevent pool exhaustion + inFlight leak
+      sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
+
+      // If rate limited, try next account silently (don't send error to client yet)
+      if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
+        lastError = err;
+        continue;
+      }
+      throw err; // Non-rate-limit errors propagate immediately
+    }
+    let { stream, abortController: qwenAbortController } = streamResult;
+
+    // Build finalPrompt for logStore debug logging only
+    const finalPrompt = sessionMessages.map((m: any) => {
+      const content = typeof m.content === 'string'
+        ? m.content
+        : JSON.stringify(m.content ?? '');
+      return `${m.role}: ${content}`;
+    }).join('\n\n');
+    logStore.updateEntry(logId, (entry) => {
+      entry.promptToQwen = {
+        systemPromptLength: 0,
+        totalLength: finalPrompt.length,
+        preview: finalPrompt.length > 1000
+          ? finalPrompt.substring(0, 1000) + '...'
+          : finalPrompt,
+      };
+    });
+
+    return {
       sessionMessages,
-      isThinkingModel,
-      routedModel,
-      session.chatId,
+      session,
       nextParentId,
+      sessionHeaders,
       resolvedEmail,
-      body.tools,
-      body.tool_choice,
-    );
-  } catch (err) {
-    // Release the acquired session to prevent pool exhaustion + inFlight leak
-    sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
-    throw err;
-  }
-  let { stream, abortController: qwenAbortController } = streamResult;
-
-  // Build finalPrompt for logStore debug logging only
-  const finalPrompt = sessionMessages.map((m: any) => {
-    const content = typeof m.content === 'string'
-      ? m.content
-      : JSON.stringify(m.content ?? '');
-    return `${m.role}: ${content}`;
-  }).join('\n\n');
-  logStore.updateEntry(logId, (entry) => {
-    entry.promptToQwen = {
-      systemPromptLength: 0,
-      totalLength: finalPrompt.length,
-      preview: finalPrompt.length > 1000
-        ? finalPrompt.substring(0, 1000) + '...'
-        : finalPrompt,
+      stream,
+      qwenAbortController,
     };
-  });
+  }
 
-  return {
-    sessionMessages,
-    session,
-    nextParentId,
-    sessionHeaders,
-    resolvedEmail,
-    stream,
-    qwenAbortController,
-  };
+  // All account retries exhausted — throw a clean user-facing error
+  throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
 }
 
 function populateLogEntry(logEntry: any, body: OpenAIRequest, messages: any[]): void {
@@ -260,6 +277,18 @@ export async function chatCompletions(c: Context) {
     logStore.addError(logId, err.message || String(err));
     logStore.updateEntry(logId, entry => { entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' }; entry.finalResponse.finishReason = 'error'; });
     logStore.finalizeRequest(logId);
+
+    // Rate limit errors after all accounts exhausted — clean user-facing message
+    if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
+      return c.json({
+        error: {
+          message: 'All accounts have reached their daily usage limit. Please try again later.',
+          type: 'rate_limit_error',
+          code: 'rate_limit_exceeded',
+        },
+      }, 429);
+    }
+
     const status = err.upstreamStatus || 500;
     const cleanMessage = cleanTextOfXmlArtifacts(err.message || String(err)).cleanedText || err.message || 'Internal error';
     return c.json({

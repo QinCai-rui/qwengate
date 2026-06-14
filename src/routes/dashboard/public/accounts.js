@@ -50,7 +50,13 @@ function getAuthLabel(status) {
 function makeThrottleBadge(acct) {
   if (acct.throttled) {
     var label = 'Throttled';
-    if (acct.throttledRemainingMs != null) label += ' ' + fmtTTL(acct.throttledRemainingMs);
+    if (acct.throttledUnlockAt) {
+      var unlockTime = new Date(acct.throttledUnlockAt);
+      var timeStr = unlockTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      label += ' until ' + timeStr;
+    } else if (acct.throttledRemainingMs != null) {
+      label += ' ' + fmtTTL(acct.throttledRemainingMs);
+    }
     return '<span class="badge badge-warning">' + label + '</span>';
   }
   return '<span class="badge badge-neutral">OK</span>';
