@@ -212,7 +212,7 @@ export class SessionPool {
     const timer = setTimeout(() => {
       this.deleteSession(chatId, cachedHeaders, accountEmail);
       this.releaseTimers.delete(chatId);
-    }, 60_000);
+    }, 0);
     if (typeof timer.unref === 'function') timer.unref();
     this.releaseTimers.set(chatId, timer);
 
