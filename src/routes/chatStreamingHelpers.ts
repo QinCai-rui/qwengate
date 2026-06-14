@@ -179,7 +179,9 @@ export async function processStreamData(
     }
     if (deltaStatus === 'finished') {
       const deltaPhase = data.choices[0].delta.phase;
-      if (deltaPhase !== 'thinking_summary') {
+      // Don't break on think-phase finished — with thinking_format=full,
+      // answer content arrives in a separate answer phase after think completes.
+      if (deltaPhase !== 'thinking_summary' && deltaPhase !== 'think') {
         // Extract and emit local MCP tool calls before breaking the stream
         if (deltaPhase === 'local_tool') {
           const localToolCalls = extractLocalMcpToolCalls(data);
