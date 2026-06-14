@@ -132,12 +132,17 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
   const persisted = loadAccountsFromFile();
   const discovered = discoverSavedAccounts();
 
-  const merged = [...discovered];
+  // Merge persisted accounts (which may include throttledUntil) with discovered accounts
+  const merged: Array<{ email: string; password: string; throttledUntil?: number }> = [...discovered];
   for (const p of persisted) {
     const existing = merged.find(a => a.email.toLowerCase().trim() === p.email.toLowerCase().trim());
     if (existing) {
       if (p.password && !existing.password) {
         existing.password = p.password;
+      }
+      // Carry over throttledUntil from persisted data
+      if (p.throttledUntil) {
+        existing.throttledUntil = p.throttledUntil;
       }
     } else if (p.password) {
       merged.push(p);
@@ -152,12 +157,14 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
 
   accounts.length = 0;
   for (const a of merged) {
+    // Reset throttledUntil to 0 if it's in the past
+    const persistedUntil = (a as any).throttledUntil || 0;
     accounts.push({
       email: a.email,
       password: a.password,
       state: null,
       lastUsed: 0,
-      throttledUntil: 0,
+      throttledUntil: persistedUntil > Date.now() ? persistedUntil : 0,
       refreshInFlight: null,
       loginAttempt: 0,
       inFlight: 0,

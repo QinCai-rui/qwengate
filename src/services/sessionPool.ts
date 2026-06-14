@@ -13,8 +13,6 @@ interface PoolEntry {
   cachedHeaders?: { cookie: string; userAgent: string };
   /** Which account email this session is bound to */
   accountEmail?: string;
-  /** Timestamp when this entry was created (for prewarm staleness tracking) */
-  createdAt?: number;
 }
 
 export class SessionPoolQueueFullError extends Error {
@@ -51,12 +49,6 @@ export class SessionPool {
   private readonly WAIT_TIMEOUT_MS = 60_000;
   private releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  // Pre-warming pool
-  private prewarmedSessions = new Map<string, PoolEntry[]>();
-  private readonly MAX_PREWARMED = parseInt((config as any).get('SESSION_PREWARM_POOL_SIZE', '2'), 10);
-  private readonly PREWARM_MAX_AGE_MS = 5 * 60 * 1000;
-  private replenishPending = new Set<string>();
-
   async initialize(): Promise<void> {
     if (process.env.TEST_MOCK_PLAYWRIGHT) {
       return;
@@ -64,18 +56,8 @@ export class SessionPool {
   }
 
   /**
-   * Pre-warm sessions for the given emails.
-   * Creates up to MAX_PREWARMED empty chats per account so acquire() can skip the HTTP round-trip.
-   */
-  async prewarmSessions(emails: string[]): Promise<void> {
-    const tasks = emails.map(email => this.replenishPool(email));
-    await Promise.allSettled(tasks);
-  }
-
-  /**
    * Acquire a fresh session. If email is provided, use that specific account.
    * Otherwise, pick the best available account (round-robin, non-throttled).
-   * Checks pre-warmed pool first before creating a new session.
    */
   async acquire(email?: string): Promise<PoolEntry> {
     if (process.env.TEST_MOCK_PLAYWRIGHT) {
@@ -88,17 +70,6 @@ export class SessionPool {
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const resolvedEmail = email || (await pickAccount())?.email;
-
-      // Check pre-warmed pool first
-      const prewarmed = this.getPrewarmedSession(resolvedEmail);
-      if (prewarmed) {
-        this.activeSessions.add(prewarmed.chatId);
-        this.activeCount++;
-        logStore.log('info', 'pool', 'Session acquired (prewarmed)' + (prewarmed.accountEmail ? ': ' + prewarmed.accountEmail.split('@')[0] : ''));
-        // Replenish pool in background (fire-and-forget)
-        this.replenishPool(resolvedEmail!).catch(() => {});
-        return prewarmed;
-      }
 
       try {
         // Fetch headers once, pass to createSessionWithHeaders (no duplicate getBasicHeaders call)
@@ -180,30 +151,21 @@ export class SessionPool {
       clearTimeout(waiter.timer);
       const waiterEmail = accountEmail || (await pickAccount())?.email;
 
-      // Try pre-warmed pool first for the waiter
-      const prewarmed = this.getPrewarmedSession(waiterEmail);
-      if (prewarmed) {
-        prewarmed.parentId = _newParentId;
-        this.activeSessions.add(prewarmed.chatId);
-        this.activeCount++;
-        waiter.resolve(prewarmed);
-      } else {
-        // Fetch headers once, create session with pre-fetched headers (no duplicate getBasicHeaders call)
-        (async () => {
-          try {
-            const headers = await getBasicHeaders(waiterEmail);
-            const id = await this.createSessionWithHeaders(waiterEmail, headers);
-            this.activeSessions.add(id);
-            this.activeCount++;
-            waiter.resolve({ chatId: id, parentId: _newParentId, inUse: true, cachedHeaders: { cookie: headers.cookie, userAgent: headers.userAgent }, accountEmail: headers.email || waiterEmail });
-          } catch (err: any) {
-            console.error('[SessionPool] Failed to create session for waiter:', err.message);
-            // pickAccount() incremented inFlight — decrement on failure to prevent leak
-            if (waiterEmail) decrementInFlight(waiterEmail);
-            waiter.reject(err);
-          }
-        })();
-      }
+      // Fetch headers once, create session with pre-fetched headers (no duplicate getBasicHeaders call)
+      (async () => {
+        try {
+          const headers = await getBasicHeaders(waiterEmail);
+          const id = await this.createSessionWithHeaders(waiterEmail, headers);
+          this.activeSessions.add(id);
+          this.activeCount++;
+          waiter.resolve({ chatId: id, parentId: _newParentId, inUse: true, cachedHeaders: { cookie: headers.cookie, userAgent: headers.userAgent }, accountEmail: headers.email || waiterEmail });
+        } catch (err: any) {
+          console.error('[SessionPool] Failed to create session for waiter:', err.message);
+          // pickAccount() incremented inFlight — decrement on failure to prevent leak
+          if (waiterEmail) decrementInFlight(waiterEmail);
+          waiter.reject(err);
+        }
+      })();
     }
     this.activeSessions.delete(chatId);
     if (this.activeCount > 0) this.activeCount--;
@@ -215,11 +177,6 @@ export class SessionPool {
     }, 0);
     if (typeof timer.unref === 'function') timer.unref();
     this.releaseTimers.set(chatId, timer);
-
-    // Trigger pre-warm pool replenishment in background (fire-and-forget)
-    if (accountEmail) {
-      this.replenishPool(accountEmail).catch(() => {});
-    }
 
     logStore.log('info', 'pool', 'Session released' + (accountEmail ? ': ' + accountEmail.split('@')[0] : ''));
   }
@@ -360,104 +317,6 @@ export class SessionPool {
   private async createSession(email?: string): Promise<string> {
     const headers = await getBasicHeaders(email);
     return this.createSessionWithHeaders(email || '', headers);
-  }
-
-  /**
-   * Extract a pre-warmed session from the pool for the given email.
-   * Removes stale entries and returns the first available non-stale entry (marked inUse).
-   * Returns null if no pre-warmed session is available.
-   */
-  private getPrewarmedSession(email: string | undefined): PoolEntry | null {
-    if (!email) return null;
-    const pool = this.prewarmedSessions.get(email);
-    if (!pool || pool.length === 0) return null;
-
-    const now = Date.now();
-    // Prune stale entries and delete them from Qwen's servers
-    const fresh: PoolEntry[] = [];
-    for (const e of pool) {
-      if ((now - (e.createdAt || 0)) < this.PREWARM_MAX_AGE_MS) {
-        fresh.push(e);
-      } else {
-        // Stale — delete from Qwen to prevent orphaned chats
-        this.deleteSession(e.chatId, e.cachedHeaders, e.accountEmail);
-      }
-    }
-    this.prewarmedSessions.set(email, fresh);
-
-    // Find first available (non-inUse) entry
-    const idx = fresh.findIndex(e => !e.inUse);
-    if (idx === -1) return null;
-
-    const entry = fresh[idx];
-    entry.inUse = true;
-    fresh.splice(idx, 1);
-    return entry;
-  }
-
-  /**
-   * Replenish the pre-warm pool for a given email.
-   * Deduplicates concurrent calls. Creates sessions up to MAX_PREWARMED.
-   * Fire-and-forget: errors are silently swallowed.
-   */
-  private async replenishPool(email: string): Promise<void> {
-    if (!email) return;
-    if (this.replenishPending.has(email)) return;
-    this.replenishPending.add(email);
-
-    try {
-      const pool = this.prewarmedSessions.get(email) || [];
-      const now = Date.now();
-
-      // Remove stale entries and delete them from Qwen's servers
-      const fresh: PoolEntry[] = [];
-      for (const e of pool) {
-        if ((now - (e.createdAt || 0)) < this.PREWARM_MAX_AGE_MS) {
-          fresh.push(e);
-        } else {
-          // Stale — delete from Qwen to prevent orphaned chats
-          this.deleteSession(e.chatId, e.cachedHeaders, e.accountEmail);
-        }
-      }
-      this.prewarmedSessions.set(email, fresh);
-
-      // Count available (non-inUse) entries
-      const available = fresh.filter(e => !e.inUse).length;
-      const toCreate = this.MAX_PREWARMED - available;
-      if (toCreate <= 0) return;
-
-      // Fetch headers once for all parallel session creations
-      const headers = await getBasicHeaders(email);
-
-      // Create sessions in parallel
-      const results = await Promise.allSettled(
-        Array.from({ length: toCreate }, () => this.createSessionWithHeaders(email, headers))
-      );
-
-      const newEntries: PoolEntry[] = [];
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          newEntries.push({
-            chatId: result.value,
-            parentId: null,
-            inUse: false,
-            cachedHeaders: { cookie: headers.cookie, userAgent: headers.userAgent },
-            accountEmail: headers.email || email,
-            createdAt: Date.now(),
-          });
-        }
-      }
-
-      if (newEntries.length > 0) {
-        fresh.push(...newEntries);
-        this.prewarmedSessions.set(email, fresh);
-        logStore.log('info', 'pool', `Pre-warmed ${newEntries.length} session(s) for ${email.split('@')[0]}`);
-      }
-    } catch {
-      // Pre-warming is best-effort; silently fail
-    } finally {
-      this.replenishPending.delete(email);
-    }
   }
 }
 

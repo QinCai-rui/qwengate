@@ -233,14 +233,22 @@ export async function createQwenStream(
             : '';
           if (code === 'RateLimited' && currentAccountEmail) {
             const throttleMs = (errorJson.data?.num || 1) * 3600_000;
-            throttleAccount(currentAccountEmail, Math.min(throttleMs, 7200_000));
+            // Use the full duration from Qwen (e.g. 7 hours) — do NOT cap at 2h.
+            // Capping caused accounts to become "available" while Qwen still rejected them.
+            throttleAccount(currentAccountEmail, throttleMs);
             const nextAccount = await pickAccount();
             if (nextAccount && nextAccount.email !== currentAccountEmail) {
               currentAccountEmail = nextAccount.email;
+              // pickAccount incremented inFlight for the new account, but we're about to throw
+              // so decrement it — the caller will retry with a fresh pickAccount
+              decrementInFlight(nextAccount.email);
+            } else if (!nextAccount) {
+              // All accounts are throttled — include wait time in error for the user
+              throw new QwenUpstreamError(
+                `All accounts rate-limited. ${details}.${wait}`,
+                code, 429
+              );
             }
-            // pickAccount incremented inFlight for the new account, but we're about to throw
-            // so decrement it — the caller will retry with a fresh pickAccount
-            if (nextAccount) decrementInFlight(nextAccount.email);
           }
           let status: number;
           if (code === 'RateLimited') status = 429;

@@ -56,6 +56,7 @@ export interface CookieData {
 interface PersistedAccountData {
   email: string;
   password: string;
+  throttledUntil?: number;
 }
 export function parseAccountsFromEnv(): Array<{ email: string; password: string }> {
   const result: Array<{ email: string; password: string }> = [];
@@ -161,10 +162,14 @@ export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
   }
   const data: PersistedAccountData[] = accounts
     .filter(a => a.password)
-    .map(a => ({ email: a.email, password: encryptPassword(a.password) }));
+    .map(a => ({
+      email: a.email,
+      password: encryptPassword(a.password),
+      ...(a.throttledUntil > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
+    }));
   writeFileSync(ACCOUNTS_FILE, JSON.stringify(data, null, 2), 'utf-8');
 }
-export function loadAccountsFromFile(): Array<{ email: string; password: string }> {
+export function loadAccountsFromFile(): Array<{ email: string; password: string; throttledUntil?: number }> {
   try {
     if (!existsSync(ACCOUNTS_FILE)) {
       return [];
@@ -173,6 +178,7 @@ export function loadAccountsFromFile(): Array<{ email: string; password: string 
     return data.filter(d => d.email && d.password).map(d => ({
       email: d.email,
       password: decryptPassword(d.password),
+      throttledUntil: d.throttledUntil,
     }));
   } catch (err: any) {
     logStore.log('error', 'auth', `Failed to load accounts file: ${err.message}`);
@@ -376,16 +382,14 @@ export async function pickAccount(): Promise<AccountEntry | null> {
   try {
     const available = accounts.filter(isAvailable);
     if (available.length === 0) {
+      // All accounts are throttled or unauthenticated — return null instead
+      // of falling back to a throttled account (which would guaranteed fail).
+      // The caller should return a proper "all accounts exhausted" error.
       if (accounts.length === 0) {
         return null;
       }
-      let best: AccountEntry | null = null;
-      for (const acct of accounts) {
-        if (acct.state) {
-          if (!best || acct.throttledUntil < best.throttledUntil) best = acct;
-        }
-      }
-      return best;
+      logStore.log('warn', 'auth', `All ${accounts.length} accounts throttled — returning null`);
+      return null;
     }
     const pool = available.filter(a => a.inFlight === 0);
     const candidates = pool.length > 0 ? pool : available;
@@ -433,8 +437,10 @@ export function throttleAccount(email: string, durationMs?: number): void {
   if (!acct) return;
   const cooldown = durationMs || DEFAULT_THROTTLE_MS;
   acct.throttledUntil = Date.now() + cooldown;
-    const remaining = Math.ceil(cooldown / 1000);
-    logStore.log('warn', 'auth', `Throttled ${email} for ${remaining}s`);
+  const remaining = Math.ceil(cooldown / 1000);
+  logStore.log('warn', 'auth', `Throttled ${email} for ${remaining}s (${Math.ceil(cooldown / 3600000)}h)`);
+  // Persist so restart respects the cooldown
+  saveAccountsToFile(accounts);
 }
 export function isAccountThrottled(email: string): boolean {
   const acct = getAccountByEmail(email);
