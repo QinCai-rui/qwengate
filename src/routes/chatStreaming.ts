@@ -83,13 +83,9 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       const loopResult = await runStreamLoop(c, reader, streamState, streamCtx, ampState, bufferRef);
 
       if (loopResult.error) {
-        // Upstream went silent or timed out — write error to client so it doesn't hang
-        console.error(`[Chat] Stream loop error for ${logId}: ${loopResult.error}`);
+        // Upstream went silent — silently terminate stream, log server-side only
+        console.warn(`[Chat] Stream timeout for ${logId}: ${loopResult.error}`);
         logStore.addError(logId, loopResult.error);
-        await writeEvent(streamWriter, buildChunkEvent(completionId, body.model, [makeChoice({
-          content: `\n\n[Stream interrupted: ${loopResult.error}]`,
-          finish_reason: 'error',
-        })]));
         await streamWriter.write('data: [DONE]\n\n');
         logStore.updateEntry(logId, entry => {
           if (streamState.reasoningBuffer) entry.reasoningContent = streamState.reasoningBuffer;
