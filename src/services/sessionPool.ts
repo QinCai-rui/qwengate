@@ -373,8 +373,16 @@ export class SessionPool {
     if (!pool || pool.length === 0) return null;
 
     const now = Date.now();
-    // Prune stale entries
-    const fresh = pool.filter(e => (now - (e.createdAt || 0)) < this.PREWARM_MAX_AGE_MS);
+    // Prune stale entries and delete them from Qwen's servers
+    const fresh: PoolEntry[] = [];
+    for (const e of pool) {
+      if ((now - (e.createdAt || 0)) < this.PREWARM_MAX_AGE_MS) {
+        fresh.push(e);
+      } else {
+        // Stale — delete from Qwen to prevent orphaned chats
+        this.deleteSession(e.chatId, e.cachedHeaders, e.accountEmail);
+      }
+    }
     this.prewarmedSessions.set(email, fresh);
 
     // Find first available (non-inUse) entry
@@ -401,8 +409,16 @@ export class SessionPool {
       const pool = this.prewarmedSessions.get(email) || [];
       const now = Date.now();
 
-      // Remove stale entries
-      const fresh = pool.filter(e => (now - (e.createdAt || 0)) < this.PREWARM_MAX_AGE_MS);
+      // Remove stale entries and delete them from Qwen's servers
+      const fresh: PoolEntry[] = [];
+      for (const e of pool) {
+        if ((now - (e.createdAt || 0)) < this.PREWARM_MAX_AGE_MS) {
+          fresh.push(e);
+        } else {
+          // Stale — delete from Qwen to prevent orphaned chats
+          this.deleteSession(e.chatId, e.cachedHeaders, e.accountEmail);
+        }
+      }
       this.prewarmedSessions.set(email, fresh);
 
       // Count available (non-inUse) entries
