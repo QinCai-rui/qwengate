@@ -24,6 +24,8 @@ accountsRouter.get('/', (c) => {
     authenticated: a.state !== null && a.state.token !== '',
     tokenExpiresAt: a.state?.expiresAt || null,
     throttled: a.throttledUntil > Date.now(),
+    throttledUntil: a.throttledUntil > Date.now() ? a.throttledUntil : null,
+    throttledUnlockAt: a.throttledUntil > Date.now() ? new Date(a.throttledUntil).toISOString() : null,
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
   }));

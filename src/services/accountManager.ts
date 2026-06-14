@@ -437,8 +437,9 @@ export function throttleAccount(email: string, durationMs?: number): void {
   if (!acct) return;
   const cooldown = durationMs || DEFAULT_THROTTLE_MS;
   acct.throttledUntil = Date.now() + cooldown;
-  const remaining = Math.ceil(cooldown / 1000);
-  logStore.log('warn', 'auth', `Throttled ${email} for ${remaining}s (${Math.ceil(cooldown / 3600000)}h)`);
+  const unlockTime = new Date(acct.throttledUntil).toISOString();
+  const hours = Math.ceil(cooldown / 3600000);
+  logStore.log('warn', 'auth', `Throttled ${email} — unlocks at ${unlockTime} (${hours}h)`);
   // Persist so restart respects the cooldown
   saveAccountsToFile(accounts);
 }
@@ -452,6 +453,7 @@ export function getAccountStats(): Array<{
   authenticated: boolean;
   throttled: boolean;
   throttledRemainingMs: number;
+  throttledUnlockAt: string | null;
   tokenExpiresInMs: number;
   lastUsedAgoMs: number;
   inFlight: number;
@@ -463,6 +465,7 @@ export function getAccountStats(): Array<{
     authenticated: a.state !== null,
     throttled: a.throttledUntil > now,
     throttledRemainingMs: Math.max(0, a.throttledUntil - now),
+    throttledUnlockAt: a.throttledUntil > now ? new Date(a.throttledUntil).toISOString() : null,
     tokenExpiresInMs: a.state ? Math.max(0, a.state.expiresAt - now) : 0,
     lastUsedAgoMs: a.lastUsed ? now - a.lastUsed : -1,
     inFlight: a.inFlight,
