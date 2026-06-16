@@ -562,13 +562,13 @@ curl http://localhost:26405/v1/chat/completions \
 
 ## Advanced Features
 
-### Echo Detection
+### Tool Call Content Gating
 
-Qwen Gate automatically detects when the model echoes tool results verbatim in its response. When echo is detected, the connection is dropped and the OpenAI SDK automatically retries with a correction prompt. This is transparent to the API consumer.
+Qwen Gate tracks tool call nesting depth during streaming (`toolCallDepth` counter). Content inside tool call XML blocks (`<function=...>`) is suppressed from client emission to prevent chunk-boundary fragments from leaking. The full clean tool call text is delivered as a single `finish_reason: tool_calls` phase.
 
 ### Tool Compression
 
-Tool results are intelligently compressed before being sent to the Qwen model. Git diffs, JSON arrays, and structured data are summarized to reduce token usage and prevent echo at the source.
+Tool results are intelligently compressed before being sent to the Qwen model. Git diffs, JSON arrays, and structured data are summarized to reduce token usage and improve response quality.
 
 ### Session Pooling
 

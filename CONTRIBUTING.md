@@ -4,14 +4,14 @@
 
 1. Fork the repository
 2. Clone your fork
-3. Run `npm install`
+3. Run `bun install`
 4. Create a branch: `git checkout -b feat/my-feature`
 
 ## Development
 
 ```bash
-npm run dev        # Start in development mode
-npm test            # Run tests
+bun dev        # Start in development mode
+bun test            # Run tests
 ```
 
 ### Code Style
@@ -24,10 +24,9 @@ npm test            # Run tests
 ## Pull Request Process
 
 1. Update tests to cover your changes
-2. Run `npm test` — all tests must pass
-3. Run `npx aislop scan` — no new blocking issues
-4. Update relevant documentation in `docs/` if needed
-5. Add a CHANGELOG entry
+2. Run `bun test` — all tests must pass
+3. Update relevant documentation in `docs/` if needed
+4. Add a CHANGELOG entry
 
 ## Commit Messages
 
@@ -45,11 +44,16 @@ docs(scopes): documentation changes
 ```
 src/
 ├── cli.ts          # CLI entry point
-├── index.tsx       # Server entry + routes
-├── routes/         # API handlers
-├── services/       # Business logic
+├── cluster.ts      # Cluster mode
+├── index.tsx       # Server entry, routing, CORS, auth
+├── models.json     # Model definitions
+├── middleware/      # Rate limiter
+├── routes/         # API handlers + streaming
+│   └── dashboard/  # Web dashboard
+├── services/       # Auth, accounts, sessions, Playwright, config
+├── tests/          # Integration tests
 ├── tools/          # Tool calling system
-├── types/          # TypeScript types
+├── types/          # OpenAI-compatible types
 └── utils/          # Shared utilities
 ```
 

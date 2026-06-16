@@ -1,0 +1,48 @@
+// Qwen Gate — Configuration Reference
+// Copy to config.json and adjust values.
+// Environment variables override config values (PORT, HOST, API_KEY, SAVE_REQUEST_LOGS, STREAM_IDLE_TIMEOUT_MS, CLEAN_OUTPUT).
+
+{
+  // ── Server ──
+  "PORT": "26405",          // Server port
+  "HOST": "",               // Bind address (empty = all interfaces)
+  "API_KEY": "",            // Your API key for authentication
+
+  // ── Browser ──
+  "BROWSER": "chromium",    // Browser engine: chromium, firefox, webkit
+
+  // ── Streaming & Output ──
+  "STREAMING_MODE": "auto", // Stream mode: auto, on, off
+  "CLEAN_OUTPUT": "true",   // Strip internal XML/tags from output
+  "SAVE_REQUEST_LOGS": "false", // Log request/response to disk
+
+  // ── Tool Calling ──
+  "TOOL_CALLING": "true",   // Enable tool calling
+  "MAX_TOOL_CALLS_PER_RESPONSE": "3", // Max tool calls per response
+
+  // ── Auth ──
+  "AUTH_TOKEN_MAX_AGE_MS": "28800000",  // Token max age (8 hours)
+  "AUTH_REFRESH_BEFORE_MS": "300000",   // Refresh before expiry (5 min)
+  "DELETE_SESSION": "true",             // Delete session on logout
+
+  // ── Rate Limiting ──
+  "RATE_LIMIT_COOLDOWN_MS": "120000",   // Cooldown between requests (2 min)
+
+  // ── Retry ──
+  "RETRY_ENABLED": "true",
+  "RETRY_MAX_ATTEMPTS": "3",
+  "RETRY_BASE_DELAY_MS": "1000",
+  "RETRY_MAX_DELAY_MS": "30000",
+  "RETRY_BACKOFF_MULTIPLIER": "2",
+
+  // ── Qwen API ──
+  "QWEN_FETCH_TIMEOUT_MS": "30000",     // Fetch timeout (30s)
+
+  // ── Dashboard & Logging ──
+  "OPEN_DASHBOARD_ON_START": "false",   // Auto-open dashboard in browser
+  "MAX_LOGS": "50",                     // Max log entries to keep
+
+  // ── Customization ──
+  "CUSTOM_INSTRUCTION": "",             // Custom system instruction
+  "USE_CUSTOM_INSTRUCTION": "false"     // Use custom instruction
+}

@@ -8,21 +8,28 @@ const CONFIG_PATH = join(PROJECT_ROOT, 'config.json');
 
 const DEFAULTS = {
   PORT: '26405',
-  HOST: 'localhost',
+  HOST: '',
   API_KEY: '',
   BROWSER: 'chromium',
-  DASHBOARD: 'true',
-  ASTRO_PORT: '4321',
-  ECHO_DETECTOR: 'true',
-  ECHO_JACCARD_THRESHOLD: '0.9',
   TOOL_CALLING: 'true',
   CLEAN_OUTPUT: 'true',
-  CONTENT_FILTER: 'true',
-  STREAMING: 'true',
-  RETRY_ENABLED: 'true',
+  STREAMING_MODE: 'auto',
+  MAX_TOOL_CALLS_PER_RESPONSE: '3',
+  QWEN_FETCH_TIMEOUT_MS: '30000',
+  AUTH_TOKEN_MAX_AGE_MS: '28800000',
+  AUTH_REFRESH_BEFORE_MS: '300000',
+  DELETE_SESSION: 'true',
+  RATE_LIMIT_COOLDOWN_MS: '120000',
+  MAX_LOGS: '50',
+  CUSTOM_INSTRUCTION: '',
+  USE_CUSTOM_INSTRUCTION: 'false',
+  SAVE_REQUEST_LOGS: 'false',
   RETRY_MAX_ATTEMPTS: '3',
-  LOG_LEVEL: 'info',
-  LOG_MAX_ENTRIES: '1000',
+  OPEN_DASHBOARD_ON_START: 'false',
+  RETRY_BASE_DELAY_MS: '1000',
+  RETRY_MAX_DELAY_MS: '30000',
+  RETRY_BACKOFF_MULTIPLIER: '2',
+  RETRY_ENABLED: 'true',
 };
 
 /**
@@ -81,31 +88,31 @@ async function main() {
 
   // Lazily import readline only when interactive
   let port = DEFAULTS.PORT;
-  let host = DEFAULTS.HOST;
   let apiKey = DEFAULTS.API_KEY;
-  let dashboard = DEFAULTS.DASHBOARD;
   let browser = DEFAULTS.BROWSER;
+  let toolCalling = DEFAULTS.TOOL_CALLING;
+  let cleanOutput = DEFAULTS.CLEAN_OUTPUT;
 
   if (useDefaults) {
     port = config.PORT || DEFAULTS.PORT;
-    host = config.HOST || DEFAULTS.HOST;
     apiKey = config.API_KEY || DEFAULTS.API_KEY;
-    dashboard = config.DASHBOARD || DEFAULTS.DASHBOARD;
     browser = config.BROWSER || DEFAULTS.BROWSER;
+    toolCalling = config.TOOL_CALLING || DEFAULTS.TOOL_CALLING;
+    cleanOutput = config.CLEAN_OUTPUT || DEFAULTS.CLEAN_OUTPUT;
   } else {
     port = await ask('Server port', config.PORT || DEFAULTS.PORT);
-    host = await ask('Bind host', config.HOST || DEFAULTS.HOST);
     apiKey = await ask('API key (leave empty for no auth)', config.API_KEY || DEFAULTS.API_KEY);
-    dashboard = await ask('Enable dashboard (true/false)', config.DASHBOARD || DEFAULTS.DASHBOARD);
     browser = await ask('Browser engine (chromium/firefox/chrome/edge)', config.BROWSER || DEFAULTS.BROWSER);
+    toolCalling = await ask('Enable tool calling (true/false)', config.TOOL_CALLING || DEFAULTS.TOOL_CALLING);
+    cleanOutput = await ask('Clean output (strip XML tags) (true/false)', config.CLEAN_OUTPUT || DEFAULTS.CLEAN_OUTPUT);
   }
 
   const newConfig = Object.assign({}, DEFAULTS, config, {
     PORT: port,
-    HOST: host,
     API_KEY: apiKey,
-    DASHBOARD: dashboard,
     BROWSER: browser,
+    TOOL_CALLING: toolCalling,
+    CLEAN_OUTPUT: cleanOutput,
   });
 
   writeFileSync(CONFIG_PATH, JSON.stringify(newConfig, null, 2) + '\n');

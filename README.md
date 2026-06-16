@@ -165,7 +165,7 @@ All settings in `config.json`. Key options:
 | `BROWSER`                 | `"chromium"` | Browser engine: `chromium`, `firefox`, `webkit` |
 | `TOOL_CALLING`            | `"true"`     | Enable tool call parsing                        |
 | `CLEAN_OUTPUT`            | `"true"`     | Strip internal artifacts from responses         |
-| `ECHO_DETECTOR`           | `"true"`     | Detect tool-result echo leaks                   |
+| `STREAMING_MODE`           | `"auto"`     | Streaming mode: `auto`, `on`, `off`             |
 | `SAVE_REQUEST_LOGS`       | `"false"`    | Save per-request logs to disk                   |
 | `OPEN_DASHBOARD_ON_START` | `"false"`    | Auto-open dashboard in browser                  |
 | `RATE_LIMIT_COOLDOWN_MS`  | `"120000"`   | Cooldown after rate limit (2 min)               |
@@ -250,34 +250,63 @@ The server checks for new GitHub releases on startup and logs a warning in the d
 ```text
 src/
 ├── cli.ts                   CLI entry (qg command parser)
-├── index.tsx                Hono server, routing, middleware
+├── cluster.ts               Multi-core cluster mode
+├── index.tsx                Hono server, routing, CORS, auth
+├── models.json              Model definitions (context lengths, modalities)
 ├── routes/                  API route handlers
 │   ├── chat.ts              Chat completions dispatch
 │   ├── chatStreaming.ts     Streaming SSE logic
 │   ├── chatNonStreaming.ts  Non-streaming responses
+│   ├── chatHelpersCore.ts   Core chat response handling
+│   ├── chatStreamingHelpers.ts Streaming helper utilities
+│   ├── cleanupHelpers.ts    Cleanup logic
+│   ├── compressToolResult.ts Tool result compression
+│   ├── streamLoop.ts        Streaming loop with idle timeout
+│   ├── writeHelpers.ts      Write helper utilities
 │   ├── accounts.ts          Account CRUD API
 │   ├── config.ts            Config read/write API
 │   └── dashboard/           Web dashboard (vanilla HTML/JS)
+│       ├── dashboardRoutes.ts  Dashboard routing hub
+│       ├── monitor.ts       Real-time monitoring page
+│       ├── sidebar.ts       Sidebar navigation
+│       └── public/          Static dashboard assets (JS/CSS/SVG)
 ├── services/                Business logic
-│   ├── auth.ts              Auth orchestration
 │   ├── accountManager.ts    Account CRUD, round-robin rotation
-│   ├── sessionPool.ts       Session pool with autoscaling
-│   ├── playwright.ts        Browser init & management
-│   ├── qwenModels.ts        Model fetching & mapping
-│   ├── modelRouter.ts       Model routing & fallback
-│   ├── networkDebug.ts      Outbound call capture
+│   ├── auth.ts              Auth orchestration
+│   ├── browserProfiles.ts   Browser profile management
+│   ├── configService.ts     Config loader
+│   ├── defaultSystemPrompt.ts Default system prompt
 │   ├── logStore.ts          In-memory log store + SSE
-│   └── configService.ts     Config loader
+│   ├── loginHelpers.ts      Login helper utilities
+│   ├── modelHealth.ts       Model health tracking
+│   ├── modelRouter.ts       Model routing & fallback
+│   ├── monitorStore.ts      Monitoring data store
+│   ├── networkDebug.ts      Outbound call capture
+│   ├── playwright.ts        Browser init & management
+│   ├── qwen.ts              Qwen API interaction
+│   ├── qwenFileUpload.ts    Qwen file upload handling
+│   ├── qwenLogger.ts        Qwen-specific logging
+│   ├── qwenModels.ts        Model fetching & mapping
+│   ├── sessionPool.ts       Session pool with autoscaling
+│   ├── systemLogger.ts      System-wide logger
+│   └── tokenRefresh.ts      Token refresh logic
 ├── tools/                   Tool calling system
 │   ├── registry.ts          Tool registry
-│   ├── parser.ts            Tool call parsing
+│   ├── xmlToolParser.ts     XML tool call parsing
 │   ├── guard.ts             Spam/abuse guard
-│   └── schema.ts            JSON Schema validation
+│   ├── schema.ts            JSON Schema validation
+│   └── schemaValidators.ts  Schema validation helpers
 ├── utils/                   Shared utilities
-│   ├── xmlStripper.ts       XML/tool call artifact removal
+│   ├── auth.ts              Auth utilities
 │   ├── contentFilter.ts     Streaming content filter
+│   ├── paths.ts             Path utilities
 │   ├── retry.ts             Exponential backoff
-│   └── logger.ts            Structured logger
+│   ├── tagNames.ts          Centralized tag names
+│   ├── thinkTagStripper.ts  Think tag stripping
+│   ├── tokenEstimator.ts    Token estimation
+│   ├── version.ts           Version information
+│   ├── xmlStripper.ts       XML/tool call artifact removal
+│   └── xmlStripper.test.ts  XML stripper tests
 └── middleware/
     └── rateLimit.ts         Token bucket rate limiter
 ```
@@ -288,7 +317,7 @@ src/
 bun test
 ```
 
-Uses Bun's built-in test runner. Covers content filtering, tool-call parsing, echo detection, and spam guard behavior.
+Uses Bun's built-in test runner. Covers content filtering, tool-call parsing, and streaming sanitization.
 
 ## Documentation
 

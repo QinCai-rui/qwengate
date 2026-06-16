@@ -10,8 +10,7 @@ Technical architecture and design documentation for Qwen Gate.
 - [Data Flow](#data-flow)
 - [Key Subsystems](#key-subsystems)
   - [Session Pool](#session-pool)
-  - [Echo Detection](#echo-detection)
-  - [Streaming Pipeline](#streaming-pipeline)
+  - [Content Filtering & Streaming](#content-filtering--streaming)
 - [Technology Stack](#technology-stack)
 - [Design Decisions](#design-decisions)
 - [Scalability](#scalability)
@@ -24,7 +23,7 @@ Qwen Gate is an OpenAI-compatible API proxy that provides access to Qwen AI mode
 1. **Automating browser interactions** with Qwen's chat interface
 2. **Managing multiple accounts** with automatic rotation and session pooling
 3. **Providing OpenAI-compatible endpoints** for seamless integration
-4. **Optimizing responses** with echo detection and content filtering
+4. **Optimizing responses** with content filtering and streaming sanitization
 5. **Monitoring and debugging** through a real-time dashboard
 
 ### Core Principles
@@ -141,7 +140,7 @@ Manages browser sessions and Qwen account rotation.
 
 ### 3. Browser Automation Layer
 
-**Location**: `src/services/browser.ts`
+**Location**: `src/services/playwright.ts`
 
 Handles Playwright browser automation for Qwen interaction.
 
@@ -155,31 +154,14 @@ Handles Playwright browser automation for Qwen interaction.
 
 **Key Functions**:
 
-- `launchBrowser()` - Start browser instance
-- `createSession()` - Initialize Qwen session
-- `sendMessage()` - Send chat message
-- `extractResponse()` - Parse Qwen response
+- `initPlaywright()` - Start browser instance
+- `createAccountContext()` - Initialize account session context
+- `getQwenHeaders()` - Get authenticated request headers
+- `closePlaywright()` - Shut down and cleanup resources
 
-### 4. Response Pipeline
+The routes layer handles request dispatch, streaming coordination, content cleanup, and dashboard serving. Route files live directly in `src/routes/` — there is no subdirectory per filter.
 
-**Location**: `src/routes/pipeline/`
-
-Processes and optimizes Qwen responses before returning to client.
-
-**Components**:
-
-- `StreamingEchoFilter.ts` - Echo detection and filtering
-- `StreamingContentFilter.ts` - Content sanitization
-
-**Pipeline Stages**:
-
-1. **Raw Response** - Extract from Qwen
-2. **Echo Detection** - Filter verbatim tool echoes
-3. **Content Filtering** - Remove sensitive data
-4. **Format Conversion** - Convert to OpenAI format
-5. **Streaming** - Send to client
-
-### 5. Configuration Service
+### 4. Configuration Service
 
 **Location**: `src/services/configService.ts`
 
@@ -198,26 +180,11 @@ Centralized configuration management with three-tier priority.
 - Type-safe configuration access
 - Hot reload support
 
-### 6. Dashboard (Frontend)
+### 5. Dashboard (Frontend)
 
 **Location**: `src/routes/dashboard/`
 
-Five standalone HTML pages served by Hono at `/dashboard/*` routes. No framework, no build step.
-
-**Pages**:
-
-- `overview.ts` - System health KPIs and session pool status
-- `logs.ts` - Real-time request log with foldable detail sections
-- `accounts.ts` - Account management with cooldown indicators
-- `network.ts` - Network request viewer and chunk inspection
-- `settings.ts` - Configuration editor for runtime settings
-
-**Features**:
-
-- Real-time SSE updates for live data
-- Inline CSS with claymorphism design (warm cream palette)
-- Sidebar navigation shared across all pages
-- Template literals with embedded JS for interactivity
+The dashboard consists of a routing hub (`dashboardRoutes.ts`), a monitoring page (`monitor.ts`), a sidebar component (`sidebar.ts`), and a `public/` directory with approximately 15 static assets (vanilla HTML/JS/CSS/SVG). Together they provide overview monitoring, request logs, account management, network debugging, and settings pages.
 
 ## Data Flow
 
@@ -361,100 +328,63 @@ SessionPool
 - Automatic failover on errors
 - Rate limit awareness
 
-### Echo Detection
+### Content Filtering & Streaming
 
-**Purpose**: Prevent AI from echoing tool results verbatim.
+**Purpose**: Real-time content sanitization during streaming — think tag extraction, XML artifact removal, and tool call content gating.
 
-**Algorithm**: Bidirectional Containment with Shingle Analysis
-
-```
-1. Extract Tool Results
-   - Parse tool_call responses
-   - Store result text
-   - Create shingle fingerprints
-
-2. Monitor Streaming Response
-   - Process response line-by-line
-   - Compute shingles for each line
-
-3. Check for Echo
-   For each response line:
-   a. Compute shingles (5-grams)
-   b. Check containment:
-      - output_shingles ⊆ tool_result_shingles
-      - tool_result_shingles ⊆ output_shingles
-   c. Calculate Jaccard similarity
-   d. If similarity > threshold (0.9):
-      - Flag as echo
-      - Filter from response
-
-4. Bidirectional Check
-   - Prevents false positives
-   - Requires both directions to match
-   - More accurate than one-way check
-```
-
-**Configuration**:
-
-```bash
-ECHO_DETECTOR=true
-ECHO_JACCARD_THRESHOLD=0.9
-ECHO_MIN_LINE_LENGTH=20
-ECHO_MIN_UNIQUE_SHINGLES=8
-```
-
-**Example**:
+**Pipeline Order**: `cleanTextOfXmlArtifacts → filterContent → cleanThinkTags`
 
 ```
-Tool Result: "The file contains 100 lines of code."
-Response: "The file contains 100 lines of code." ← ECHO (filtered)
-Response: "Based on the analysis, the file has 100 lines." ← OK (rephrased)
-```
-
-### Streaming Pipeline
-
-**Purpose**: Process and stream responses in real-time with minimal latency.
-
-**Architecture**:
-
-```
-Qwen Response Stream
+SSE Chunk Arrives
          │
          ▼
-┌─────────────────┐
-│ Chunk Buffer    │ Accumulate partial chunks
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Echo Filter     │ Check for verbatim echoes
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
- │ Content Filter  │ Remove sensitive data
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Format Converter│ Convert to OpenAI format
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ SSE Encoder     │ Encode as Server-Sent Events
-└────────┬────────┘
-         │
-         ▼
-  Client Stream
+┌────────────────────────────┐
+│ cleanThinkTags (per-chunk) │ Strip only complete think/function tags
+└──────────┬─────────────────┘
+           │
+           ▼
+┌────────────────────────────┐
+│ extractDeltaContent        │ Extract text delta from SSE response
+└──────────┬─────────────────┘
+           │
+           ▼
+┌────────────────────────────┐
+│ detectCumulativeChunk      │ Handle overlapping/cumulative chunks
+└──────────┬─────────────────┘
+           │
+           ▼
+┌────────────────────────────┐
+│ getSnapshotDelta           │ Compute incremental text diff
+└──────────┬─────────────────┘
+           │
+           ▼
+     Client Stream (SSE)
+
+Flush Path (full pipeline):
+┌──────────────────────────────┐
+│ cleanTextOfXmlArtifacts      │ Strip all XML tool call syntax
+├──────────────────────────────┤
+│ filterContent                │ Segment-based think extraction
+├──────────────────────────────┤
+│ cleanThinkTags               │ Final pass for remaining tags
+└──────────────────────────────┘
 ```
 
-**Optimizations**:
+**Components**:
 
-- **Chunk Buffering**: Accumulate small chunks for efficiency
-- **Parallel Processing**: Filter and transform in parallel
-- **Backpressure Handling**: Respect client consumption rate
-- **Memory Management**: Stream processing, no full buffering
+- **`src/utils/contentFilter.ts`** (116 lines): `filterContent()` performs segment-based think tag extraction and XML artifact cleaning. Uses `thinkTagStripper.ts` and `xmlStripper.ts`.
+
+- **`src/routes/chatStreamingHelpers.ts`** (387 lines): Per-chunk processing pipeline. `filterContentPipeline()` orchestrates the full pipeline order. `processStreamData()` handles each SSE chunk — delta extraction, cumulative detection, tool call parsing via `parseXmlToolCalls`, and content gating via `toolCallDepth`.
+
+- **`src/routes/streamLoop.ts`** (230 lines): Main streaming loop (`runStreamLoop()`) with idle timeout (default 45s, configurable via `STREAM_IDLE_TIMEOUT_MS`). `handlePostStreamCompletion()` runs the full flush pipeline with amplification guard.
+
+- **`src/routes/chatHelpers.ts`** (304 lines): Aggregation layer re-exporting from `chatHelpersCore.ts`. Provides `createQwenStream`, `buildFeatureConfig`, model routing, tool call handling, and user content sanitization.
+
+**Tool Call Depth Gating**: The `toolCallDepth` counter in `StreamProcessingState` tracks nesting of XML tool call blocks (`<function=...>`). When inside a tool call (`depth > 0`), content emission is suppressed to prevent chunk-boundary fragments from leaking to the client. The flush path handles the clean version of the full tool call text.
+
+**Idle Timeout**: `runStreamLoop()` races `reader.read()` against a `setTimeout`. If no data arrives within the window, the stream is cancelled with an error message.
+
+**Amplification Guard**: Both the per-chunk path (`writeContentDelta`) and flush path (`handlePostStreamCompletion`) check `checkAmplificationGuard()` to detect runaway output loops. `checkFinalAmplification()` runs after stream completion for final validation.
 
 ## Technology Stack
 
@@ -462,7 +392,7 @@ Qwen Response Stream
 
 | Technology     | Purpose              | Version |
 | -------------- | -------------------- | ------- |
-| **Node.js**    | Runtime              | 18+     |
+| **Bun**        | Runtime              | 1.3+    |
 | **TypeScript** | Type safety          | 5.7+    |
 | **Hono**       | Web framework        | Latest  |
 | **Playwright** | Browser automation   | Latest  |
@@ -537,25 +467,7 @@ Qwen Response Stream
 - Need to track account health
 - Potential for account conflicts
 
-### 3. Echo Detection Algorithm
-
-**Decision**: Use bidirectional containment with shingle analysis.
-
-**Rationale**:
-
-- More accurate than simple string matching
-- Handles paraphrasing correctly
-- Low false positive rate
-- Works with streaming responses
-
-**Tradeoffs**:
-
-- More computationally expensive
-- Requires tuning thresholds
-- May miss some echoes
-- Complex to implement correctly
-
-### 4. Configuration System
+### 3. Configuration System
 
 **Decision**: Three-tier configuration (env → config.json → defaults).
 
@@ -803,7 +715,7 @@ The dashboard provides:
 **Long-term**:
 
 - Distributed session storage
-- Machine learning for echo detection
+- Advanced content filtering strategies
 - Automatic performance tuning
 - Multi-region deployment
 

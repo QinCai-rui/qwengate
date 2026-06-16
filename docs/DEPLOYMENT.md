@@ -16,16 +16,16 @@ Production deployment for Qwen Gate.
 
 ```bash
 # Install dependencies (postinstall creates config.json with defaults)
-npm install --production
+bun install --production
 
 # Customize config (optional -- skip if defaults are fine)
-npm run setup
+bun run setup
 
 # Start the server
-npm start
+bun start
 ```
 
-The server runs on `http://localhost:26405` by default. Configure via `npm run setup` or edit `config.json` directly.
+The server runs on `http://localhost:26405` by default. Configure via `bun run setup` or edit `config.json` directly.
 
 ## PM2 Process Manager
 
@@ -33,10 +33,10 @@ PM2 keeps the server running forever with auto-restart on crash.
 
 ```bash
 # Install PM2 globally
-npm install -g pm2
+bun add -g pm2
 
 # Start with PM2
-pm2 start npm --name "qwen-gate" -- start
+pm2 start bun --name "qwen-gate" -- start
 
 # Save process list (survives reboot)
 pm2 save
@@ -55,7 +55,7 @@ pm2 stop qwen-gate        # Stop
 ### Clustering (multi-core)
 
 ```bash
-pm2 start npm --name "qwen-gate" -i max -- start
+pm2 start bun --name "qwen-gate" -i max -- start
 ```
 
 Runs one instance per CPU core.
@@ -67,7 +67,7 @@ Runs one instance per CPU core.
 module.exports = {
   apps: [{
     name: 'qwen-gate',
-    script: 'npm',
+    script: 'bun',
     args: 'start',
     instances: 1,
     exec_mode: 'fork',
@@ -97,7 +97,7 @@ After=network.target
 Type=simple
 User=youruser
 WorkingDirectory=/opt/qwen-gate
-ExecStart=/usr/bin/npm start
+ExecStart=/usr/bin/bun start
 Restart=always
 RestartSec=10
 Environment=NODE_ENV=production
@@ -121,10 +121,10 @@ Configuration lives in `config.json` at the project root. There is no `.env` fil
 ### Interactive Setup
 
 ```bash
-npm run setup
+bun run setup
 ```
 
-Prompts for port, host, API key, dashboard, and browser engine. Saves to `config.json`.
+Prompts for port, host, API key, browser engine, and more. Saves to `config.json`.
 
 ### Manual Configuration
 
@@ -134,9 +134,9 @@ Prompts for port, host, API key, dashboard, and browser engine. Saves to `config
   "HOST": "0.0.0.0",
   "API_KEY": "your-secret-key",
   "BROWSER": "chromium",
-  "ECHO_DETECTOR": "true",
   "TOOL_CALLING": "true",
-  "LOG_LEVEL": "info"
+  "CLEAN_OUTPUT": "true",
+  "STREAMING_MODE": "auto"
 }
 ```
 
@@ -202,4 +202,4 @@ Open `http://localhost:26405/dashboard` (or your configured PORT) for real-time 
 - Set `API_KEY` in `config.json` — protects all `/v1/*` endpoints
 - Run behind nginx with SSL in production
 - Use a firewall (`ufw`) to restrict access
-- Keep Node.js and dependencies updated
+- Keep Bun and dependencies updated
