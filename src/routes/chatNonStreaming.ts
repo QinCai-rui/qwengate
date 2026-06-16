@@ -16,6 +16,7 @@ import {
 const MAX_TOOL_CALLS_PER_TURN = 8;
 
 import { parseXmlToolCalls, cleanTextOfXmlArtifacts, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
+import { extractLocalMcpToolCalls } from "./chatStreamingHelpers.ts";
 
 export interface NonStreamingContext {
   c: Context;
@@ -189,9 +190,24 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
   } else if (delta.phase === 'answer') {
     processAnswerDelta(delta, state, ctx);
   } else if (delta.phase === 'local_tool') {
-    // Local tool results are already captured in the answer content phase.
-    // Do NOT process them again here — doing so duplicates the content
-    // in state.lastFullContent and in the user-facing response.
+    // Qwen returns tool calls in the local_tool phase via extra.local_mcp["★"].
+    // These may arrive with or without XML tool call blocks in the answer phase,
+    // so we must extract them here to avoid losing tool calls.
+    const localToolCalls = extractLocalMcpToolCalls(chunk);
+    if (localToolCalls.length > 0) {
+      const parsed = localToolCalls.map(tc => ({
+        id: tc.id,
+        type: "function" as const,
+        function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+      }));
+      processToolCallsThroughGuard(parsed, state.toolCallsOut, {
+        logId: ctx.logId,
+        toolSpamGuard: state.toolSpamGuard,
+        correctionPrompts: state.correctionPrompts,
+        maxToolCalls: MAX_TOOL_CALLS_PER_TURN,
+        logParsed: true,
+      });
+    }
   }
 }
 

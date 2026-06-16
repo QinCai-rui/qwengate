@@ -199,8 +199,9 @@ export async function processStreamData(
               }
             });
             for (let i = 0; i < newToolCalls.length; i++) {
-              await writeToolCallEvent(streamWriter, completionId, model, newToolCalls[i], i);
+              await writeToolCallEvent(streamWriter, completionId, model, newToolCalls[i], ctx.emittedToolCallCount + i);
             }
+            ctx.emittedToolCallCount += newToolCalls.length;
           }
           if (ctx.qwenLogFile && localToolCalls.length > 0) {
             logQwenSSE(ctx.qwenLogFile, ctx.sseEventCount || 0, localToolCalls.length, localToolCalls);
