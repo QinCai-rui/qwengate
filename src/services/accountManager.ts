@@ -7,11 +7,15 @@ import crypto from 'crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
+import type { AccountEntry } from '../types/auth.ts';
 import { projectPath } from '../utils/paths.ts';
-import { type AccountEntry, accounts, loginFresh } from './auth.ts';
 import { config } from './configService.ts';
+import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
 import { configureAccount } from './qwenModels.ts';
+
+/** In-memory account registry. Mutations must stay synchronous. */
+export const accounts: AccountEntry[] = [];
 
 const ACCOUNTS_FILE = projectPath('.qwen', 'accounts.json');
 const QWEN_DIR = projectPath('.qwen');
@@ -98,12 +102,34 @@ export function decodeJwt(token: string): Record<string, any> | null {
 /* ── AES-256-GCM password encryption ── */
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
+const MASTER_KEY_FILE = projectPath('.qwen', 'master.key');
 
 function getEncryptionKey(): string {
+  // 1. If a master key file exists, use it (survives API_KEY changes)
+  try {
+    if (existsSync(MASTER_KEY_FILE)) {
+      return readFileSync(MASTER_KEY_FILE, 'utf-8').trim();
+    }
+  } catch {
+    // Fall through to other strategies
+  }
+
+  // 2. Use API_KEY as encryption key (backward compatibility)
   const apiKey = config.get('API_KEY');
   if (apiKey) return apiKey;
-  const machineId = `${os.hostname()}-${projectPath('.')}`;
-  return crypto.createHash('sha256').update(machineId).digest('hex');
+
+  // 3. Generate a persistent master key on first use
+  try {
+    const dir = path.dirname(MASTER_KEY_FILE);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const newKey = crypto.randomBytes(32).toString('hex');
+    writeFileSync(MASTER_KEY_FILE, newKey, 'utf-8');
+    return newKey;
+  } catch {
+    // 4. Fallback: hostname-based key (only when filesystem is unwritable)
+    const machineId = `${os.hostname()}-${projectPath('.')}`;
+    return crypto.createHash('sha256').update(machineId).digest('hex');
+  }
 }
 
 function deriveKey(keyMaterial: string): Buffer {
@@ -372,7 +398,7 @@ export function resetWatcherState(): void {
     watcherRetryTimer = null;
   }
 }
-const DEFAULT_THROTTLE_MS = parseInt(config.get('RATE_LIMIT_COOLDOWN_MS', '120000'), 10);
+const DEFAULT_THROTTLE_MS = config.getInt('RATE_LIMIT_COOLDOWN_MS', 120000);
 
 export function isAvailable(acct: AccountEntry): boolean {
   if (!acct.state) return false;

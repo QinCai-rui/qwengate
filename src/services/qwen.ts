@@ -104,7 +104,7 @@ export interface QwenStreamResult {
   qwenLogFile?: string;
 }
 
-const QWEN_FETCH_TIMEOUT_MS = parseInt(config.get('QWEN_FETCH_TIMEOUT_MS', '30000'), 10);
+const QWEN_FETCH_TIMEOUT_MS = config.getInt('QWEN_FETCH_TIMEOUT_MS', 30000);
 
 // Cache Intl.DateTimeFormat — avoids re-creating per request (expensive)
 const cachedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -184,13 +184,13 @@ export async function createQwenStream(
   const url = urlObj.href;
 
   const retryConfig = {
-    maxRetries: Math.max(0, parseInt(config.get('RETRY_MAX_ATTEMPTS', '3'), 10)),
-    baseDelayMs: Math.max(0, parseInt(config.get('RETRY_BASE_DELAY_MS', '1000'), 10)),
-    maxDelayMs: Math.max(0, parseInt(config.get('RETRY_MAX_DELAY_MS', '30000'), 10)),
-    backoffMultiplier: Math.max(0.1, parseFloat(config.get('RETRY_BACKOFF_MULTIPLIER', '2'))),
+    maxRetries: Math.max(0, config.getInt('RETRY_MAX_ATTEMPTS', 3)),
+    baseDelayMs: Math.max(0, config.getInt('RETRY_BASE_DELAY_MS', 1000)),
+    maxDelayMs: Math.max(0, config.getInt('RETRY_MAX_DELAY_MS', 30000)),
+    backoffMultiplier: Math.max(0.1, config.getFloat('RETRY_BACKOFF_MULTIPLIER', 2)),
   };
 
-  const retriesEnabled = config.get('RETRY_ENABLED', 'true') !== 'false';
+  const retriesEnabled = config.getBool('RETRY_ENABLED', true);
   let currentAccountEmail = accountEmail;
   let lastDebugEntryId: string | null = null;
   const streamAbortController = new AbortController();

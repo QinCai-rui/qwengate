@@ -4,7 +4,9 @@
  * Handles refresh token exchange and ensuring accounts stay fresh.
  */
 
-import { type AccountEntry, AUTH_REFRESH_BEFORE_MS, AUTH_TOKEN_MAX_AGE_MS, loginFresh, saveCookies } from './auth.ts';
+import type { AccountEntry } from '../types/auth.ts';
+import { AUTH_REFRESH_BEFORE_MS, AUTH_TOKEN_MAX_AGE_MS, saveCookies } from './auth.ts';
+import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
 import { createFetchTimeout } from './qwen.ts';
 

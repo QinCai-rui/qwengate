@@ -8,7 +8,7 @@ import { buildChunkEvent, buildUsage, makeChoice, writeEvent, writeReasoningEven
 
 /** Shared TextDecoder — stateless, safe to reuse across streams */
 export const sharedDecoder = new TextDecoder();
-const IDLE_TIMEOUT_MS = Math.max(10_000, parseInt(config.get('STREAM_IDLE_TIMEOUT_MS', '60000')));
+const IDLE_TIMEOUT_MS = Math.max(10_000, config.getInt('STREAM_IDLE_TIMEOUT_MS', 60000));
 
 export interface StreamLoopResult {
   buffer: string;

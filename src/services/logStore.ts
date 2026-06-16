@@ -89,7 +89,7 @@ export interface LogEntry {
   amplificationRatio?: number;
   amplificationTriggeredInput?: string;
 }
-const MAX_ENTRIES = parseInt(config.get('MAX_LOGS', '50'), 10);
+const MAX_ENTRIES = config.getInt('MAX_LOGS', 50);
 const MAX_CHUNKS_PER_ENTRY = 100;
 const MAX_FIELD_LENGTH = 10240;
 export class RequestLogStore extends SystemLogger {

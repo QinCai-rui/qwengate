@@ -47,6 +47,11 @@ export class SystemLogger {
         console.error('[SystemLogger] System log listener error:', err);
       }
     }
+    // Structured JSON logging to stdout only when piped (Docker, log aggregators).
+    // Suppressed in interactive terminals to avoid visual noise.
+    if (!process.stdout.isTTY) {
+      process.stdout.write(JSON.stringify({ ...entry, logger: 'qwen-gate' }) + '\n');
+    }
   }
   debug(category: string, message: string, metadata?: Record<string, unknown>): void {
     this.log('debug', category, message, metadata);

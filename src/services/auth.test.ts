@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 
+import { accounts } from './accountManager.ts';
 import {
-  accounts,
   decrementInFlight,
   getAccountByEmail,
   hasInFlight,

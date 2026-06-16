@@ -9,5 +9,6 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
+      - run: bunx biome check src/
       - run: bunx tsc --noEmit
       - run: bun test

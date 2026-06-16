@@ -26,6 +26,7 @@ export interface ConfigSchema {
   RETRY_BACKOFF_MULTIPLIER: string;
   RETRY_ENABLED: string;
   STREAM_IDLE_TIMEOUT_MS: string;
+  MODELS_CACHE_TTL_MS: string;
 }
 
 export const DEFAULT_CONFIG: ConfigSchema = {
@@ -53,6 +54,7 @@ export const DEFAULT_CONFIG: ConfigSchema = {
   RETRY_BACKOFF_MULTIPLIER: '2',
   RETRY_ENABLED: 'true',
   STREAM_IDLE_TIMEOUT_MS: '60000',
+  MODELS_CACHE_TTL_MS: '3600000',
 };
 
 const CONFIG_KEYS = new Set<string>(Object.keys(DEFAULT_CONFIG));
@@ -146,6 +148,33 @@ export class ConfigService {
     if (defaultValue !== undefined) return defaultValue;
 
     return DEFAULT_CONFIG[key];
+  }
+
+  /** Get a config value as an integer. Returns `defaultValue` when unset or NaN. */
+  getInt<K extends keyof ConfigSchema>(key: K, defaultValue: number = 0): number {
+    const val = parseInt(this.get(key), 10);
+    return isNaN(val) ? defaultValue : val;
+  }
+
+  /** Get a config value as a float. Returns `defaultValue` when unset or NaN. */
+  getFloat<K extends keyof ConfigSchema>(key: K, defaultValue: number = 0): number {
+    const val = parseFloat(this.get(key));
+    return isNaN(val) ? defaultValue : val;
+  }
+
+  /** Get a config value as a boolean. Accepts 'true'/'false', '1'/'0', case-insensitive. */
+  getBool<K extends keyof ConfigSchema>(key: K, defaultValue: boolean = false): boolean {
+    const val = this.get(key);
+    if (val === 'true' || val === '1') return true;
+    if (val === 'false' || val === '0') return false;
+    return defaultValue;
+  }
+
+  /** Get the validated server port (1-65535). */
+  getPort(defaultValue: number = 26405): number {
+    const port = parseInt(this.get('PORT'), 10);
+    if (isNaN(port) || port < 1 || port > 65535) return defaultValue;
+    return port;
   }
 
   set<K extends keyof ConfigSchema>(key: K, value: string): void {

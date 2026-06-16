@@ -61,7 +61,6 @@ Or clone manually:
 ```powershell
 git clone https://github.com/youssefvdel/qwen-gate.git
 cd qwen-gate
-copy config.example.jsonc config.json
 bun install
 ```
 
@@ -72,7 +71,6 @@ Then run `qg` to start the server.
 ```bash
 git clone https://github.com/youssefvdel/qwen-gate.git
 cd qwen-gate
-cp config.example.jsonc config.json
 bun install
 ```
 
@@ -171,7 +169,7 @@ All settings in `config.json`. Key options:
 | `RATE_LIMIT_COOLDOWN_MS`  | `"120000"`   | Cooldown after rate limit (2 min)               |
 | `RETRY_MAX_ATTEMPTS`      | `"3"`        | Max retry attempts                              |
 
-> **Note:** This is a partial list of 10 commonly-used keys. `config.example.jsonc` has the full reference with all 23 keys and descriptions.
+> **Note:** This is a partial list of 10 commonly-used keys. See `ConfigSchema` in `src/services/configService.ts` for the full list.
 
 ## Architecture
 

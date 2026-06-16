@@ -91,10 +91,14 @@ export class TokenBucket {
 const bucketInstances = new Map<string, TokenBucket>();
 
 export async function rateLimitMiddleware(c: Context, key: string, config?: Partial<RateLimitConfig>): Promise<Response | null> {
-  let bucket = bucketInstances.get(key);
+  // Derive per-client key from IP address to prevent one user starving others
+  const forwarded = c.req.header('x-forwarded-for');
+  const clientIp = forwarded?.split(',')[0]?.trim() || c.req.header('x-real-ip') || 'unknown';
+  const clientKey = `${key}:${clientIp}`;
+  let bucket = bucketInstances.get(clientKey);
   if (!bucket) {
-    bucket = new TokenBucket(key, config);
-    bucketInstances.set(key, bucket);
+    bucket = new TokenBucket(clientKey, config);
+    bucketInstances.set(clientKey, bucket);
   }
   const consumed = bucket.tryConsume();
 

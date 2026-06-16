@@ -10,7 +10,7 @@ import { chatCompletions } from './routes/chat.ts';
 import { configRouter } from './routes/config.ts';
 import { registerDashboardRoutes } from './routes/dashboard/dashboardRoutes.ts';
 import { debugNetworkApp } from './routes/debugNetwork.ts';
-import { initAuth } from './services/auth.ts';
+import { getAccountCount, getAccountStats, getAvailableCount, initAuth } from './services/auth.ts';
 import { config } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
 import { BrowserType, closePlaywright, getBrowser, getQwenHeaders, initPlaywright } from './services/playwright.ts';
@@ -97,14 +97,28 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 app.use('*', cors({ origin: ['http://localhost:26405', 'http://127.0.0.1:26405'] }));
 
-// Health check — reports actual system status (Playwright readiness, uptime)
+// Health check — reports actual system status
 app.get('/health', (c) => {
   const browser = getBrowser();
   const playwrightReady = browser !== null;
+  const totalAccounts = getAccountCount();
+  const availableAccounts = getAvailableCount();
+  const stats = getAccountStats();
+  const authenticatedCount = stats.filter((s) => s.authenticated).length;
+  const throttledCount = stats.filter((s) => s.throttled).length;
+  const isHealthy = playwrightReady && totalAccounts > 0 && authenticatedCount > 0;
   return c.json({
-    status: playwrightReady ? 'ok' : 'degraded',
-    playwright: playwrightReady,
+    status: isHealthy ? 'ok' : 'degraded',
+    version: '0.5.1',
     uptime: process.uptime(),
+    inFlight: inFlightRequests,
+    playwright: playwrightReady,
+    accounts: {
+      total: totalAccounts,
+      authenticated: authenticatedCount,
+      available: availableAccounts,
+      throttled: throttledCount,
+    },
   });
 });
 // Ping — lightweight static response
@@ -198,7 +212,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // Enable per-request file logging
   logStore.enableRequestFileLogging(projectPath('.logs'));
 
-  const port = parseInt(config.get('PORT'), 10) || 26405;
+  const port = config.getPort();
   const hostArg = process.argv.indexOf('--host');
   const host = hostArg !== -1 && process.argv[hostArg + 1] ? process.argv[hostArg + 1] : config.get('HOST') || 'localhost';
 
@@ -290,7 +304,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       }
       logStore.log('info', 'server', `Server started on ${host}:${port}`);
 
-      if (config.get('OPEN_DASHBOARD_ON_START') === 'true') {
+      if (config.getBool('OPEN_DASHBOARD_ON_START')) {
         const { exec } = await import('child_process');
         const url = `http://localhost:${port}/dashboard`;
         const cmd =

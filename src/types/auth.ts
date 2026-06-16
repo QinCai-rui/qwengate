@@ -1,0 +1,23 @@
+/*
+ * File: auth.ts
+ * Shared authentication types used across auth.ts, accountManager.ts, and playwright.ts.
+ * Extracted to break circular dependency chains.
+ */
+
+export interface AuthState {
+  token: string;
+  expiresAt: number;
+  refreshToken: string | null;
+}
+
+export interface AccountEntry {
+  email: string;
+  password: string;
+  state: AuthState | null;
+  lastUsed: number;
+  throttledUntil: number;
+  refreshInFlight: Promise<boolean> | null;
+  loginAttempt: number;
+  inFlight: number;
+  totalRequests: number;
+}

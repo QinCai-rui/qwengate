@@ -124,7 +124,6 @@ project-root/
 │   ├── setup.js                 Config generation
 │   └── generate-config-example.ts  (if exists)
 ├── config.json                  Runtime config (gitignored)
-├── config.example.jsonc         Config reference with comments
 ├── install.sh                   Linux/macOS installer
 ├── install.ps1                  Windows installer
 ├── package.json
@@ -192,7 +191,7 @@ bun cluster                # Multi-core cluster mode
 | `STREAMING_MODE` | `auto` | Streaming behavior (`auto`, `true`, `false`) |
 | `SAVE_REQUEST_LOGS` | `false` | Persist request/response logs to disk |
 
-See `config.example.jsonc` for the full list of configurable keys and their descriptions.
+See `ConfigSchema` in `src/services/configService.ts` for the full list of configurable keys.
 
 ---
 
@@ -769,7 +768,7 @@ config.set('SAVE_REQUEST_LOGS', 'true');
 config.save();
 ```
 
-The `ConfigSchema` interface in `configService.ts` defines all 23 known keys. See `config.example.jsonc` for the complete reference with descriptions for every key. Unknown keys in `config.json` are silently ignored.
+The `ConfigSchema` interface in `configService.ts` defines all 23+ known keys. Unknown keys in `config.json` are silently ignored.
 
 ---
 
@@ -783,7 +782,7 @@ Before submitting changes, verify:
 - [ ] New feature has test coverage
 - [ ] Error paths are handled (not just the happy path)
 - [ ] Logging uses the appropriate logger service, not `console.log`
-- [ ] New configuration keys are documented in `config.example.jsonc`
+- [ ] New configuration keys are added to `ConfigSchema` in `configService.ts`
 - [ ] No `as any` casts or `// @ts-ignore` comments
 - [ ] No hardcoded secrets or credentials
 

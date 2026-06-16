@@ -265,7 +265,8 @@ export async function deleteAllChats(email: string): Promise<void> {
 
 export async function fetchQwenModels(): Promise<any[]> {
   const now = Date.now();
-  if (cachedModels && now - lastModelsFetch < 3600000) {
+  const cacheTtl = config.getInt('MODELS_CACHE_TTL_MS', 3600000);
+  if (cachedModels && now - lastModelsFetch < cacheTtl) {
     return cachedModels;
   }
   const { cookie, userAgent, bxV, email: resolvedEmail } = await getBasicHeaders();

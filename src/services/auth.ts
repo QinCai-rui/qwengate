@@ -2,13 +2,15 @@
  * File: auth.ts
  * Core authentication: login, cookies, token management.
  * Account management is in accountManager.ts. Token refresh is in tokenRefresh.ts.
- * Login helpers are in loginHelpers.ts.
+ * Login is in loginService.ts. Login helpers are in loginHelpers.ts.
  */
 
-import crypto from 'crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import type { Cookie } from 'playwright';
+import type { AccountEntry, AuthState } from '../types/auth.ts';
 import {
+  accounts,
   decodeJwt,
   discoverSavedAccounts,
   enableHotReload as enableHotReloadImpl,
@@ -19,9 +21,9 @@ import {
   setupAccountWatcher as setupAccountWatcherImpl,
 } from './accountManager.ts';
 import { config } from './configService.ts';
-import { loginFreshViaBrowser, loginFreshViaFetch, loginViaTempContext } from './loginHelpers.ts';
+import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
-import { getActivePage, getBrowser, Mutex } from './playwright.ts';
+import { getActivePage, getBrowser } from './playwright.ts';
 import { ensureAccountFresh, needsRefresh } from './tokenRefresh.ts';
 
 export {
@@ -50,8 +52,8 @@ export {
 } from './accountManager.ts';
 export { ensureAccountFresh, needsRefresh, tryRefreshToken } from './tokenRefresh.ts';
 
-export const AUTH_TOKEN_MAX_AGE_MS = parseInt(config.get('AUTH_TOKEN_MAX_AGE_MS', '28800000'), 10);
-export const AUTH_REFRESH_BEFORE_MS = parseInt(config.get('AUTH_REFRESH_BEFORE_MS', '300000'), 10);
+export const AUTH_TOKEN_MAX_AGE_MS = config.getInt('AUTH_TOKEN_MAX_AGE_MS', 28800000);
+export const AUTH_REFRESH_BEFORE_MS = config.getInt('AUTH_REFRESH_BEFORE_MS', 300000);
 const TOKEN_DIR = join(process.cwd(), '.qwen', 'tokens');
 
 export async function checkPlaywrightSession(): Promise<boolean> {
@@ -65,67 +67,7 @@ export async function checkPlaywrightSession(): Promise<boolean> {
   }
 }
 
-export interface AuthState {
-  token: string;
-  expiresAt: number;
-  refreshToken: string | null;
-}
-
-export interface AccountEntry {
-  email: string;
-  password: string;
-  state: AuthState | null;
-  lastUsed: number;
-  throttledUntil: number;
-  refreshInFlight: Promise<boolean> | null;
-  loginAttempt: number;
-  inFlight: number;
-  totalRequests: number;
-}
-
-export const accounts: AccountEntry[] = [];
 let initDone = false;
-
-const loginMutex = new Mutex();
-
-export async function loginFresh(email: string, password: string): Promise<AuthState | null> {
-  const hashedPassword = crypto.createHash('sha256').update(password).digest('hex');
-
-  // Try fetch first — it's the fastest (no browser overhead)
-  if (!process.env.TEST_MOCK_PLAYWRIGHT) {
-    const fetchResult = await loginFreshViaFetch(email, hashedPassword);
-    if (fetchResult) {
-      logStore.log('info', 'auth', 'Login success (fetch): ' + email);
-      return fetchResult;
-    }
-  }
-
-  // Fallback to browser strategies if fetch fails
-  if (!process.env.TEST_MOCK_PLAYWRIGHT) {
-    const activePage = getActivePage();
-    if (activePage) {
-      const browserResult = await loginFreshViaBrowser(email, hashedPassword, loginMutex);
-      if (browserResult) {
-        logStore.log('info', 'auth', 'Login success: ' + email);
-        return browserResult;
-      }
-      logStore.log('warn', 'auth', `Browser login failed for ${email}, trying temp context...`);
-    }
-
-    const browser = getBrowser();
-    if (browser) {
-      const tempResult = await loginViaTempContext(browser, email, hashedPassword, loginMutex);
-      if (tempResult) {
-        logStore.log('info', 'auth', 'Login success (temp context): ' + email);
-        return tempResult;
-      }
-      logStore.log('warn', 'auth', `Temp context login failed for ${email}`);
-    }
-  }
-
-  logStore.log('error', 'auth', 'Login failed: ' + email);
-  return null;
-}
 
 export async function initAuth(onAccountReady?: (email: string) => Promise<void>): Promise<void> {
   if (initDone) return;
@@ -307,7 +249,7 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
 
     try {
       let cookies = await context.cookies();
-      let authCookie = cookies.find((c) => {
+      let authCookie = cookies.find((c: Cookie) => {
         const n = c.name.toLowerCase();
         if (n.includes('refresh')) return false;
         return n.includes('token') || n.includes('session');
@@ -344,7 +286,7 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
         const payload = decodeJwt(authCookie.value);
         const expiresAt = payload?.exp ? payload.exp * 1000 : Date.now() + AUTH_TOKEN_MAX_AGE_MS;
         if (expiresAt > Date.now()) {
-          const refreshCookie = cookies.find((c) => c.name.toLowerCase().includes('refresh'));
+          const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
           const state: AuthState = {
             token: authCookie.value,
             expiresAt,

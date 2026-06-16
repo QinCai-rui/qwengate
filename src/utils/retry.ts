@@ -285,37 +285,10 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 export function getRetryConfigFromEnv(): Required<RetryConfig> {
   const envConfig: RetryConfig = {};
 
-  const maxAttempts = config.get('RETRY_MAX_ATTEMPTS', '3');
-  if (maxAttempts !== undefined) {
-    envConfig.maxRetries = parseInt(maxAttempts, 10);
-    if (isNaN(envConfig.maxRetries) || envConfig.maxRetries < 0) {
-      envConfig.maxRetries = DEFAULT_CONFIG.maxRetries;
-    }
-  }
-
-  const baseDelay = config.get('RETRY_BASE_DELAY_MS', '1000');
-  if (baseDelay !== undefined) {
-    envConfig.baseDelayMs = parseInt(baseDelay, 10);
-    if (isNaN(envConfig.baseDelayMs) || envConfig.baseDelayMs < 0) {
-      envConfig.baseDelayMs = DEFAULT_CONFIG.baseDelayMs;
-    }
-  }
-
-  const maxDelay = config.get('RETRY_MAX_DELAY_MS', '30000');
-  if (maxDelay !== undefined) {
-    envConfig.maxDelayMs = parseInt(maxDelay, 10);
-    if (isNaN(envConfig.maxDelayMs) || envConfig.maxDelayMs < 0) {
-      envConfig.maxDelayMs = DEFAULT_CONFIG.maxDelayMs;
-    }
-  }
-
-  const backoffMultiplier = config.get('RETRY_BACKOFF_MULTIPLIER', '2');
-  if (backoffMultiplier !== undefined) {
-    envConfig.backoffMultiplier = parseFloat(backoffMultiplier);
-    if (isNaN(envConfig.backoffMultiplier) || envConfig.backoffMultiplier <= 0) {
-      envConfig.backoffMultiplier = DEFAULT_CONFIG.backoffMultiplier;
-    }
-  }
+  envConfig.maxRetries = Math.max(0, config.getInt('RETRY_MAX_ATTEMPTS', DEFAULT_CONFIG.maxRetries));
+  envConfig.baseDelayMs = Math.max(0, config.getInt('RETRY_BASE_DELAY_MS', DEFAULT_CONFIG.baseDelayMs));
+  envConfig.maxDelayMs = Math.max(0, config.getInt('RETRY_MAX_DELAY_MS', DEFAULT_CONFIG.maxDelayMs));
+  envConfig.backoffMultiplier = Math.max(0.1, config.getFloat('RETRY_BACKOFF_MULTIPLIER', DEFAULT_CONFIG.backoffMultiplier));
 
   return { ...DEFAULT_CONFIG, ...envConfig };
 }

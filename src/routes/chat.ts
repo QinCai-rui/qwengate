@@ -8,6 +8,7 @@ import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import { OpenAIRequest } from '../types/openai.ts';
 import { checkContextWindow, estimateTokens } from '../utils/tokenEstimator.ts';
+import { validateOpenAIRequest } from '../utils/validation.ts';
 import {
   acquireSessionWithCorrections,
   buildQwenMessages,
@@ -26,7 +27,19 @@ export {
 const MAX_MESSAGE_SIZE = 100_000; // 100KB per message
 
 async function parseRequestBody(c: Context) {
-  const body: OpenAIRequest = await c.req.json();
+  const rawBody = await c.req.json();
+
+  // Schema validation via zod — catches malformed requests early
+  const validation = validateOpenAIRequest(rawBody);
+  if (!validation.ok) {
+    const err = new Error(validation.error!);
+    (err as any).upstreamStatus = validation.status || 400;
+    (err as any).type = 'invalid_request_error';
+    (err as any).code = validation.code || 'invalid_request_error';
+    throw err;
+  }
+
+  const body = validation.data as unknown as OpenAIRequest;
 
   // Per-message size validation to prevent OOM during estimateTokens
   if (body.messages && Array.isArray(body.messages)) {
@@ -46,8 +59,8 @@ async function parseRequestBody(c: Context) {
   const streamMode = config.get('STREAMING_MODE', 'auto');
   if (streamMode === 'stream') isStream = true;
   else if (streamMode === 'non-stream') isStream = false;
-  const toolCalling = config.get('TOOL_CALLING', 'true') !== 'false';
-  const cleanOutput = config.get('CLEAN_OUTPUT', 'true') !== 'false';
+  const toolCalling = config.getBool('TOOL_CALLING', true);
+  const cleanOutput = config.getBool('CLEAN_OUTPUT', true);
 
   const messages = body.messages || [];
   handleImageModelFallback(body, messages);

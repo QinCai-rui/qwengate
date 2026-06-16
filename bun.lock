@@ -10,6 +10,7 @@
         "dotenv": "^16.6.1",
         "hono": "^4.12.21",
         "playwright": "^1.60.0",
+        "zod": "^4.4.3",
       },
       "devDependencies": {
         "@biomejs/biome": "^2.5.0",
