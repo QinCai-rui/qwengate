@@ -142,6 +142,12 @@ export async function handlePostStreamCompletion(
       return;
     }
 
+    // Flush any pending chunk left in the one-chunk buffer
+    if (streamState.pendingChunk) {
+      streamState.lastFullContent += streamState.pendingChunk;
+      streamState.pendingChunk = '';
+    }
+
     // Count tool calls from the final assembled content
     const finalToolCalls = streamState.lastFullContent ? parseXmlToolCalls(streamState.lastFullContent).toolCalls.length : 0;
     const effectiveToolCallCount = Math.max(emittedToolCallCount, finalToolCalls);

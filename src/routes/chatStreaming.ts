@@ -178,7 +178,6 @@ function buildInitialStreamState(finalPrompt: string, initialParentId: string | 
     promptTokens: Math.ceil(finalPrompt.length / 3.5),
     currentThoughtIndex: 0,
     reasoningBuffer: '',
-    deferredThinkingChunks: [],
     lastFullContent: '',
     lastRawContent: '',
     lastFilteredSnapshot: '',
@@ -189,5 +188,6 @@ function buildInitialStreamState(finalPrompt: string, initialParentId: string | 
     loggedToolCalls: new Set(),
     lastParsePosition: 0,
     toolCallDepth: 0,
+    pendingChunk: '',
   };
 }

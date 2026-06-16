@@ -12,7 +12,7 @@ import {
   getSnapshotDelta,
 } from './chatHelpers.ts';
 
-import { writeContentDelta, writeDeferredThinking, writeReasoningEvent, writeToolCallEvent } from './writeHelpers.ts';
+import { writeContentDelta, writeReasoningEvent, writeToolCallEvent } from './writeHelpers.ts';
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -21,6 +21,17 @@ import { writeContentDelta, writeDeferredThinking, writeReasoningEvent, writeToo
  * Performance: extracted to module-level const to avoid recompilation on each chunk.
  */
 const SELF_CLOSING_TAG_PATTERN = new RegExp(`^[\\n\\s]*<\\/?(?:${THINK_TAG_NAMES.join('|')})[\\s>]*[\\n\\s]*$`);
+
+/**
+ * Maximum accumulated buffer size for the one-chunk delay approach.
+ * If a chunk has `<` without `>` and the accumulated (pending + current) text exceeds
+ * this length, we force-release it as regular content instead of continuing to buffer.
+ * Prevents indefinite buffering of `<` in non-XML text like "x < 3" across many chunks.
+ * 200 chars is generous: the longest possible tool call tag start
+ * (e.g. `<parameter=` + longest param name) fits easily, while non-XML `<` usage
+ * would accumulate well beyond 200 chars before the stream emits any content.
+ */
+const MAX_BUFFER_CHARS = 200;
 
 // ── Local MCP tool call extraction (from Qwen Studio local_tool phase) ──
 
@@ -68,7 +79,6 @@ export interface StreamProcessingState {
   promptTokens: number;
   currentThoughtIndex: number;
   reasoningBuffer: string;
-  deferredThinkingChunks: string[];
   lastFullContent: string;
   lastRawContent: string;
   lastFilteredSnapshot: string;
@@ -80,6 +90,15 @@ export interface StreamProcessingState {
   lastParsePosition: number;
   /** Depth tracking for nested tool call XML blocks. >0 means suppress content emission. */
   toolCallDepth: number;
+  /**
+   * One-chunk buffer for handling XML tag splits across SSE chunk boundaries.
+   * When a chunk contains `<` without `>`, it might be a tag split (e.g. `<func` + `tion=read>`).
+   * We buffer the incomplete chunk and wait for the next chunk. If combining them completes a
+   * known tool call tag, toolCallDepth suppresses content emission. If not, the combined text
+   * is regular content and is emitted normally. Max buffer size prevents indefinite buffering
+   * of `<` in non-XML text (e.g. "x < 3").
+   */
+  pendingChunk: string;
 }
 
 export interface StreamProcessingCtx {
@@ -222,10 +241,14 @@ export async function processStreamData(data: any, state: StreamProcessingState,
 
   if (isThinkingChunk) {
     if (state.reasoningBuffer.length < 20000) state.reasoningBuffer += vStr;
-    state.deferredThinkingChunks.push(vStr);
-    // Write thinking content immediately for real-time reasoning_content streaming
+    // Write thinking content immediately for real-time reasoning_content streaming.
+    // Clean XML artifacts to avoid leaking partial tool call syntax into reasoning (the
+    // deferred flush was removed to prevent duplicate emission — every chunk is written once).
     if (vStr) {
-      await writeReasoningEvent(streamWriter, completionId, model, vStr);
+      const cleaned = cleanTextOfXmlArtifacts(vStr).cleanedText;
+      if (cleaned) {
+        await writeReasoningEvent(streamWriter, completionId, model, cleaned);
+      }
     }
     return 'continue';
   }
@@ -253,10 +276,30 @@ export async function processStreamData(data: any, state: StreamProcessingState,
     state.lastVStrRaw = vStr;
   }
 
-  if (rawText) {
-    state.lastRawContent += rawText;
-    state.lastFullContent += rawText;
+  // ── One-chunk buffer: delay chunks with '<' but no '>' ──────────
+  // When an XML tag splits across SSE chunk boundaries (e.g. `<func` + `tion=read>`),
+  // the first chunk has '<' without '>'. Delaying by 1 chunk lets us combine them
+  // so cleanThinkTags sees the complete tag `<function=read>` and strips it via
+  // prefix matching, instead of leaking partial fragments like `ction=read>`.
+  //
+  // If the combined text has '>', the tag completed — toolCallDepth handles suppression.
+  // If it still has no '>', cleanThinkTags still catches partial tags via TOOL_TAG_RE
+  // prefix matching (the `` clause handles non-tool-call `<` content like "x < 3").
+  // MAX_BUFFER_CHARS prevents indefinite buffering of `<` in non-XML text.
+
+  if (state.pendingChunk) {
+    rawText = state.pendingChunk + rawText;
+    state.pendingChunk = '';
   }
+
+  if (rawText.includes('<') && !rawText.includes('>') && rawText.length < MAX_BUFFER_CHARS) {
+    state.pendingChunk = rawText;
+    return 'continue';
+  }
+
+  // At this point the text won't be delayed. Accumulate and process.
+  state.lastRawContent += rawText;
+  state.lastFullContent += rawText;
 
   // Performance: skip all downstream work when there's no new raw content.
   // This avoids the expensive parseXmlToolCalls (100KB buffer) and
@@ -273,7 +316,7 @@ export async function processStreamData(data: any, state: StreamProcessingState,
   if (tagOpen) state.toolCallDepth++;
   if (tagClose) state.toolCallDepth = Math.max(0, state.toolCallDepth - 1);
 
-  // Keep state.lastFullContent raw so partial <function=...> survives for the next chunk
+  // Parse tool calls from the accumulated content
   const newToolCallContent = state.lastFullContent;
   const { toolCalls: xmlToolCalls } = parseXmlToolCalls(newToolCallContent);
   if (xmlToolCalls.length > 0) {
@@ -344,11 +387,6 @@ export async function processStreamData(data: any, state: StreamProcessingState,
 
   const cleanedText = state.lastFilteredFullContent || null;
   const filteredThinking = state.lastDeltaThinkingFull || '';
-
-  if (state.deferredThinkingChunks.length > 0) {
-    await writeDeferredThinking(streamWriter, completionId, model, state.deferredThinkingChunks);
-    state.deferredThinkingChunks = [];
-  }
 
   if (filteredThinking) {
     const thinkingDelta = getSnapshotDelta(filteredThinking, state.lastThinkingSnapshot);

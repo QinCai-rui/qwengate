@@ -110,10 +110,9 @@ const TOOL_RESULT_TAG_PATTERN = new RegExp(`<\\/${TOOL_RESULT_KEYWORDS.join('|')
  * Add new keywords to the array when Qwen's tool call format changes.
  */
 const MIN_TOOL_PREFIX_LEN = 3;
-const [TOOL_TAG_RE, TOOL_TAIL_RE] = (() => {
+const [TOOL_TAG_RE] = (() => {
   const keywords = TOOL_CALL_KEYWORDS;
   const tagPrefixes: string[] = [];
-  const tailPrefixes: string[] = [];
 
   for (const kw of keywords) {
     for (let i = MIN_TOOL_PREFIX_LEN; i <= kw.length; i++) {
@@ -121,25 +120,36 @@ const [TOOL_TAG_RE, TOOL_TAIL_RE] = (() => {
       tagPrefixes.push(p); // fun, funct, ..., /fun, /funct, ...
       tagPrefixes.push('/' + p);
     }
-    const tail = kw.slice(MIN_TOOL_PREFIX_LEN); // "ction" for "function"
-    if (tail) tailPrefixes.push(tail);
   }
 
   tagPrefixes.sort((a, b) => b.length - a.length);
   const tagRe = new RegExp(`<(?:${tagPrefixes.join('|')})[^>]*(?:>|$)`, 'gi');
-  const tailRe = tailPrefixes.length > 0 ? new RegExp(`^(?:${tailPrefixes.join('|')})(?:[=][^\n>]*[=>]?|>)\\n?`, 'gm') : /(?!)/;
-  return [tagRe, tailRe];
+  return [tagRe];
 })();
 
 export function cleanThinkTags(t: string): string {
   // Fast path: skip all regex work when there's no tag-like content or tail fragment
-  if (!t.includes('<') && !t.includes('=')) return t;
+  // `>` is included because `word>` at line start (from `</keyword>` split) needs stripping
+  if (!t.includes('<') && !t.includes('=') && !t.includes('>')) return t;
   let s = t.replace(THINK_TAG_PATTERN, '');
   s = s.replace(TOOL_RESULT_TAG_PATTERN, '');
   // Strip tool call XML tags (complete + partial at chunk boundaries)
   s = s.replace(TOOL_TAG_RE, '');
-  // Strip continuation tails after partial tag removal
-  s = s.replace(TOOL_TAIL_RE, '');
+  // Generic chunk-boundary artifact cleanup: works for ANY XML-like output from any AI,
+  // not just known tool call keywords. Covers all fragment types that LLM tokenizers can
+  // produce at arbitrary split points:
+  //
+  //   A. `=name>` at line start: `<keyword=name>` splits as `<keyword` + `=name>`.
+  //   B. `tail=name>` at line start: `<keyword=name>` splits as `<key` + `word=name>`
+  //      (e.g. `ction=filePath>` when the first 3 chars `fun` are in the previous chunk).
+  //   C. `</` at end of string: `</keyword>` splits as `...</` + `keyword>`.
+  //   D. `<` at end of string: `<keyword>` splits as `...<` + `keyword>`.
+  //   E. `word>` at line start (from `</keyword>` split across chunks: `</` + `keyword>`).
+  s = s.replace(/^=[^\s>]+>/gm, ''); // =name> continuation
+  s = s.replace(/^[a-z]+=[^\s>]+>/gm, ''); // tail=name> continuation (generic, no keyword knowledge needed)
+  s = s.replace(/^[a-z]{3,}>/gm, ''); // word> at line start (e.g. `function>` after `</` was stripped)
+  s = s.replace(/<\/(?=$)/g, ''); // </ at end of string
+  s = s.replace(/<$/g, ''); // < at end of string
   return s;
 }
 

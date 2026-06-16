@@ -327,12 +327,19 @@ describe('filterContentPipeline — per-chunk XML tool call preservation', () =>
 
           // Check: if this chunk starts with "=", it's a continuation fragment
           if (chunk.startsWith('=')) {
-            // These come from chunks like "=read>\n" that follow a stripped "<function" chunk
-            // They're expected to survive per-chunk — that's the fix
-            assert.ok(
-              result.cleanText.includes(chunk.substring(0, 5)),
-              `${log.name} chunk[${i}]: continuation fragment should survive per-chunk processing`,
-            );
+            if (chunk.includes('>')) {
+              // Complete `=name>` fragment: stripped by generic =name> pattern
+              assert.ok(
+                !result.cleanText!.includes(chunk.substring(0, 5)),
+                `${log.name} chunk[${i}]: complete =name> fragment should be stripped`,
+              );
+            } else {
+              // Incomplete `=name` (no > yet, arrives in next chunk): survives per-chunk
+              assert.ok(
+                result.cleanText!.includes(chunk.substring(0, Math.min(3, chunk.length))),
+                `${log.name} chunk[${i}]: incomplete =name fragment survives (no > yet)`,
+              );
+            }
           }
         }
       }
@@ -366,11 +373,14 @@ describe('filterContentPipeline — per-chunk XML tool call preservation', () =>
     // Continuation tails (after a prefix of MIN_TOOL_PREFIX_LEN was stripped)
     // "function" sans "fun" → "ction", "parameter" sans "par" → "ameter"
     assert.strictEqual(cleanThinkTags('ction=filePath>'), '', 'tail "ction=filePath>" stripped');
-    assert.strictEqual(cleanThinkTags('ction=name>\n'), '', 'tail "ction=name>" stripped');
+    assert.strictEqual(cleanThinkTags('ction=name>\n'), '\n', 'tail "ction=name>" stripped (\\n survives)');
     assert.strictEqual(cleanThinkTags('ameter=300>'), '', 'tail "ameter=300>" stripped');
-    // Orphaned fragments that don't match known tails survive (unavoidable without state)
-    assert.strictEqual(cleanThinkTags('=read>\n'), '=read>\n', 'bare =read> tail survives (no context)');
-    assert.strictEqual(cleanThinkTags('ion=test>\n'), 'ion=test>\n', 'short tail ion= survives (could be normal text)');
+    // Generic continuation patterns (no keyword knowledge needed):
+    assert.strictEqual(cleanThinkTags('=read>\n'), '\n', '=name> continuation stripped');
+    assert.strictEqual(cleanThinkTags('ion=test>\n'), '\n', 'tail=name> continuation stripped');
+    // Standalone word> at line start (from </keyword> split): parameter>, function>
+    assert.strictEqual(cleanThinkTags('parameter>\n'), '\n', 'standalone parameter> stripped');
+    assert.strictEqual(cleanThinkTags('function>\n'), '\n', 'standalone function> stripped');
   });
 
   test('cleanTextOfXmlArtifacts on full text correctly extracts tool calls and strips markup', () => {
