@@ -299,39 +299,39 @@ curl http://localhost:26405/v1/models \
   "object": "list",
   "data": [
     {
-      "id": "qwen-max",
+      "id": "qwen3-7-max",
       "object": "model",
       "created": 1234567890,
       "owned_by": "qwen",
       "context_window": 1000000,
-      "max_output_tokens": 65536,
+      "max_output_tokens": 81920,
       "modalities": ["text"]
     },
     {
-      "id": "qwen-plus",
+      "id": "qwen3-6-plus",
       "object": "model",
       "created": 1234567890,
       "owned_by": "qwen",
       "context_window": 1000000,
       "max_output_tokens": 65536,
-      "modalities": ["text"]
+      "modalities": ["text", "image", "video"]
     },
     {
-      "id": "qwen-max-no-thinking",
+      "id": "qwen3-5-flash",
       "object": "model",
       "created": 1234567890,
       "owned_by": "qwen",
       "context_window": 1000000,
       "max_output_tokens": 65536,
-      "modalities": ["text"]
+      "modalities": ["text", "image", "video"]
     },
     {
-      "id": "qwen-plus-no-thinking",
+      "id": "qwen3-7-max-no-thinking",
       "object": "model",
       "created": 1234567890,
       "owned_by": "qwen",
       "context_window": 1000000,
-      "max_output_tokens": 65536,
+      "max_output_tokens": 81920,
       "modalities": ["text"]
     }
   ]

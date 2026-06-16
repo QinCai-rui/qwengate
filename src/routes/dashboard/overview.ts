@@ -1,4 +1,4 @@
-import { sidebarHtml } from "./sidebar.ts";
+import { sidebarHtml } from './sidebar.ts';
 
 export const overviewHtml = `<!DOCTYPE html>
 <html lang="en">

@@ -127,44 +127,48 @@ export class CircuitBreaker {
   /** Record a successful execution. */
   recordSuccess(): Promise<void> {
     return new Promise((resolve) => {
-      this.lock = this.lock.then(() => {
-        if (this.state === 'half_open') {
-          this.successCount++;
-          if (this.successCount >= this.halfOpenMaxAttempts) {
-            this.state = 'closed';
+      this.lock = this.lock
+        .then(() => {
+          if (this.state === 'half_open') {
+            this.successCount++;
+            if (this.successCount >= this.halfOpenMaxAttempts) {
+              this.state = 'closed';
+              this.failureCount = 0;
+            }
+          } else {
             this.failureCount = 0;
           }
-        } else {
-          this.failureCount = 0;
-        }
-        resolve();
-      }).catch((err) => {
-        console.error(`[CircuitBreaker:${this.name}] mutex error in recordSuccess:`, err);
-        resolve();
-      });
+          resolve();
+        })
+        .catch((err) => {
+          console.error(`[CircuitBreaker:${this.name}] mutex error in recordSuccess:`, err);
+          resolve();
+        });
     });
   }
 
   /** Record a failed execution. */
   recordFailure(): Promise<void> {
     return new Promise((resolve) => {
-      this.lock = this.lock.then(() => {
-        this.lastFailureTime = Date.now();
-        if (this.state === 'half_open') {
-          this.state = 'open';
-          console.error(`[CircuitBreaker:${this.name}] half_open → open (probe failed)`);
-        } else {
-          this.failureCount++;
-          if (this.failureCount >= this.failureThreshold) {
+      this.lock = this.lock
+        .then(() => {
+          this.lastFailureTime = Date.now();
+          if (this.state === 'half_open') {
             this.state = 'open';
-            console.warn(`[CircuitBreaker:${this.name}] closed → open (${this.failureCount} consecutive failures)`);
+            console.error(`[CircuitBreaker:${this.name}] half_open → open (probe failed)`);
+          } else {
+            this.failureCount++;
+            if (this.failureCount >= this.failureThreshold) {
+              this.state = 'open';
+              console.warn(`[CircuitBreaker:${this.name}] closed → open (${this.failureCount} consecutive failures)`);
+            }
           }
-        }
-        resolve();
-      }).catch((err) => {
-        console.error(`[CircuitBreaker:${this.name}] mutex error in recordFailure:`, err);
-        resolve();
-      });
+          resolve();
+        })
+        .catch((err) => {
+          console.error(`[CircuitBreaker:${this.name}] mutex error in recordFailure:`, err);
+          resolve();
+        });
     });
   }
 
@@ -205,7 +209,7 @@ export function isRetryable(error: unknown, httpStatus?: number): boolean {
   if (error instanceof TypeError || error instanceof DOMException) {
     const msg = String(error.message).toLowerCase();
     const networkKeywords = ['network', 'fetch', 'aborted', 'timeout', 'connection', 'econnrefused', 'enotfound', 'econnreset', 'socket'];
-    return networkKeywords.some(kw => msg.includes(kw));
+    return networkKeywords.some((kw) => msg.includes(kw));
   }
 
   // Timeout
@@ -218,7 +222,7 @@ export function isRetryable(error: unknown, httpStatus?: number): boolean {
   // HTTP status check
   if (httpStatus !== undefined) {
     if (httpStatus === 429) return true; // rate limited
-    if (httpStatus >= 500) return true;  // server error
+    if (httpStatus >= 500) return true; // server error
     if (httpStatus >= 400 && httpStatus < 500) {
       // 4xx are generally non-retryable (except 429 handled above)
       return false;
@@ -228,19 +232,21 @@ export function isRetryable(error: unknown, httpStatus?: number): boolean {
   // Generic error messages from upstream that indicate transient issues
   if (error instanceof Error) {
     const msg = error.message.toLowerCase();
-    if (msg.includes('econnreset') ||
-        msg.includes('etimedout') ||
-        msg.includes('enotfound') ||
-        msg.includes('enomem') ||
-        msg.includes('eai_fail') ||
-        msg.includes('network') ||
-        msg.includes('timeout') ||
-        msg.includes('upstream') ||
-        msg.includes('server error') ||
-        msg.includes('bad gateway') ||
-        msg.includes('service unavailable') ||
-        msg.includes('gateway timeout') ||
-        msg.includes('internal server error')) {
+    if (
+      msg.includes('econnreset') ||
+      msg.includes('etimedout') ||
+      msg.includes('enotfound') ||
+      msg.includes('enomem') ||
+      msg.includes('eai_fail') ||
+      msg.includes('network') ||
+      msg.includes('timeout') ||
+      msg.includes('upstream') ||
+      msg.includes('server error') ||
+      msg.includes('bad gateway') ||
+      msg.includes('service unavailable') ||
+      msg.includes('gateway timeout') ||
+      msg.includes('internal server error')
+    ) {
       return true;
     }
   }
@@ -253,7 +259,7 @@ export function isRetryable(error: unknown, httpStatus?: number): boolean {
  * Sleep for the specified duration.
  */
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -261,8 +267,14 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new AttemptTimeoutError(timeoutMs)), timeoutMs);
     promise.then(
-      (val) => { clearTimeout(timer); resolve(val); },
-      (err) => { clearTimeout(timer); reject(err); }
+      (val) => {
+        clearTimeout(timer);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
     );
   });
 }
@@ -308,10 +320,7 @@ export function getRetryConfigFromEnv(): Required<RetryConfig> {
   return { ...DEFAULT_CONFIG, ...envConfig };
 }
 
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  config?: RetryConfig
-): Promise<T> {
+export async function withRetry<T>(fn: () => Promise<T>, config?: RetryConfig): Promise<T> {
   const cfg: Required<RetryConfig> = {
     ...DEFAULT_CONFIG,
     ...getRetryConfigFromEnv(),
@@ -328,7 +337,7 @@ export async function withRetry<T>(
   for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
     try {
       const result = await withTimeout(fn(), cfg.attemptTimeoutMs);
-      if (cfg.circuitBreaker) cfg.circuitBreaker.recordSuccess();
+      if (cfg.circuitBreaker) await cfg.circuitBreaker.recordSuccess();
       return result;
     } catch (error: unknown) {
       lastError = error;
@@ -346,7 +355,7 @@ export async function withRetry<T>(
       const retryable = isRetryable(error, httpStatus);
 
       if (cfg.circuitBreaker && retryable) {
-        cfg.circuitBreaker.recordFailure();
+        await cfg.circuitBreaker.recordFailure();
       }
 
       if (!retryable || attempt >= cfg.maxRetries) {
@@ -363,7 +372,9 @@ export async function withRetry<T>(
       const jitter = delay * 0.2 * (Math.random() * 2 - 1);
       const actualDelay = Math.min(delay + jitter, cfg.maxDelayMs);
 
-      console.warn(`[Retry] attempt ${attempt + 1}/${cfg.maxRetries + 1} failed (${httpStatus || 'network'}, retryable), retrying in ${Math.round(actualDelay)}ms...`);
+      console.warn(
+        `[Retry] attempt ${attempt + 1}/${cfg.maxRetries + 1} failed (${httpStatus || 'network'}, retryable), retrying in ${Math.round(actualDelay)}ms...`,
+      );
       await sleep(actualDelay);
 
       delay = Math.min(delay * cfg.backoffMultiplier, cfg.maxDelayMs);

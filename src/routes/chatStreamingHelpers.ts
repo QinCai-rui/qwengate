@@ -1,23 +1,18 @@
-import {
-  detectCumulativeChunk,
-  getSnapshotDelta,
-  cleanThinkTags,
-  extractDeltaContent,
-  type AmplificationGuardState,
-} from "./chatHelpers.ts";
-import type { ParsedToolCall } from '../types/openai.ts';
 import { logStore } from '../services/logStore.ts';
-import { parseXmlToolCalls, cleanTextOfXmlArtifacts, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
 import { logQwenSSE } from '../services/qwenLogger.ts';
+import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
+import type { ParsedToolCall } from '../types/openai.ts';
 import { filterContent } from '../utils/contentFilter.ts';
 import { THINK_TAG_NAMES, TOOL_CALL_KEYWORDS } from '../utils/tagNames.ts';
-
 import {
-  writeReasoningEvent,
-  writeContentDelta,
-  writeToolCallEvent,
-  writeDeferredThinking,
-} from './writeHelpers.ts';
+  type AmplificationGuardState,
+  cleanThinkTags,
+  detectCumulativeChunk,
+  extractDeltaContent,
+  getSnapshotDelta,
+} from './chatHelpers.ts';
+
+import { writeContentDelta, writeDeferredThinking, writeReasoningEvent, writeToolCallEvent } from './writeHelpers.ts';
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -42,20 +37,18 @@ const SELF_CLOSING_TAG_PATTERN = new RegExp(`^[\\n\\s]*<\\/?(?:${THINK_TAG_NAMES
  * @param sseData - Parsed SSE data chunk
  * @returns Array of ParsedToolCall with UUID call IDs
  */
-export function extractLocalMcpToolCalls(
-  sseData: any,
-): ParsedToolCall[] {
+export function extractLocalMcpToolCalls(sseData: any): ParsedToolCall[] {
   const localMcp = sseData?.choices?.[0]?.delta?.extra?.local_mcp;
   if (!localMcp) return [];
 
-  const serverTools = localMcp["★"];
+  const serverTools = localMcp['★'];
   if (!Array.isArray(serverTools)) return [];
 
   const toolCalls: ParsedToolCall[] = [];
   for (const tool of serverTools) {
     if (tool?.tool_name && tool?.params !== undefined) {
       const rawName = tool.tool_name;
-      const name = rawName.startsWith("★-") ? rawName.slice(2) : rawName;
+      const name = rawName.startsWith('★-') ? rawName.slice(2) : rawName;
       toolCalls.push({
         id: `call_${crypto.randomUUID()}`,
         name,
@@ -148,68 +141,61 @@ export function filterContentPipeline(
  *   - 'continue'      → normal processing, keep iterating
  *   - 'break_stream'  → stream finished (break out of loops)
  */
-export async function processStreamData(
-  data: any,
-  state: StreamProcessingState,
-  ctx: StreamProcessingCtx,
-): Promise<ProcessStreamResult> {
-  const {
-    streamWriter, completionId, model, enableContentFiltering,
-    logId, resolvedEmail, ampState,
-  } = ctx;
+export async function processStreamData(data: any, state: StreamProcessingState, ctx: StreamProcessingCtx): Promise<ProcessStreamResult> {
+  const { streamWriter, completionId, model, enableContentFiltering, logId, resolvedEmail, ampState } = ctx;
 
-    // Check for upstream Qwen error sent as SSE data chunk
-    if (data.error) {
-      const errMsg = typeof data.error === 'string' ? data.error : data.error.message || JSON.stringify(data.error);
-      logStore.addError(logId, `Qwen upstream SSE error: ${errMsg}`);
-      logStore.updateEntry(logId, entry => {
-        entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
-        entry.finalResponse.finishReason = 'error';
-      });
-      return 'break_stream';
-    }
-    const deltaStatus = data.choices?.[0]?.delta?.status;
-    if (deltaStatus === 'error') {
-      logStore.addError(logId, `Qwen stream delta returned error status`);
-      logStore.updateEntry(logId, entry => {
-        entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
-        entry.finalResponse.finishReason = 'error';
-      });
-      return 'break_stream';
-    }
-    if (deltaStatus === 'finished') {
-      const deltaPhase = data.choices[0].delta.phase;
-      // Don't break on think-phase finished — with thinking_format=full,
-      // answer content arrives in a separate answer phase after think completes.
-      if (deltaPhase !== 'thinking_summary' && deltaPhase !== 'think') {
-        // Extract and emit local MCP tool calls before breaking the stream
-        if (deltaPhase === 'local_tool') {
-          const localToolCalls = extractLocalMcpToolCalls(data);
-          const newToolCalls = localToolCalls.filter(tc => {
-            const key = `${tc.name}:${JSON.stringify(tc.arguments)}`;
-            if (state.loggedToolCalls.has(key)) return false;
-            state.loggedToolCalls.add(key);
-            return true;
-          });
-          
-          if (newToolCalls.length > 0) {
-            logStore.updateEntry(logId, entry => {
-              for (const tc of newToolCalls) {
-                entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
-              }
-            });
-            for (let i = 0; i < newToolCalls.length; i++) {
-              await writeToolCallEvent(streamWriter, completionId, model, newToolCalls[i], ctx.emittedToolCallCount + i);
+  // Check for upstream Qwen error sent as SSE data chunk
+  if (data.error) {
+    const errMsg = typeof data.error === 'string' ? data.error : data.error.message || JSON.stringify(data.error);
+    logStore.addError(logId, `Qwen upstream SSE error: ${errMsg}`);
+    logStore.updateEntry(logId, (entry) => {
+      entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
+      entry.finalResponse.finishReason = 'error';
+    });
+    return 'break_stream';
+  }
+  const deltaStatus = data.choices?.[0]?.delta?.status;
+  if (deltaStatus === 'error') {
+    logStore.addError(logId, `Qwen stream delta returned error status`);
+    logStore.updateEntry(logId, (entry) => {
+      entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
+      entry.finalResponse.finishReason = 'error';
+    });
+    return 'break_stream';
+  }
+  if (deltaStatus === 'finished') {
+    const deltaPhase = data.choices[0].delta.phase;
+    // Don't break on think-phase finished — with thinking_format=full,
+    // answer content arrives in a separate answer phase after think completes.
+    if (deltaPhase !== 'thinking_summary' && deltaPhase !== 'think') {
+      // Extract and emit local MCP tool calls before breaking the stream
+      if (deltaPhase === 'local_tool') {
+        const localToolCalls = extractLocalMcpToolCalls(data);
+        const newToolCalls = localToolCalls.filter((tc) => {
+          const key = `${tc.name}:${JSON.stringify(tc.arguments)}`;
+          if (state.loggedToolCalls.has(key)) return false;
+          state.loggedToolCalls.add(key);
+          return true;
+        });
+
+        if (newToolCalls.length > 0) {
+          logStore.updateEntry(logId, (entry) => {
+            for (const tc of newToolCalls) {
+              entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
             }
-            ctx.emittedToolCallCount += newToolCalls.length;
+          });
+          for (let i = 0; i < newToolCalls.length; i++) {
+            await writeToolCallEvent(streamWriter, completionId, model, newToolCalls[i], ctx.emittedToolCallCount + i);
           }
-          if (ctx.qwenLogFile && localToolCalls.length > 0) {
-            logQwenSSE(ctx.qwenLogFile, ctx.sseEventCount || 0, localToolCalls.length, localToolCalls);
-          }
+          ctx.emittedToolCallCount += newToolCalls.length;
         }
-        return 'break_stream';
+        if (ctx.qwenLogFile && localToolCalls.length > 0) {
+          logQwenSSE(ctx.qwenLogFile, ctx.sseEventCount || 0, localToolCalls.length, localToolCalls);
+        }
       }
+      return 'break_stream';
     }
+  }
 
   // Track SSE events for logging
   ctx.sseEventCount = (ctx.sseEventCount || 0) + 1;
@@ -282,30 +268,30 @@ export async function processStreamData(
   // lastFilteredFullContent or emit content deltas to the client. The flush
   // path handles the clean version of the tool call text.
   const FKW = TOOL_CALL_KEYWORDS[0];
-  const tagOpen  = rawText.includes(`<${FKW}=`);
+  const tagOpen = rawText.includes(`<${FKW}=`);
   const tagClose = rawText.includes(`</${FKW}>`);
-  if (tagOpen)  state.toolCallDepth++;
+  if (tagOpen) state.toolCallDepth++;
   if (tagClose) state.toolCallDepth = Math.max(0, state.toolCallDepth - 1);
 
   // Keep state.lastFullContent raw so partial <function=...> survives for the next chunk
   const newToolCallContent = state.lastFullContent;
   const { toolCalls: xmlToolCalls } = parseXmlToolCalls(newToolCallContent);
   if (xmlToolCalls.length > 0) {
-    const newToolCalls = xmlToolCalls.filter(tc => {
+    const newToolCalls = xmlToolCalls.filter((tc) => {
       const key = `${tc.name}:${JSON.stringify(tc.parameters)}`;
       if (state.loggedToolCalls.has(key)) return false;
       state.loggedToolCalls.add(key);
       return true;
     });
-    
+
     if (newToolCalls.length > 0) {
-      logStore.updateEntry(logId, entry => {
+      logStore.updateEntry(logId, (entry) => {
         for (const tc of newToolCalls) {
           entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.parameters) });
         }
       });
     }
-    
+
     for (const [i, tc] of newToolCalls.entries()) {
       const parsed = xmlToolCallToParsed(tc, ctx.emittedToolCallCount + i);
       await writeToolCallEvent(streamWriter, completionId, model, parsed, ctx.emittedToolCallCount + i);
@@ -377,11 +363,20 @@ export async function processStreamData(
     const contentDelta = getSnapshotDelta(cleanedText, state.lastFilteredSnapshot);
     state.lastFilteredSnapshot = cleanedText;
     if (contentDelta) {
-      await writeContentDelta(streamWriter, completionId, model, contentDelta, ampState, logId, resolvedEmail, state.lastRawContent, state.lastVStrRaw, logStore);
+      await writeContentDelta(
+        streamWriter,
+        completionId,
+        model,
+        contentDelta,
+        ampState,
+        logId,
+        resolvedEmail,
+        state.lastRawContent,
+        state.lastVStrRaw,
+        logStore,
+      );
     }
   }
 
   return 'continue';
 }
-
-

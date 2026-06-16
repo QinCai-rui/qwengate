@@ -1,7 +1,7 @@
-import test, { describe } from 'node:test';
 import assert from 'node:assert';
-import { processStreamData, type StreamProcessingState, type StreamProcessingCtx } from './chatStreamingHelpers.ts';
+import test from 'node:test';
 import { logStore } from '../services/logStore.ts';
+import { processStreamData, type StreamProcessingCtx, type StreamProcessingState } from './chatStreamingHelpers.ts';
 
 test('reproduces and tests fix for corrupted tool call when split across chunks', async () => {
   const logId = 'test-corrupted-tool-call-log-id';
@@ -31,7 +31,7 @@ test('reproduces and tests fix for corrupted tool call when split across chunks'
   const mockStreamWriter = {
     write: async (chunk: string) => {
       writtenEvents.push(chunk);
-    }
+    },
   };
 
   const ctx: StreamProcessingCtx = {
@@ -52,43 +52,43 @@ test('reproduces and tests fix for corrupted tool call when split across chunks'
   };
 
   const chunks = [
-    "Both",
-    " files now set `",
-    "thinking_format: \"",
-    "full\"`.\n\n",
-    "Now let me also",
-    " add the thinking_format",
-    " to the log",
-    " files as you asked",
-    " earlier, and restart",
-    " the gateway.\n",
-    "<function=★",
-    "-edit",
-    ">\n<parameter",
-    "=filePath>\n",
-    "/home/youssefv",
-    "del/Projects/q",
-    "wen-gate/src",
-    "/services/logStore.ts",
-    "\n</parameter>",
-    "\n<parameter=",
-    "oldString>\n",
-    "  thinkingContent?:",
-    " string;\n ",
-    " amplificationTriggered",
-    "Input?: string |",
-    " null;\n</",
-    "parameter>\n",
-    "<parameter=newString>",
-    "\n  thinkingContent",
-    "?: string;\n",
-    "  thinkingFormat?:",
-    " string;\n ",
-    " amplificationTriggered",
-    "Input?: string |",
-    " null;\n</",
-    "parameter>\n</",
-    "function>\n"
+    'Both',
+    ' files now set `',
+    'thinking_format: "',
+    'full"`.\n\n',
+    'Now let me also',
+    ' add the thinking_format',
+    ' to the log',
+    ' files as you asked',
+    ' earlier, and restart',
+    ' the gateway.\n',
+    '<function=★',
+    '-edit',
+    '>\n<parameter',
+    '=filePath>\n',
+    '/home/youssefv',
+    'del/Projects/q',
+    'wen-gate/src',
+    '/services/logStore.ts',
+    '\n</parameter>',
+    '\n<parameter=',
+    'oldString>\n',
+    '  thinkingContent?:',
+    ' string;\n ',
+    ' amplificationTriggered',
+    'Input?: string |',
+    ' null;\n</',
+    'parameter>\n',
+    '<parameter=newString>',
+    '\n  thinkingContent',
+    '?: string;\n',
+    '  thinkingFormat?:',
+    ' string;\n ',
+    ' amplificationTriggered',
+    'Input?: string |',
+    ' null;\n</',
+    'parameter>\n</',
+    'function>\n',
   ];
 
   for (const chunk of chunks) {
@@ -97,10 +97,10 @@ test('reproduces and tests fix for corrupted tool call when split across chunks'
         {
           delta: {
             phase: 'answer',
-            content: chunk
-          }
-        }
-      ]
+            content: chunk,
+          },
+        },
+      ],
     };
     await processStreamData(data, state, ctx);
   }
@@ -112,13 +112,13 @@ test('reproduces and tests fix for corrupted tool call when split across chunks'
   assert.strictEqual(logEntry.parsedToolCalls[0].name, '★-edit', 'tool call name should be ★-edit');
 
   // 2. Verify that the emitted tool call event is sent to the client
-  const toolCallEvents = writtenEvents.filter(e => e.includes('tool_calls'));
+  const toolCallEvents = writtenEvents.filter((e) => e.includes('tool_calls'));
   assert.strictEqual(toolCallEvents.length, 1, 'should have emitted exactly one tool call event to client');
   assert.ok(toolCallEvents[0].includes('★-edit') || toolCallEvents[0].includes('edit'), 'emitted tool call should be edit');
 
   // 3. Verify that the content streamed to the client does NOT contain leaked function tags/parameters
   // Reconstruct emitted content from content events
-  const contentEvents = writtenEvents.filter(e => !e.includes('tool_calls') && e.includes('"content"'));
+  const contentEvents = writtenEvents.filter((e) => !e.includes('tool_calls') && e.includes('"content"'));
   let reconstructedContent = '';
   for (const event of contentEvents) {
     // Extract JSON payload from SSE "data: <json>\n\n"

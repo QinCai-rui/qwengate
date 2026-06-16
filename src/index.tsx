@@ -1,49 +1,43 @@
 import 'dotenv/config';
-import { Hono } from "hono";
-import { cors } from "hono/cors";
-import { bearerAuth } from "hono/bearer-auth";
-import { chatCompletions } from "./routes/chat.ts";
-import { fetchQwenModels, configureAccount } from "./services/qwen.ts";
-import {
-  initPlaywright,
-  BrowserType,
-  getQwenHeaders,
-  closePlaywright,
-  getBrowser,
-} from "./services/playwright.ts";
-import { initAuth } from "./services/auth.ts";
-import { accountsRouter } from "./routes/accounts.ts";
-import { configRouter } from "./routes/config.ts";
-import { logStore } from "./services/logStore.ts";
-import { config } from "./services/configService.ts";
-import { startAutoCleanup, stopAutoCleanup, rateLimitMiddleware } from "./middleware/rateLimit.ts";
-import { debugNetworkApp } from "./routes/debugNetwork.ts";
-import { registerDashboardRoutes } from "./routes/dashboard/dashboardRoutes.ts";
-import { projectPath } from "./utils/paths.ts";
-import { fileURLToPath } from "url";
-import { writeFileSync, unlinkSync, existsSync } from "fs";
-import { safeCompare } from "./utils/auth.ts";
-
-// ── Runtime detection ───────────────────────────────────────────────
-const isBun = typeof Bun !== 'undefined';
+import { existsSync, unlinkSync, writeFileSync } from 'fs';
+import { Hono } from 'hono';
+import { bearerAuth } from 'hono/bearer-auth';
+import { cors } from 'hono/cors';
+import { fileURLToPath } from 'url';
+import { rateLimitMiddleware, startAutoCleanup, stopAutoCleanup } from './middleware/rateLimit.ts';
+import { accountsRouter } from './routes/accounts.ts';
+import { chatCompletions } from './routes/chat.ts';
+import { configRouter } from './routes/config.ts';
+import { registerDashboardRoutes } from './routes/dashboard/dashboardRoutes.ts';
+import { debugNetworkApp } from './routes/debugNetwork.ts';
+import { initAuth } from './services/auth.ts';
+import { config } from './services/configService.ts';
+import { logStore } from './services/logStore.ts';
+import { BrowserType, closePlaywright, getBrowser, getQwenHeaders, initPlaywright } from './services/playwright.ts';
+import { configureAccount, fetchQwenModels } from './services/qwen.ts';
+import { safeCompare } from './utils/auth.ts';
+import { isBun } from './utils/env.ts';
+import { projectPath } from './utils/paths.ts';
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[FATAL] Unhandled Promise Rejection:', reason);
 });
 
 console.clear();
-process.stdout.write("\x1bc\x1b[3J\x1b[2J\x1b[H");
+process.stdout.write('\x1bc\x1b[3J\x1b[2J\x1b[H');
 
-// Redirect all console warn/error to dashboard system logs instead of terminal
+// Forward console warn/error to dashboard system logs while preserving terminal output
 const _origWarn = console.warn;
 const _origError = console.error;
 console.warn = (...args: any[]) => {
-  const msg = args.map((a: any) => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
-  logStore.log("warn", "system", msg);
+  _origWarn.apply(console, args);
+  const msg = args.map((a: any) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+  logStore.log('warn', 'system', msg);
 };
 console.error = (...args: any[]) => {
-  const msg = args.map((a: any) => typeof a === "string" ? a : JSON.stringify(a)).join(" ");
-  logStore.log("error", "system", msg);
+  _origError.apply(console, args);
+  const msg = args.map((a: any) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+  logStore.log('error', 'system', msg);
 };
 
 export const app = new Hono();
@@ -53,9 +47,9 @@ let isShuttingDown = false;
 let serverStop: (() => void | Promise<void>) | null = null;
 const SHUTDOWN_TIMEOUT_MS = 30_000;
 
-app.use("*", async (c, next) => {
+app.use('*', async (c, next) => {
   if (isShuttingDown) {
-    return c.json({ error: { message: "Server is shutting down" } }, 503);
+    return c.json({ error: { message: 'Server is shutting down' } }, 503);
   }
   inFlightRequests++;
   try {
@@ -71,7 +65,11 @@ async function gracefulShutdown(_signal: string): Promise<void> {
   }
   isShuttingDown = true;
   if (serverStop) {
-    try { await serverStop(); } catch { /* intentional */ }
+    try {
+      await serverStop();
+    } catch {
+      /* intentional */
+    }
   }
   if (inFlightRequests > 0) {
     const start = Date.now();
@@ -79,17 +77,25 @@ async function gracefulShutdown(_signal: string): Promise<void> {
       await new Promise((r) => setTimeout(r, 100));
     }
   }
-  try { await closePlaywright(); } catch (err: any) { console.error("[Shutdown] Playwright close error:", err.message); }
+  try {
+    await closePlaywright();
+  } catch (err: any) {
+    console.error('[Shutdown] Playwright close error:', err.message);
+  }
   stopAutoCleanup();
   const pidFile = projectPath('.qwen', 'gate.pid');
-  try { if (existsSync(pidFile)) unlinkSync(pidFile); } catch { /* best effort */ }
+  try {
+    if (existsSync(pidFile)) unlinkSync(pidFile);
+  } catch {
+    /* best effort */
+  }
   process.exit(0);
 }
 
-process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-app.use("*", cors({ origin: ['http://localhost:26405', 'http://127.0.0.1:26405'] }));
+app.use('*', cors({ origin: ['http://localhost:26405', 'http://127.0.0.1:26405'] }));
 
 // Health check — reports actual system status (Playwright readiness, uptime)
 app.get('/health', (c) => {
@@ -109,86 +115,92 @@ const PING_RESPONSE = new Response('OK', {
 app.get('/ping', () => PING_RESPONSE);
 
 // API Key protection for OpenAI-compatible routes
-app.use("/v1/*", async (c, next) => {
-  const apiKey = config.get("API_KEY");
+app.use('/v1/*', async (c, next) => {
+  const apiKey = config.get('API_KEY');
   if (!apiKey) return await next();
   return bearerAuth({ token: apiKey })(c, next);
 });
 
 registerDashboardRoutes(app);
 
-app.route("/debug/network", debugNetworkApp);
+app.route('/debug/network', debugNetworkApp);
 
 // Account CRUD API — protected by bearer auth
-app.use("/api/accounts*", async (c, next) => {
-  const apiKey = config.get("API_KEY");
+app.use('/api/accounts*', async (c, next) => {
+  const apiKey = config.get('API_KEY');
   if (!apiKey) return await next();
   return bearerAuth({ token: apiKey })(c, next);
 });
-app.route("/api/accounts", accountsRouter);
+app.route('/api/accounts', accountsRouter);
 
 // Config API
-if (config.get("API_KEY")) {
-  configRouter.use("*", async (c, next) => {
-    const auth = c.req.header("Authorization");
-    if (!auth || !auth.startsWith("Bearer ") || !safeCompare(auth.slice(7), config.get("API_KEY"))) {
-      return c.json({ error: "Unauthorized" }, 401);
+if (config.get('API_KEY')) {
+  configRouter.use('*', async (c, next) => {
+    const auth = c.req.header('Authorization');
+    if (!auth || !auth.startsWith('Bearer ') || !safeCompare(auth.slice(7), config.get('API_KEY'))) {
+      return c.json({ error: 'Unauthorized' }, 401);
     }
     await next();
   });
 }
-app.route("/api/config", configRouter);
+app.route('/api/config', configRouter);
 
 // 10MB request body limit on all chat endpoints
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
-app.use("/v1/chat/completions", async (c, next) => {
-  const contentLength = Number(c.req.header("content-length") || 0);
+app.use('/v1/chat/completions', async (c, next) => {
+  const contentLength = Number(c.req.header('content-length') || 0);
   if (contentLength > MAX_BODY_BYTES) {
-    return c.json({ error: { message: "Request body too large" } }, 413);
+    return c.json({ error: { message: 'Request body too large' } }, 413);
   }
   await next();
 });
 
-app.post("/v1/chat/completions", async (c, next) => {
-  const result = await rateLimitMiddleware(c, 'chat-completions');
-  if (result) return result;
-  await next();
-}, chatCompletions);
+app.post(
+  '/v1/chat/completions',
+  async (c, next) => {
+    const result = await rateLimitMiddleware(c, 'chat-completions');
+    if (result) return result;
+    await next();
+  },
+  chatCompletions,
+);
 
-app.get("/v1/models", async (c, next) => {
-  const result = await rateLimitMiddleware(c, 'models');
-  if (result) return result;
-  await next();
-}, async (c) => {
-  try {
-    const models = await fetchQwenModels();
-    return c.json({
-      object: "list",
-      data: models,
-    });
-  } catch (err: any) {
-    return c.json({ error: { message: err.message } }, 500);
-  }
-});
+app.get(
+  '/v1/models',
+  async (c, next) => {
+    const result = await rateLimitMiddleware(c, 'models');
+    if (result) return result;
+    await next();
+  },
+  async (c) => {
+    try {
+      const models = await fetchQwenModels();
+      return c.json({
+        object: 'list',
+        data: models,
+      });
+    } catch (err: any) {
+      return c.json({ error: { message: err.message } }, 500);
+    }
+  },
+);
 
 // Initialize playwright when server starts
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  let browserType: BrowserType = "chromium";
-  const browserArg = process.argv.find((arg) => arg.startsWith("--browser="));
+  let browserType: BrowserType = 'chromium';
+  const browserArg = process.argv.find((arg) => arg.startsWith('--browser='));
   if (browserArg) {
-    browserType = browserArg.split("=")[1] as BrowserType;
-  } else if (config.get("BROWSER")) {
-    browserType = config.get("BROWSER") as BrowserType;
+    browserType = browserArg.split('=')[1] as BrowserType;
+  } else if (config.get('BROWSER')) {
+    browserType = config.get('BROWSER') as BrowserType;
   }
 
   // Enable per-request file logging
-  logStore.enableRequestFileLogging(projectPath(".logs"));
+  logStore.enableRequestFileLogging(projectPath('.logs'));
 
-  const port = parseInt(config.get("PORT"), 10) || 26405;
+  const port = parseInt(config.get('PORT'), 10) || 26405;
   const hostArg = process.argv.indexOf('--host');
-  const host = hostArg !== -1 && process.argv[hostArg + 1]
-    ? process.argv[hostArg + 1]
-    : config.get("HOST") || "localhost";
+  const host = hostArg !== -1 && process.argv[hostArg + 1] ? process.argv[hostArg + 1] : config.get('HOST') || 'localhost';
 
   // Show banner immediately on startup
   process.stdout.write(`\x1b[31m
@@ -219,18 +231,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   initPlaywright(true, browserType)
     .then(async () => {
       // ── Phase 1: Start HTTP server FIRST so dashboard is live immediately ──
-      try {
+
+      async function createServer(port: number, host: string) {
         if (isBun) {
-          // Bun native HTTP server — faster, no adapter needed
           const bunServer = Bun.serve({
             fetch: app.fetch,
             port,
             hostname: host,
-            idleTimeout: 0,  // disable idle timeout for SSE streaming
+            idleTimeout: 0,
           });
-          serverStop = () => bunServer.stop(false);  // graceful drain
+          serverStop = () => bunServer.stop(false);
         } else {
-          // Node.js fallback via @hono/node-server
           const { serve } = await import('@hono/node-server');
           const nodeServer = serve({
             fetch: app.fetch,
@@ -244,33 +255,18 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
           });
           serverStop = () => new Promise<void>((resolve) => nodeServer.close(() => resolve()));
         }
+      }
+
+      try {
+        await createServer(port, host);
       } catch (err: any) {
         if (err.code === 'EADDRINUSE') {
           const fallbackPort = port + 1;
           console.warn(`Port ${port} in use, trying ${fallbackPort}...`);
-          if (isBun) {
-            const bunServer = Bun.serve({
-              fetch: app.fetch,
-              port: fallbackPort,
-              hostname: host,
-              idleTimeout: 0,
-            });
-            serverStop = () => bunServer.stop(false);
-          } else {
-            const { serve } = await import('@hono/node-server');
-            const nodeServer = serve({
-              fetch: app.fetch,
-              port: fallbackPort,
-              hostname: host,
-              serverOptions: {
-                requestTimeout: 600_000,
-                keepAliveTimeout: 75_000,
-                headersTimeout: 65_000,
-              },
-            });
-            serverStop = () => new Promise<void>((resolve) => nodeServer.close(() => resolve()));
-          }
-        } else { throw err; }
+          await createServer(fallbackPort, host);
+        } else {
+          throw err;
+        }
       }
 
       // Pre-warm DNS and TCP connection to Qwen upstream
@@ -287,17 +283,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       }
 
       const pidFile = projectPath('.qwen', 'gate.pid');
-      try { writeFileSync(pidFile, String(process.pid)); } catch { /* best effort */ }
-      logStore.log("info", "server", `Server started on ${host}:${port}`);
+      try {
+        writeFileSync(pidFile, String(process.pid));
+      } catch {
+        /* best effort */
+      }
+      logStore.log('info', 'server', `Server started on ${host}:${port}`);
 
-      if (config.get("OPEN_DASHBOARD_ON_START") === "true") {
-        const { exec } = await import("child_process");
+      if (config.get('OPEN_DASHBOARD_ON_START') === 'true') {
+        const { exec } = await import('child_process');
         const url = `http://localhost:${port}/dashboard`;
-        const cmd = process.platform === "darwin" ? `open "${url}"`
-          : process.platform === "win32" ? `start "" "${url}"`
-          : `xdg-open "${url}"`;
+        const cmd =
+          process.platform === 'darwin' ? `open "${url}"` : process.platform === 'win32' ? `start "" "${url}"` : `xdg-open "${url}"`;
         exec(cmd);
-        logStore.log("info", "server", `Opening dashboard at ${url}`);
+        logStore.log('info', 'server', `Opening dashboard at ${url}`);
       }
       startAutoCleanup();
 
@@ -307,47 +306,35 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
         logStore.log('info', 'boot', 'GC triggered after Playwright init');
       }
 
-      logStore.log(
-        "info",
-        "boot",
-        "Dashboard live — starting background initialization...",
-      );
+      logStore.log('info', 'boot', 'Dashboard live — starting background initialization...');
 
       // ── Phase 2: Auth + post-boot tasks run in background ──
       (async () => {
-        logStore.log("info", "boot", "[1/5] Authenticating accounts...");
+        logStore.log('info', 'boot', '[1/5] Authenticating accounts...');
         try {
           await initAuth(async (email) => {
             await configureAccount(email);
           });
-          logStore.log(
-            "info",
-            "boot",
-            "[1/5] Accounts authenticated + configured",
-          );
+          logStore.log('info', 'boot', '[1/5] Accounts authenticated + configured');
         } catch (err: any) {
-          logStore.log("warn", "boot", `[1/5] initAuth failed: ${err.message}`);
+          logStore.log('warn', 'boot', `[1/5] initAuth failed: ${err.message}`);
         }
 
-        logStore.log("info", "boot", "[2/5] Pre-warming headers...");
+        logStore.log('info', 'boot', '[2/5] Pre-warming headers...');
         try {
           await getQwenHeaders();
-          logStore.log("info", "boot", "[2/5] Headers ready");
+          logStore.log('info', 'boot', '[2/5] Headers ready');
         } catch (err: any) {
-          logStore.log(
-            "warn",
-            "boot",
-            `[2/5] Header pre-warm failed: ${err.message}`,
-          );
+          logStore.log('warn', 'boot', `[2/5] Header pre-warm failed: ${err.message}`);
         }
 
-        logStore.log("info", "boot", "All background initialization complete");
+        logStore.log('info', 'boot', 'All background initialization complete');
       })().catch((err) => {
-        logStore.log("error", "boot", `Background init error: ${err.message}`);
+        logStore.log('error', 'boot', `Background init error: ${err.message}`);
       });
     })
     .catch((err: any) => {
-      console.error("Failed to initialize playwright:", err);
+      console.error('Failed to initialize playwright:', err);
       process.exit(1);
     });
 }

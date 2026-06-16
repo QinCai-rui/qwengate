@@ -1,22 +1,22 @@
 import { Context } from 'hono';
-import type { OpenAIRequest, Message, ParsedToolCall } from "../types/openai.ts";
-import { detectParallelToolLoop } from '../tools/guard.ts';
-import { filterContent } from '../utils/contentFilter.ts';
-import { sessionPool } from '../services/sessionPool.ts';
 import { logStore } from '../services/logStore.ts';
+import { sessionPool } from '../services/sessionPool.ts';
+import { detectParallelToolLoop } from '../tools/guard.ts';
+import type { Message, OpenAIRequest, ParsedToolCall } from '../types/openai.ts';
+import { filterContent } from '../utils/contentFilter.ts';
 import {
   commonPrefixLen,
   detectCumulativeChunk,
   parseQwenErrorPayload,
+  pendingCorrections,
   processToolCallsThroughGuard,
   ToolSpamGuard,
-  pendingCorrections,
 } from './chatHelpers.ts';
 
 const MAX_TOOL_CALLS_PER_TURN = 8;
 
-import { parseXmlToolCalls, cleanTextOfXmlArtifacts, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
-import { extractLocalMcpToolCalls } from "./chatStreamingHelpers.ts";
+import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
+import { extractLocalMcpToolCalls } from './chatStreamingHelpers.ts';
 
 export interface NonStreamingContext {
   c: Context;
@@ -50,12 +50,14 @@ interface StreamProcessorState {
 }
 
 function buildPromptString(messages: Message[]): string {
-  return messages.map(m => {
-    const content = Array.isArray(m.content)
-      ? m.content.map((c: any) => c.text || JSON.stringify(c)).join('\n')
-      : String(m.content ?? '');
-    return `${m.role}: ${content}`;
-  }).join('\n\n');
+  return messages
+    .map((m) => {
+      const content = Array.isArray(m.content)
+        ? m.content.map((c: any) => c.text || JSON.stringify(c)).join('\n')
+        : String(m.content ?? '');
+      return `${m.role}: ${content}`;
+    })
+    .join('\n\n');
 }
 
 function buildQwenRequest(ctx: NonStreamingContext): StreamProcessorState {
@@ -195,9 +197,9 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
     // so we must extract them here to avoid losing tool calls.
     const localToolCalls = extractLocalMcpToolCalls(chunk);
     if (localToolCalls.length > 0) {
-      const parsed = localToolCalls.map(tc => ({
+      const parsed = localToolCalls.map((tc) => ({
         id: tc.id,
-        type: "function" as const,
+        type: 'function' as const,
         function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
       }));
       processToolCallsThroughGuard(parsed, state.toolCallsOut, {
@@ -219,15 +221,18 @@ function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
     // Stable dedup: sort object keys so property order doesn't cause false negatives
     const stableArgs = (args: Record<string, unknown>): string => {
       const keys = Object.keys(args).sort();
-      return '{' + keys.map(k => `${JSON.stringify(k)}:${JSON.stringify(args[k])}`).join(',') + '}';
+      return '{' + keys.map((k) => `${JSON.stringify(k)}:${JSON.stringify(args[k])}`).join(',') + '}';
     };
-    const newCalls = parsed.filter(tc => {
+    const newCalls = parsed.filter((tc) => {
       const tcArgsStr = stableArgs(tc.arguments as Record<string, unknown>);
-      return !state.toolCallsOut.some(existing => {
+      return !state.toolCallsOut.some((existing) => {
         let existingArgs: Record<string, unknown> = {};
-        try { existingArgs = JSON.parse(existing.function.arguments); } catch { /* ignore */ }
-        return existing.function.name === tc.name &&
-               stableArgs(existingArgs) === tcArgsStr;
+        try {
+          existingArgs = JSON.parse(existing.function.arguments);
+        } catch {
+          /* ignore */
+        }
+        return existing.function.name === tc.name && stableArgs(existingArgs) === tcArgsStr;
       });
     });
     if (newCalls.length > 0) {
@@ -247,7 +252,13 @@ function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
   const parsedForLoopCheck: ParsedToolCall[] = state.toolCallsOut.map((tc: any) => ({
     id: tc.id,
     name: tc.function.name,
-    arguments: (() => { try { return JSON.parse(tc.function.arguments); } catch { return {}; } })(),
+    arguments: (() => {
+      try {
+        return JSON.parse(tc.function.arguments);
+      } catch {
+        return {};
+      }
+    })(),
   }));
   const loopCheck = detectParallelToolLoop(parsedForLoopCheck);
   if (!loopCheck.ok) {
@@ -256,8 +267,8 @@ function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
     logStore.addError(logId, `Parallel loop: ${loopCheck.errors[0]}`);
     // Filter out duplicate tool calls from the response
     if (loopCheck.valid && loopCheck.valid.length < parsedForLoopCheck.length) {
-      const validIds = new Set(loopCheck.valid.map(v => v.id));
-      state.toolCallsOut = state.toolCallsOut.filter(tc => validIds.has(tc.id));
+      const validIds = new Set(loopCheck.valid.map((v) => v.id));
+      state.toolCallsOut = state.toolCallsOut.filter((tc) => validIds.has(tc.id));
     }
   }
 }
@@ -280,9 +291,7 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
     ? filterContent(state.lastFullContent)
     : { cleanText: state.lastFullContent, thinking: '' };
   if (filteredReasoning) {
-    state.reasoningBuffer = state.reasoningBuffer
-      ? state.reasoningBuffer + '\n' + filteredReasoning
-      : filteredReasoning;
+    state.reasoningBuffer = state.reasoningBuffer ? state.reasoningBuffer + '\n' + filteredReasoning : filteredReasoning;
   }
 
   const filteredContent = baseFilteredContent;
@@ -290,20 +299,18 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
   const message: any = { role: 'assistant', content: state.toolCallsOut.length ? null : filteredContent };
   if (state.reasoningBuffer) message.reasoning_content = state.reasoningBuffer;
   if (state.toolCallsOut.length) {
-    state.toolCallsOut.forEach((tc, idx) => tc.index = idx);
+    state.toolCallsOut.forEach((tc, idx) => (tc.index = idx));
     message.tool_calls = state.toolCallsOut;
   }
 
-  logStore.updateEntry(logId, entry => {
+  logStore.updateEntry(logId, (entry) => {
     const now = Date.now();
     const startedAt = new Date(entry.timestamp).getTime();
     if (startedAt) entry.latency_ms = now - startedAt;
     entry.finalResponse = {
       finishReason: state.toolCallsOut.length ? 'tool_calls' : 'stop',
       toolCallCount: state.toolCallsOut.length,
-      contentPreview: state.lastFullContent.length > 500
-        ? state.lastFullContent.substring(0, 500) + '...'
-        : state.lastFullContent,
+      contentPreview: state.lastFullContent.length > 500 ? state.lastFullContent.substring(0, 500) + '...' : state.lastFullContent,
     };
     entry.remainingText = state.lastFullContent;
   });
@@ -325,12 +332,14 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
     model: body.model,
     system_fingerprint: 'fp_qwen_gate',
     service_tier: 'default',
-    choices: [{
-      index: 0,
-      message,
-      logprobs: null,
-      finish_reason: state.toolCallsOut.length ? 'tool_calls' : 'stop',
-    }],
+    choices: [
+      {
+        index: 0,
+        message,
+        logprobs: null,
+        finish_reason: state.toolCallsOut.length ? 'tool_calls' : 'stop',
+      },
+    ],
     usage,
   });
 }
@@ -378,8 +387,16 @@ export async function handleNonStreamingRequest(ctx: NonStreamingContext): Promi
     return result;
   } finally {
     if (!logFinalized) logStore.finalizeRequest(ctx.logId);
-    try { state.reader.cancel(); } catch { /* reader already cancelled */ }
-    try { state.reader.releaseLock(); } catch { /* reader already cancelled */ }
+    try {
+      state.reader.cancel();
+    } catch {
+      /* reader already cancelled */
+    }
+    try {
+      state.reader.releaseLock();
+    } catch {
+      /* reader already cancelled */
+    }
     if (!nonStreamReleased) {
       sessionPool.release(session.chatId, state.nextParentId, sessionHeaders, resolvedEmail, false);
     }

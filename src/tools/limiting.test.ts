@@ -1,5 +1,5 @@
-import test from 'node:test';
 import assert from 'node:assert';
+import test from 'node:test';
 import { streamChunks } from '../tests/helpers.ts';
 
 /**
@@ -17,10 +17,7 @@ import { streamChunks } from '../tests/helpers.ts';
  * Truncate large tool results to prevent context pollution.
  * Smart elision: keep first ~40% + last ~40%, with a marker in the middle.
  */
-export function truncateToolResult(
-  content: string,
-  maxBytes: number = 4096,
-): string {
+export function truncateToolResult(content: string, maxBytes: number = 4096): string {
   if (!content) return '';
   const encoded = new TextEncoder().encode(content);
   if (encoded.length <= maxBytes) return content;
@@ -89,7 +86,7 @@ test('MAX_TOOL_CALLS_PER_RESPONSE: invalid value falls back to 2', () => {
   const saved = process.env.MAX_TOOL_CALLS_PER_RESPONSE;
   process.env.MAX_TOOL_CALLS_PER_RESPONSE = 'not-a-number';
   const val = parseInt(process.env.MAX_TOOL_CALLS_PER_RESPONSE, 10);
-  const fallback = (!isNaN(val) && val > 0) ? val : 2;
+  const fallback = !isNaN(val) && val > 0 ? val : 2;
   assert.strictEqual(fallback, 2);
   process.env.MAX_TOOL_CALLS_PER_RESPONSE = saved;
 });
@@ -99,7 +96,7 @@ test('MAX_TOOL_CALLS_PER_RESPONSE: zero or negative falls back to 2', () => {
   for (const bad of ['0', '-1']) {
     process.env.MAX_TOOL_CALLS_PER_RESPONSE = bad;
     const val = parseInt(process.env.MAX_TOOL_CALLS_PER_RESPONSE, 10);
-    const fallback = (!isNaN(val) && val > 0) ? val : 2;
+    const fallback = !isNaN(val) && val > 0 ? val : 2;
     assert.strictEqual(fallback, 2, `should fallback for ${bad}`);
   }
   process.env.MAX_TOOL_CALLS_PER_RESPONSE = saved;
@@ -113,8 +110,7 @@ test('streaming: truncateToolResult on accumulated chunks produces same result a
   const accumulated = chunks.join('');
   const streamingResult = truncateToolResult(accumulated, 200);
   const blockResult = truncateToolResult(longString, 200);
-  assert.strictEqual(streamingResult, blockResult,
-    'streaming-accumulated truncation must match block truncation');
+  assert.strictEqual(streamingResult, blockResult, 'streaming-accumulated truncation must match block truncation');
 });
 
 test('streaming: short content passes through unchanged when accumulated from chunks', () => {
@@ -122,8 +118,7 @@ test('streaming: short content passes through unchanged when accumulated from ch
   const chunks = streamChunks(shortText);
   const accumulated = chunks.join('');
   const result = truncateToolResult(accumulated, 4096);
-  assert.strictEqual(result, shortText,
-    'short content must pass through unchanged');
+  assert.strictEqual(result, shortText, 'short content must pass through unchanged');
 });
 
 test('streaming: truncation marker present in accumulated streaming output', () => {
@@ -131,8 +126,7 @@ test('streaming: truncation marker present in accumulated streaming output', () 
   const chunks = streamChunks(text);
   const accumulated = chunks.join('');
   const result = truncateToolResult(accumulated, 200);
-  assert.ok(result.includes('[truncated'),
-    `truncation marker missing from streaming output: "${result.slice(0, 100)}..."`);
+  assert.ok(result.includes('[truncated'), `truncation marker missing from streaming output: "${result.slice(0, 100)}..."`);
 });
 
 test('streaming: head and tail preserved in accumulated streaming output', () => {
@@ -142,8 +136,6 @@ test('streaming: head and tail preserved in accumulated streaming output', () =>
   const result = truncateToolResult(accumulated, 200);
   const head = accumulated.slice(0, 90);
   const tail = accumulated.slice(-90);
-  assert.ok(result.includes(head.slice(0, 20)),
-    'first characters (head) must be preserved');
-  assert.ok(result.includes(tail.slice(-20)),
-    'last characters (tail) must be preserved');
+  assert.ok(result.includes(head.slice(0, 20)), 'first characters (head) must be preserved');
+  assert.ok(result.includes(tail.slice(-20)), 'last characters (tail) must be preserved');
 });

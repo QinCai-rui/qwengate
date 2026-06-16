@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { projectPath } from '../utils/paths.ts';
 
 export interface ConfigSchema {
@@ -25,6 +25,7 @@ export interface ConfigSchema {
   RETRY_MAX_DELAY_MS: string;
   RETRY_BACKOFF_MULTIPLIER: string;
   RETRY_ENABLED: string;
+  STREAM_IDLE_TIMEOUT_MS: string;
 }
 
 export const DEFAULT_CONFIG: ConfigSchema = {
@@ -51,6 +52,7 @@ export const DEFAULT_CONFIG: ConfigSchema = {
   RETRY_MAX_DELAY_MS: '30000',
   RETRY_BACKOFF_MULTIPLIER: '2',
   RETRY_ENABLED: 'true',
+  STREAM_IDLE_TIMEOUT_MS: '60000',
 };
 
 const CONFIG_KEYS = new Set<string>(Object.keys(DEFAULT_CONFIG));

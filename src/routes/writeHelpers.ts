@@ -1,8 +1,9 @@
 /**
  * SSE event write helpers for streaming chat responses.
  */
-import { checkAmplificationGuard, type AmplificationGuardState } from "./chatHelpers.ts";
-import { cleanTextOfXmlArtifacts } from "../tools/xmlToolParser.ts";
+
+import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
+import { type AmplificationGuardState, checkAmplificationGuard } from './chatHelpers.ts';
 
 /**
  * Write a single SSE data event to the stream.
@@ -26,9 +27,7 @@ export function makeChoice(delta: any, finishReason: string | null = null) {
 /**
  * Build the SSE event skeleton shared by every chunk.
  */
-export function buildChunkEvent(
-  completionId: string, model: string, choices: any[], extra?: Record<string, unknown>, created?: number,
-) {
+export function buildChunkEvent(completionId: string, model: string, choices: any[], extra?: Record<string, unknown>, created?: number) {
   return {
     id: completionId,
     object: 'chat.completion.chunk',
@@ -44,9 +43,7 @@ export function buildChunkEvent(
 /**
  * Write a reasoning_content event.
  */
-export async function writeReasoningEvent(
-  streamWriter: any, completionId: string, model: string, content: string,
-) {
+export async function writeReasoningEvent(streamWriter: any, completionId: string, model: string, content: string) {
   if (!content) return;
   await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ reasoning_content: content })]));
 }
@@ -79,25 +76,28 @@ export async function writeContentDelta(
 /**
  * Write a tool_calls event for a single tool call.
  */
-export async function writeToolCallEvent(
-  streamWriter: any, completionId: string, model: string, tc: any, index: number,
-) {
-  await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({
-    tool_calls: [{
-      index,
-      id: tc.id,
-      type: 'function',
-      function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
-    }],
-  })]));
+export async function writeToolCallEvent(streamWriter: any, completionId: string, model: string, tc: any, index: number) {
+  await writeEvent(
+    streamWriter,
+    buildChunkEvent(completionId, model, [
+      makeChoice({
+        tool_calls: [
+          {
+            index,
+            id: tc.id,
+            type: 'function',
+            function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+          },
+        ],
+      }),
+    ]),
+  );
 }
 
 /**
  * Write a batch of deferred thinking chunks.
  */
-export async function writeDeferredThinking(
-  streamWriter: any, completionId: string, model: string, chunks: string[],
-) {
+export async function writeDeferredThinking(streamWriter: any, completionId: string, model: string, chunks: string[]) {
   for (const chunk of chunks) {
     const cleaned = cleanTextOfXmlArtifacts(chunk).cleanedText;
     if (cleaned) {

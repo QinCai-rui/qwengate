@@ -1,9 +1,6 @@
-import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
-import {
-  parseXmlToolCalls,
-  cleanTextOfXmlArtifacts,
-} from './xmlToolParser.ts';
+import { describe, it } from 'node:test';
+import { cleanTextOfXmlArtifacts, parseXmlToolCalls } from './xmlToolParser.ts';
 
 // ── Test fixtures from real Qwen streaming output ────────────────────
 
@@ -49,53 +46,53 @@ ${TOOL_CALL_AISLOP_FIX}
 // ── Streaming chunks exactly as received from Qwen SSE stream ─────
 // These are the actual chunks from logs/gate/2026-06-08_21-05-18.json
 const SSE_CHUNKS = [
-  "Now testing",
-  " the remaining tools.",
-  "\n<function=",
-  "edit>\n",
-  "<parameter=filePath>",
-  "\n/tmp/kilo",
-  "/tool_test.txt\n",
-  "</parameter>\n",
-  "<parameter=old",
-  "String>\nTest",
-  " file for tool validation",
-  "\n</parameter>",
-  "\n<parameter=new",
-  "String>\nTest",
-  " file for tool validation",
-  " - edited\n</",
-  "parameter>",
-  "\n</function>",
-  "\n<function=q",
-  "wengate-",
-  "aislop_ais",
-  "lop_why>",
-  "\n",
-  "<parameter=rule_id",
-  ">\nai-s",
-  "lop/narrative",
-  "-comment\n</parameter",
-  ">\n</function",
-  ">\n\n",
-  "\n<function",
-  "=qwengate",
-  "-aislop_",
-  "aislop_scan>",
-  "\n<parameter=path",
-  ">\n/tmp/k",
-  "ilo\n</parameter",
-  ">\n</function",
-  ">\n\n",
-  "\n<function",
-  "=qwengate",
-  "-aislop_",
-  "aislop_fix>",
-  "\n<parameter=path",
-  ">\n/tmp/k",
-  "ilo\n</parameter",
-  ">\n</function",
-  ">\n",
+  'Now testing',
+  ' the remaining tools.',
+  '\n<function=',
+  'edit>\n',
+  '<parameter=filePath>',
+  '\n/tmp/kilo',
+  '/tool_test.txt\n',
+  '</parameter>\n',
+  '<parameter=old',
+  'String>\nTest',
+  ' file for tool validation',
+  '\n</parameter>',
+  '\n<parameter=new',
+  'String>\nTest',
+  ' file for tool validation',
+  ' - edited\n</',
+  'parameter>',
+  '\n</function>',
+  '\n<function=q',
+  'wengate-',
+  'aislop_ais',
+  'lop_why>',
+  '\n',
+  '<parameter=rule_id',
+  '>\nai-s',
+  'lop/narrative',
+  '-comment\n</parameter',
+  '>\n</function',
+  '>\n\n',
+  '\n<function',
+  '=qwengate',
+  '-aislop_',
+  'aislop_scan>',
+  '\n<parameter=path',
+  '>\n/tmp/k',
+  'ilo\n</parameter',
+  '>\n</function',
+  '>\n\n',
+  '\n<function',
+  '=qwengate',
+  '-aislop_',
+  'aislop_fix>',
+  '\n<parameter=path',
+  '>\n/tmp/k',
+  'ilo\n</parameter',
+  '>\n</function',
+  '>\n',
 ];
 
 describe('xmlToolParser', () => {
@@ -144,7 +141,7 @@ describe('xmlToolParser', () => {
         const result = parseXmlToolCalls(accumulated);
         // Track new tool calls (avoiding duplicates)
         for (const tc of result.toolCalls) {
-          if (!allToolCalls.find(ex => ex.name === tc.name && JSON.stringify(ex.parameters) === JSON.stringify(tc.parameters))) {
+          if (!allToolCalls.find((ex) => ex.name === tc.name && JSON.stringify(ex.parameters) === JSON.stringify(tc.parameters))) {
             allToolCalls.push(tc);
           }
         }
@@ -250,10 +247,14 @@ describe('xmlToolParser', () => {
         }
         snapshot = cleaned;
         // THE CRITICAL ASSERTION: No delta should ever leak function XML
-        assert.ok(!delta.includes('<function='),
-          `chunk ${i}: delta must not contain <function=. Got: ${JSON.stringify(delta.slice(0, 50))}`);
-        assert.ok(!delta.includes('</function>'),
-          `chunk ${i}: delta must not contain </function>. Got: ${JSON.stringify(delta.slice(0, 50))}`);
+        assert.ok(
+          !delta.includes('<function='),
+          `chunk ${i}: delta must not contain <function=. Got: ${JSON.stringify(delta.slice(0, 50))}`,
+        );
+        assert.ok(
+          !delta.includes('</function>'),
+          `chunk ${i}: delta must not contain </function>. Got: ${JSON.stringify(delta.slice(0, 50))}`,
+        );
       }
     });
   });
@@ -276,27 +277,27 @@ describe('xmlToolParser', () => {
 `;
 
   const SSE_CHUNKS_2 = [
-    "Testing",
-    " `edit`, `",
-    "aislop_scan`,",
-    " and `aislop",
-    "_fix`:\n",
-    "<function=read>",
-    "\n<parameter=",
-    "filePath>\n/tmp",
-    "/kilo/tool_test",
-    ".txt\n</parameter",
-    ">\n</function",
-    ">\n\n",
-    "\n<function",
-    "=qwengate",
-    "-aislop_",
-    "aislop_scan>",
-    "\n<parameter=path",
-    ">\n/tmp/k",
-    "ilo\n</parameter",
-    ">\n</function",
-    ">\n",
+    'Testing',
+    ' `edit`, `',
+    'aislop_scan`,',
+    ' and `aislop',
+    '_fix`:\n',
+    '<function=read>',
+    '\n<parameter=',
+    'filePath>\n/tmp',
+    '/kilo/tool_test',
+    '.txt\n</parameter',
+    '>\n</function',
+    '>\n\n',
+    '\n<function',
+    '=qwengate',
+    '-aislop_',
+    'aislop_scan>',
+    '\n<parameter=path',
+    '>\n/tmp/k',
+    'ilo\n</parameter',
+    '>\n</function',
+    '>\n',
   ];
 
   describe('second log — 21-15-56 (read + aislop_scan)', () => {
@@ -326,7 +327,7 @@ describe('xmlToolParser', () => {
         accumulated += chunk;
         const result = parseXmlToolCalls(accumulated);
         for (const tc of result.toolCalls) {
-          if (!allToolCalls.find(ex => ex.name === tc.name && JSON.stringify(ex.parameters) === JSON.stringify(tc.parameters))) {
+          if (!allToolCalls.find((ex) => ex.name === tc.name && JSON.stringify(ex.parameters) === JSON.stringify(tc.parameters))) {
             allToolCalls.push(tc);
           }
         }
@@ -350,14 +351,19 @@ describe('xmlToolParser', () => {
           delta = cleaned.slice(j);
         }
         snapshot = cleaned;
-        assert.ok(!delta.includes('<function'),
-          `chunk ${i}: delta must not contain <function. Got: ${JSON.stringify(delta.slice(0, 50))}`);
-        assert.ok(!delta.includes('</function'),
-          `chunk ${i}: delta must not contain </function. Got: ${JSON.stringify(delta.slice(0, 50))}`);
-        assert.ok(!delta.includes('<parameter'),
-          `chunk ${i}: delta must not contain <parameter. Got: ${JSON.stringify(delta.slice(0, 50))}`);
-        assert.ok(!delta.includes('</parameter'),
-          `chunk ${i}: delta must not contain </parameter. Got: ${JSON.stringify(delta.slice(0, 50))}`);
+        assert.ok(!delta.includes('<function'), `chunk ${i}: delta must not contain <function. Got: ${JSON.stringify(delta.slice(0, 50))}`);
+        assert.ok(
+          !delta.includes('</function'),
+          `chunk ${i}: delta must not contain </function. Got: ${JSON.stringify(delta.slice(0, 50))}`,
+        );
+        assert.ok(
+          !delta.includes('<parameter'),
+          `chunk ${i}: delta must not contain <parameter. Got: ${JSON.stringify(delta.slice(0, 50))}`,
+        );
+        assert.ok(
+          !delta.includes('</parameter'),
+          `chunk ${i}: delta must not contain </parameter. Got: ${JSON.stringify(delta.slice(0, 50))}`,
+        );
       }
     });
   });

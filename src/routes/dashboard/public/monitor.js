@@ -104,7 +104,12 @@ async function refreshMonitor() {
       var shown = a.recentErrors.slice(0, 3);
       for (var j = 0; j < shown.length; j++) {
         var err = shown[j];
-        errHtml += '<div style="font-size:0.65rem;color:var(--danger);line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px" title="' + escHtml(err) + '">• ' + escHtml(err.length > 60 ? err.substring(0, 60) + '...' : err) + '</div>';
+        errHtml +=
+          '<div style="font-size:0.65rem;color:var(--danger);line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px" title="' +
+          escHtml(err) +
+          '">• ' +
+          escHtml(err.length > 60 ? err.substring(0, 60) + '...' : err) +
+          '</div>';
       }
       if (a.recentErrors.length > 3) {
         errHtml += '<div style="font-size:0.6rem;color:var(--text-secondary)">+' + (a.recentErrors.length - 3) + ' more</div>';
@@ -118,18 +123,51 @@ async function refreshMonitor() {
     var p95Class = latencyClass(a.p95LatencyMs);
     var medClass = latencyClass(a.medianLatencyMs);
 
-    rows += '<tr>'
-      + '<td class="email-cell mono" title="' + escHtml(a.email) + '">' + escHtml(a.email) + '</td>'
-      + '<td class="mono">' + a.totalRequests + '</td>'
-      + '<td class="mono" style="color:var(--success)">' + a.successCount + '</td>'
-      + '<td class="mono" style="color:' + (a.errorCount > 0 ? 'var(--danger)' : '') + '">' + a.errorCount + '</td>'
-      + '<td><span class="badge ' + pctClass(rate) + '">' + rate + '%</span></td>'
-      + '<td class="mono"><span class="badge ' + avgLatClass + '">' + fmtLatency(a.avgLatencyMs) + '</span></td>'
-      + '<td class="mono"><span class="badge ' + p95Class + '">' + fmtLatency(a.p95LatencyMs) + '</span></td>'
-      + '<td class="mono"><span class="badge ' + medClass + '">' + fmtLatency(a.medianLatencyMs) + '</span></td>'
-      + '<td class="mode-cell">' + modeHtml + '</td>'
-      + '<td>' + errHtml + '</td>'
-      + '</tr>';
+    rows +=
+      '<tr>' +
+      '<td class="email-cell mono" title="' +
+      escHtml(a.email) +
+      '">' +
+      escHtml(a.email) +
+      '</td>' +
+      '<td class="mono">' +
+      a.totalRequests +
+      '</td>' +
+      '<td class="mono" style="color:var(--success)">' +
+      a.successCount +
+      '</td>' +
+      '<td class="mono" style="color:' +
+      (a.errorCount > 0 ? 'var(--danger)' : '') +
+      '">' +
+      a.errorCount +
+      '</td>' +
+      '<td><span class="badge ' +
+      pctClass(rate) +
+      '">' +
+      rate +
+      '%</span></td>' +
+      '<td class="mono"><span class="badge ' +
+      avgLatClass +
+      '">' +
+      fmtLatency(a.avgLatencyMs) +
+      '</span></td>' +
+      '<td class="mono"><span class="badge ' +
+      p95Class +
+      '">' +
+      fmtLatency(a.p95LatencyMs) +
+      '</span></td>' +
+      '<td class="mono"><span class="badge ' +
+      medClass +
+      '">' +
+      fmtLatency(a.medianLatencyMs) +
+      '</span></td>' +
+      '<td class="mode-cell">' +
+      modeHtml +
+      '</td>' +
+      '<td>' +
+      errHtml +
+      '</td>' +
+      '</tr>';
   }
   tbodyEl.innerHTML = rows;
 
@@ -150,9 +188,7 @@ function renderModeSide(suffix, mode) {
   setText('mode' + suffix + 'Errors', mode.errorCount || 0);
   setText('mode' + suffix + 'Lat', fmtLatency(mode.avgLatencyMs));
 
-  var pct = mode.totalRequests > 0
-    ? Math.round(((mode.totalRequests - (mode.errorCount || 0)) / mode.totalRequests) * 100)
-    : 0;
+  var pct = mode.totalRequests > 0 ? Math.round(((mode.totalRequests - (mode.errorCount || 0)) / mode.totalRequests) * 100) : 0;
   var bar = document.getElementById('mode' + suffix + 'Bar');
   bar.style.width = pct + '%';
   bar.style.background = pct >= 90 ? 'var(--success)' : pct >= 70 ? 'var(--warning)' : 'var(--danger)';
@@ -177,10 +213,17 @@ function renderErrorSummary(errors) {
     var e = errors[i];
     // Determine badge color based on count
     var badgeCls = e.count > 5 ? 'badge-danger' : e.count > 2 ? 'badge-warning' : 'badge-neutral';
-    html += '<li class="error-item">'
-      + '<span class="badge ' + badgeCls + '" style="font-size:0.72rem;min-width:30px;text-align:center">' + e.count + '</span>'
-      + '<span class="error-msg">' + escHtml(e.message) + '</span>'
-      + '</li>';
+    html +=
+      '<li class="error-item">' +
+      '<span class="badge ' +
+      badgeCls +
+      '" style="font-size:0.72rem;min-width:30px;text-align:center">' +
+      e.count +
+      '</span>' +
+      '<span class="error-msg">' +
+      escHtml(e.message) +
+      '</span>' +
+      '</li>';
   }
   listEl.innerHTML = html;
 }

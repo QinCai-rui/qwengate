@@ -1,6 +1,7 @@
 function fmtTTL(ms) {
   if (ms == null || ms < 0) return '\u2014';
-  var m = Math.floor(ms / 60000), h = Math.floor(m / 60);
+  var m = Math.floor(ms / 60000),
+    h = Math.floor(m / 60);
   m %= 60;
   if (h > 0) return h + 'h ' + m + 'm';
   return m + 'm';
@@ -17,7 +18,9 @@ function showToast(message, type) {
   toast.className = 'toast ' + (type || 'info');
   toast.textContent = message;
   container.appendChild(toast);
-  setTimeout(function() { if (toast.parentNode) toast.remove(); }, 3500);
+  setTimeout(function () {
+    if (toast.parentNode) toast.remove();
+  }, 3500);
 }
 
 function setError(msg) {
@@ -29,8 +32,6 @@ function setError(msg) {
     box.style.display = 'none';
   }
 }
-
-
 
 /* ── Accounts Table ── */
 function getAuthStatus(acct) {
@@ -77,17 +78,38 @@ function renderAccountsTable(accts) {
     var status = getAuthStatus(a);
     var label = getAuthLabel(status);
     var hideLogin = status === 'live' ? ' style="display:none"' : '';
-    rows += '<tr>'
-      + '<td>' + escHtml(a.email) + '</td>'
-      + '<td><div class="auth-status"><span class="auth-dot ' + status + '"></span>' + label + '</div></td>'
-      + '<td>' + (a.inFlight || 0) + '</td>'
-      + '<td>' + (a.totalRequests || 0) + '</td>'
-      + '<td>' + makeThrottleBadge(a) + '</td>'
-      + '<td style="font-family:var(--mono);font-size:0.75rem">' + fmtTTL(a.tokenExpiresInMs) + '</td>'
-      + '<td><div class="action-cell">'
-      + '<button class="account-btn small danger" data-email="' + escHtml(a.email) + '" data-action="remove">Remove</button>'
-      + '<button class="account-btn small primary" data-email="' + escHtml(a.email) + '" data-action="login"' + hideLogin + '>Login</button>'
-      + '</div></td></tr>';
+    rows +=
+      '<tr>' +
+      '<td>' +
+      escHtml(a.email) +
+      '</td>' +
+      '<td><div class="auth-status"><span class="auth-dot ' +
+      status +
+      '"></span>' +
+      label +
+      '</div></td>' +
+      '<td>' +
+      (a.inFlight || 0) +
+      '</td>' +
+      '<td>' +
+      (a.totalRequests || 0) +
+      '</td>' +
+      '<td>' +
+      makeThrottleBadge(a) +
+      '</td>' +
+      '<td style="font-family:var(--mono);font-size:0.75rem">' +
+      fmtTTL(a.tokenExpiresInMs) +
+      '</td>' +
+      '<td><div class="action-cell">' +
+      '<button class="account-btn small danger" data-email="' +
+      escHtml(a.email) +
+      '" data-action="remove">Remove</button>' +
+      '<button class="account-btn small primary" data-email="' +
+      escHtml(a.email) +
+      '" data-action="login"' +
+      hideLogin +
+      '>Login</button>' +
+      '</div></td></tr>';
   }
   document.getElementById('acctBody').innerHTML = rows;
 }
@@ -104,23 +126,29 @@ function handleAdd(email, password) {
   btn.disabled = true;
   btn.textContent = 'Adding...';
   setError(null);
-  (async function() {
+  (async function () {
     try {
       var res = await fetch('/api/accounts', {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-        body: JSON.stringify({ email: email, password: password })
+        body: JSON.stringify({ email: email, password: password }),
       });
       var result;
-      try { result = await res.json(); } catch(e) { result = null; }
+      try {
+        result = await res.json();
+      } catch {
+        result = null;
+      }
       if (!res.ok) {
-        throw new Error(result && result.error && result.error.message ? result.error.message : 'Failed to add account (' + res.status + ')');
+        throw new Error(
+          result && result.error && result.error.message ? result.error.message : 'Failed to add account (' + res.status + ')',
+        );
       }
       if (result.loginSucceeded) {
         showToast('Account added and logged in: ' + email, 'success');
         pollAuth(email, 15);
       } else {
-        showToast((result.loginError || 'Account added but login failed. Click Login to open browser.'), 'warning');
+        showToast(result.loginError || 'Account added but login failed. Click Login to open browser.', 'warning');
         pollAuth(email, 15);
       }
       loadAccounts();
@@ -138,18 +166,24 @@ function handleAdd(email, password) {
 function handleRemove(email) {
   document.getElementById('confirmEmail').textContent = email;
   document.getElementById('confirmOverlay').classList.add('open');
-  document.getElementById('confirmYes').onclick = async function() {
+  document.getElementById('confirmYes').onclick = async function () {
     document.getElementById('confirmOverlay').classList.remove('open');
     setError(null);
     try {
       var res = await fetch('/api/accounts/' + encodeURIComponent(email), {
         method: 'DELETE',
-        headers: authHeaders()
+        headers: authHeaders(),
       });
       var result;
-      try { result = await res.json(); } catch(e) { result = null; }
+      try {
+        result = await res.json();
+      } catch {
+        result = null;
+      }
       if (!res.ok) {
-        throw new Error(result && result.error && result.error.message ? result.error.message : 'Failed to remove account (' + res.status + ')');
+        throw new Error(
+          result && result.error && result.error.message ? result.error.message : 'Failed to remove account (' + res.status + ')',
+        );
       }
       showToast('Account removed: ' + email, 'success');
       loadAccounts();
@@ -158,7 +192,7 @@ function handleRemove(email) {
       showToast(e.message, 'error');
     }
   };
-  document.getElementById('confirmNo').onclick = function() {
+  document.getElementById('confirmNo').onclick = function () {
     document.getElementById('confirmOverlay').classList.remove('open');
   };
 }
@@ -166,16 +200,23 @@ function handleRemove(email) {
 /* ── Manual Login (Autofill) ── */
 function handleManualLogin(email) {
   var btn = document.querySelector('button[data-email="' + escHtml(email) + '"][data-action="login"]');
-  if (btn) { btn.textContent = 'Authorizing...'; btn.disabled = true; }
+  if (btn) {
+    btn.textContent = 'Authorizing...';
+    btn.disabled = true;
+  }
   setError(null);
-  (async function() {
+  (async function () {
     try {
       var res = await fetch('/api/accounts/' + encodeURIComponent(email) + '/autofill', {
         method: 'GET',
-        headers: authHeaders()
+        headers: authHeaders(),
       });
       var result;
-      try { result = await res.json(); } catch(e) { result = null; }
+      try {
+        result = await res.json();
+      } catch {
+        result = null;
+      }
       if (!res.ok) {
         throw new Error(result && result.error && result.error.message ? result.error.message : 'Login failed (' + res.status + ')');
       }
@@ -196,11 +237,15 @@ function pollAuth(email, maxAttempts) {
     delete activePollTimers[email];
   }
   var attempt = 0;
-  var timer = setInterval(async function() {
+  var timer = setInterval(async function () {
     attempt++;
     try {
       var data = await apiFetch('/accounts');
-      if (!Array.isArray(data)) { clearInterval(timer); delete activePollTimers[email]; return; }
+      if (!Array.isArray(data)) {
+        clearInterval(timer);
+        delete activePollTimers[email];
+        return;
+      }
       for (var i = 0; i < data.length; i++) {
         if (data[i].email === email && data[i].authenticated) {
           clearInterval(timer);
@@ -210,8 +255,15 @@ function pollAuth(email, maxAttempts) {
           return;
         }
       }
-    } catch(e) { clearInterval(timer); delete activePollTimers[email]; }
-    if (attempt >= maxAttempts) { clearInterval(timer); delete activePollTimers[email]; loadAccounts(); }
+    } catch {
+      clearInterval(timer);
+      delete activePollTimers[email];
+    }
+    if (attempt >= maxAttempts) {
+      clearInterval(timer);
+      delete activePollTimers[email];
+      loadAccounts();
+    }
   }, 2000);
   activePollTimers[email] = timer;
 }
@@ -225,7 +277,7 @@ function init() {
   createPoller(loadAccounts, 2000);
 
   /* Add form submit */
-  document.getElementById('addForm').addEventListener('submit', function(e) {
+  document.getElementById('addForm').addEventListener('submit', function (e) {
     e.preventDefault();
     var email = document.getElementById('emailInput').value.trim();
     var password = document.getElementById('passwordInput').value;
@@ -238,7 +290,7 @@ function init() {
   });
 
   /* Table button delegation */
-  document.getElementById('acctTable').addEventListener('click', function(e) {
+  document.getElementById('acctTable').addEventListener('click', function (e) {
     var btn = e.target;
     if (btn.tagName !== 'BUTTON') return;
     var email = btn.getAttribute('data-email');
@@ -249,7 +301,7 @@ function init() {
   });
 
   /* Close modal on overlay click */
-  document.getElementById('confirmOverlay').addEventListener('click', function(e) {
+  document.getElementById('confirmOverlay').addEventListener('click', function (e) {
     if (e.target === this) this.classList.remove('open');
   });
 }

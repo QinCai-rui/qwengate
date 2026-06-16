@@ -12,16 +12,19 @@ async function makeRequest(_id: number): Promise<void> {
     const res = await fetch(`${BASE_URL}${ENDPOINT}`, {
       method: ENDPOINT === '/v1/chat/completions' ? 'POST' : 'GET',
       headers: { 'Content-Type': 'application/json' },
-      body: ENDPOINT === '/v1/chat/completions' ? JSON.stringify({
-        model: 'qwen3.7-max',
-        messages: [{ role: 'user', content: 'load test' }],
-        stream: false
-      }) : undefined
+      body:
+        ENDPOINT === '/v1/chat/completions'
+          ? JSON.stringify({
+              model: 'qwen3.7-max',
+              messages: [{ role: 'user', content: 'load test' }],
+              stream: false,
+            })
+          : undefined,
     });
     const latency = Date.now() - start;
     latencies.push(latency);
     if (!res.ok) errors++;
-  } catch (_e) {
+  } catch {
     errors++;
   }
 }
@@ -48,7 +51,7 @@ async function runLoadTest(): Promise<void> {
   console.log(`Successful: ${REQUESTS - errors}`);
   console.log(`Errors: ${errors}`);
   console.log(`Total time: ${totalTime}ms`);
-  console.log(`Throughput: ${(REQUESTS / totalTime * 1000).toFixed(2)} req/s`);
+  console.log(`Throughput: ${((REQUESTS / totalTime) * 1000).toFixed(2)} req/s`);
   console.log(`Avg latency: ${avgLatency.toFixed(2)}ms`);
   console.log(`P95 latency: ${p95?.toFixed(2) || 'N/A'}ms`);
   console.log(`P99 latency: ${p99?.toFixed(2) || 'N/A'}ms`);

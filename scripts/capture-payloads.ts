@@ -4,9 +4,10 @@
  *
  * Usage: bun run scripts/capture-payloads.ts
  */
-import { chromium } from 'playwright';
-import { writeFileSync, mkdirSync } from 'node:fs';
+
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { chromium } from 'playwright';
 
 const CAPTURE_DIR = join(import.meta.dir, '..', 'network-captures', 'live-capture');
 mkdirSync(CAPTURE_DIR, { recursive: true });
@@ -22,11 +23,8 @@ function saveCapture(name: string, data: any) {
 async function main() {
   const browser = await chromium.launch({
     headless: false,
-    channel: 'chrome',  // Use system Chrome
-    args: [
-      '--start-maximized',
-      '--disable-blink-features=AutomationControlled',
-    ],
+    channel: 'chrome', // Use system Chrome
+    args: ['--start-maximized', '--disable-blink-features=AutomationControlled'],
   });
 
   const context = await browser.newContext({
@@ -90,8 +88,8 @@ async function main() {
     saveCapture('all-api-requests', captured);
 
     // Save specific payload types
-    const chatCompletions = captured.filter(c => c.url.includes('/completions'));
-    const chatCreations = captured.filter(c => c.url.includes('/chats/new'));
+    const chatCompletions = captured.filter((c) => c.url.includes('/completions'));
+    const chatCreations = captured.filter((c) => c.url.includes('/chats/new'));
 
     if (chatCompletions.length > 0) {
       saveCapture('chat-completions', chatCompletions);

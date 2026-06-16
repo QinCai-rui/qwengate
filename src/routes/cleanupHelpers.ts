@@ -12,12 +12,11 @@ export function checkFinalAmplification(
   resolvedEmail: string,
   logStore: { updateEntry: (id: string, fn: (e: any) => void) => void },
 ) {
-  const finalRatio =
-    ampState.rawInputBytes > 0 ? Math.round((ampState.emittedOutputBytes / ampState.rawInputBytes) * 100) / 100 : 0;
+  const finalRatio = ampState.rawInputBytes > 0 ? Math.round((ampState.emittedOutputBytes / ampState.rawInputBytes) * 100) / 100 : 0;
   if (finalRatio > 2) {
     console.warn(
       `[Chat] High amplification ratio: ${finalRatio}x ` +
-      `(rawIn=${ampState.rawInputBytes}B, out=${ampState.emittedOutputBytes}B) account=${resolvedEmail}`,
+        `(rawIn=${ampState.rawInputBytes}B, out=${ampState.emittedOutputBytes}B) account=${resolvedEmail}`,
     );
     logStore.updateEntry(logId, (entry: any) => {
       entry.amplificationRatio = finalRatio;
@@ -44,11 +43,21 @@ export function scheduleCleanup(
   setTimeout(() => {
     if (cancelled) return;
     clearInterval(heartbeatInterval);
-    try { reader?.cancel(); } catch { /* ignore */ }
-    try { reader?.releaseLock(); } catch { /* ignore */ }
+    try {
+      reader?.cancel();
+    } catch {
+      /* ignore */
+    }
+    try {
+      reader?.releaseLock();
+    } catch {
+      /* ignore */
+    }
     sessionPool.release(chatId, parentId, headers, email, isSuccess);
   }, 0);
-  return () => { cancelled = true; };
+  return () => {
+    cancelled = true;
+  };
 }
 
 /**
@@ -68,8 +77,16 @@ export function cleanupImmediately(
 ) {
   clearInterval(heartbeatInterval);
   if (streamReader) {
-    try { streamReader.cancel(); } catch { /* ignore */ }
-    try { streamReader.releaseLock(); } catch { /* ignore */ }
+    try {
+      streamReader.cancel();
+    } catch {
+      /* ignore */
+    }
+    try {
+      streamReader.releaseLock();
+    } catch {
+      /* ignore */
+    }
   }
   sessionPool.release(chatId, parentId, headers, email, isSuccess);
 }

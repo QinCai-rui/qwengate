@@ -1,20 +1,28 @@
 /* ── Helpers ── */
 function escHtml(s) {
   if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/`/g,'&#96;');
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/`/g, '&#96;');
 }
 function setText(id, val) {
   var el = document.getElementById(id);
   if (el) el.textContent = val;
 }
 function authHeaders() {
-  return window.API_KEY ? { 'Authorization': 'Bearer ' + window.API_KEY } : {};
+  return window.API_KEY ? { Authorization: 'Bearer ' + window.API_KEY } : {};
 }
 function fmtTime(ts) {
   if (!ts) return '—';
   var d = typeof ts === 'number' ? new Date(ts) : new Date(ts);
   if (isNaN(d.getTime())) return '—';
-  var h = d.getHours(), m = d.getMinutes(), s = d.getSeconds();
+  var h = d.getHours(),
+    m = d.getMinutes(),
+    s = d.getSeconds();
   var ampm = h >= 12 ? 'PM' : 'AM';
   h = h % 12 || 12;
   return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s + ' ' + ampm;
@@ -42,21 +50,36 @@ async function apiFetch(url) {
     var res = await fetch(url, { headers: authHeaders() });
     if (!res.ok) return null;
     return await res.json();
-  } catch(e) { return null; }
+  } catch {
+    return null;
+  }
 }
 
 function createPoller(fn, baseInterval) {
-  var timer = null, failures = 0, running = false;
+  var timer = null,
+    failures = 0,
+    running = false;
   function tick() {
     if (!running) return;
     try {
       var r = fn();
       if (r && typeof r.then === 'function') {
-        r.then(function() { failures = 0; schedule(); }, function() { failures++; schedule(); });
+        r.then(
+          function () {
+            failures = 0;
+            schedule();
+          },
+          function () {
+            failures++;
+            schedule();
+          },
+        );
         return;
       }
       failures = 0;
-    } catch(e) { failures++; }
+    } catch {
+      failures++;
+    }
     schedule();
   }
   function schedule() {
@@ -64,10 +87,23 @@ function createPoller(fn, baseInterval) {
     var delay = Math.min(baseInterval * Math.pow(2, Math.min(failures, 3)), baseInterval * 8);
     timer = setTimeout(tick, delay);
   }
-  function stop() { running = false; if (timer) { clearTimeout(timer); timer = null; } }
-  function start() { if (!running) { running = true; failures = 0; tick(); } }
-  document.addEventListener('visibilitychange', function() {
-    if (document.hidden) stop(); else start();
+  function stop() {
+    running = false;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  }
+  function start() {
+    if (!running) {
+      running = true;
+      failures = 0;
+      tick();
+    }
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) stop();
+    else start();
   });
   start();
   return { start: start, stop: stop };

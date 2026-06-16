@@ -5,46 +5,17 @@
  */
 
 import crypto from 'crypto';
-import { getActivePage, getBrowser, createAccountContext } from './playwright.ts';
-import { AUTH_TOKEN_MAX_AGE_MS, createAuthFetchTimeout, checkPlaywrightSession, type AuthState } from "./auth.ts";
+import { AUTH_TOKEN_MAX_AGE_MS, type AuthState, checkPlaywrightSession } from './auth.ts';
 import { logStore } from './logStore.ts';
+import { createAccountContext, getActivePage, getBrowser, Mutex } from './playwright.ts';
+import { createFetchTimeout, QWEN_BX_V } from './qwen.ts';
 
 const QWEN_CHAT_URL = 'https://chat.qwen.ai';
-
-export class LoginMutex {
-  private queue: (() => void)[] = [];
-  private locked = false;
-
-  async acquire(): Promise<() => void> {
-    if (!this.locked) {
-      this.locked = true;
-      return () => this.release();
-    }
-    return new Promise<() => void>(resolve => {
-      this.queue.push(() => {
-        resolve(() => this.release());
-      });
-    });
-  }
-
-  private release(): void {
-    const next = this.queue.shift();
-    if (next) {
-      next();
-    } else {
-      this.locked = false;
-    }
-  }
-}
 
 /**
  * Login via browser context — executes signin API inside the browser via evaluate().
  */
-export async function loginFreshViaBrowser(
-  email: string,
-  hashedPassword: string,
-  loginMutex: LoginMutex,
-): Promise<AuthState | null> {
+export async function loginFreshViaBrowser(email: string, hashedPassword: string, loginMutex: Mutex): Promise<AuthState | null> {
   const release = await loginMutex.acquire();
   try {
     const page = getActivePage();
@@ -62,10 +33,7 @@ export async function loginFreshViaBrowser(
     try {
       const context = page.context();
       const existingCookies = await context.cookies();
-      const authCookies = existingCookies.filter(c =>
-        c.name === 'token' ||
-        c.name === 'refresh_token'
-      );
+      const authCookies = existingCookies.filter((c) => c.name === 'token' || c.name === 'refresh_token');
       if (authCookies.length > 0) {
         // Only remove specific auth cookies, not ALL cookies
         for (const c of authCookies) {
@@ -78,44 +46,49 @@ export async function loginFreshViaBrowser(
 
     let evalResult: { ok: boolean; status: number; token: string | null; refreshToken: string | null; dataKeys: string[] };
     try {
-      evalResult = await page.evaluate(async ({ email, hashedPassword }: { email: string; hashedPassword: string }) => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15_000);
-        let response: Response;
-        try {
-          response = await fetch(`${QWEN_CHAT_URL}/api/v2/auths/signin`, {
-            method: 'POST',
-            headers: {
-              'accept': 'application/json, text/plain, */*',
-              'content-type': 'application/json',
-              'source': 'web',
-              'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
-              'x-request-id': crypto.randomUUID(),
-            },
-            credentials: 'include',
-            body: JSON.stringify({ email, password: hashedPassword }),
-            signal: controller.signal,
-          });
-        } finally {
-          clearTimeout(timeoutId);
-        }
+      evalResult = await page.evaluate(
+        async ({ email, hashedPassword }: { email: string; hashedPassword: string }) => {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 15_000);
+          let response: Response;
+          try {
+            response = await fetch(`${QWEN_CHAT_URL}/api/v2/auths/signin`, {
+              method: 'POST',
+              headers: {
+                accept: 'application/json, text/plain, */*',
+                'content-type': 'application/json',
+                source: 'web',
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                'x-request-id': crypto.randomUUID(),
+              },
+              credentials: 'include',
+              body: JSON.stringify({ email, password: hashedPassword }),
+              signal: controller.signal,
+            });
+          } finally {
+            clearTimeout(timeoutId);
+          }
 
-        let data: any = {};
-        try { data = await response.json(); } catch {
-          // non-blocking: non-JSON responses fall back to empty data
-        }
+          let data: any = {};
+          try {
+            data = await response.json();
+          } catch {
+            // non-blocking: non-JSON responses fall back to empty data
+          }
 
-        const token = data?.data?.token || data?.token || data?.data?.session_token || null;
-        const refreshToken = data?.data?.refresh_token || data?.refresh_token || null;
+          const token = data?.data?.token || data?.token || data?.data?.session_token || null;
+          const refreshToken = data?.data?.refresh_token || data?.refresh_token || null;
 
-        return {
-          ok: response.ok,
-          status: response.status,
-          token: token as string | null,
-          refreshToken: refreshToken as string | null,
-          dataKeys: Object.keys(data),
-        };
-      }, { email, hashedPassword });
+          return {
+            ok: response.ok,
+            status: response.status,
+            token: token as string | null,
+            refreshToken: refreshToken as string | null,
+            dataKeys: Object.keys(data),
+          };
+        },
+        { email, hashedPassword },
+      );
     } catch (err: any) {
       logStore.log('error', 'auth', `Browser evaluate failed for ${email}: ${err.message}`);
       return null;
@@ -130,13 +103,13 @@ export async function loginFreshViaBrowser(
     let cookieRefresh: string | null = null;
     try {
       const cookies = await page.context().cookies();
-      const tokenCookie = cookies.find(c =>
-        c.name === 'token' ||
-        (c.name.toLowerCase().includes('token') && c.domain.includes('qwen') && !c.name.toLowerCase().includes('refresh'))
+      const tokenCookie = cookies.find(
+        (c) =>
+          c.name === 'token' ||
+          (c.name.toLowerCase().includes('token') && c.domain.includes('qwen') && !c.name.toLowerCase().includes('refresh')),
       );
-      const refreshCookie = cookies.find(c =>
-        c.name === 'refresh_token' ||
-        (c.name.toLowerCase().includes('refresh') && c.domain.includes('qwen'))
+      const refreshCookie = cookies.find(
+        (c) => c.name === 'refresh_token' || (c.name.toLowerCase().includes('refresh') && c.domain.includes('qwen')),
       );
       cookieToken = tokenCookie?.value || null;
       cookieRefresh = refreshCookie?.value || null;
@@ -155,10 +128,12 @@ export async function loginFreshViaBrowser(
       };
     }
 
-    logStore.log('warn', 'auth',
+    logStore.log(
+      'warn',
+      'auth',
       `Login returned 200 for ${email} but no token found. ` +
-      `Response keys: [${evalResult.dataKeys.join(', ')}]. ` +
-      `No auth cookies captured.`
+        `Response keys: [${evalResult.dataKeys.join(', ')}]. ` +
+        `No auth cookies captured.`,
     );
     return null;
   } finally {
@@ -170,19 +145,19 @@ export async function loginFreshViaBrowser(
  * Login via plain fetch — fallback for when Playwright is not available.
  */
 export async function loginFreshViaFetch(email: string, hashedPassword: string): Promise<AuthState | null> {
-  const { controller, cleanup: _cleanup } = createAuthFetchTimeout();
+  const { controller, cleanup: _cleanup } = createFetchTimeout();
   try {
     const response = await fetch(`${QWEN_CHAT_URL}/api/v2/auths/signin`, {
       method: 'POST',
       headers: {
-        'accept': 'application/json, text/plain, */*',
+        accept: 'application/json, text/plain, */*',
         'content-type': 'application/json',
-        'source': 'web',
-        'Version': '0.2.57',
-        'bx-v': '2.5.36',
-        'Referer': `${QWEN_CHAT_URL}/auth`,
+        source: 'web',
+        Version: '0.2.57',
+        'bx-v': QWEN_BX_V,
+        Referer: `${QWEN_CHAT_URL}/auth`,
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
-        'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         'x-request-id': crypto.randomUUID(),
       },
       body: JSON.stringify({ email, password: hashedPassword }),
@@ -191,16 +166,19 @@ export async function loginFreshViaFetch(email: string, hashedPassword: string):
 
     if (response.ok) {
       let data: any;
-      try { data = await response.json(); } catch { data = {}; }
+      try {
+        data = await response.json();
+      } catch {
+        data = {};
+      }
 
       let token = data.data?.token || data.token || data.data?.session_token || null;
       let refreshToken = data.data?.refresh_token || data.refresh_token || null;
 
       if (!token) {
         const hdrs = response.headers as Headers & { getSetCookie?: () => string[] };
-        const setCookies: string[] = typeof hdrs.getSetCookie === 'function'
-          ? hdrs.getSetCookie()
-          : (response.headers.get('set-cookie') || '').split(',');
+        const setCookies: string[] =
+          typeof hdrs.getSetCookie === 'function' ? hdrs.getSetCookie() : (response.headers.get('set-cookie') || '').split(',');
 
         for (const cookie of setCookies) {
           const tokenMatch = cookie.match(/\btoken=([^;]+)/);
@@ -220,7 +198,11 @@ export async function loginFreshViaFetch(email: string, hashedPassword: string):
 
       const hasPlaywrightSession = await checkPlaywrightSession();
       if (hasPlaywrightSession) {
-        logStore.log('warn', 'auth', `API login returned 200 but no token for ${email}, and Playwright session exists but has no usable token`);
+        logStore.log(
+          'warn',
+          'auth',
+          `API login returned 200 but no token for ${email}, and Playwright session exists but has no usable token`,
+        );
       }
 
       logStore.log('warn', 'auth', `API login returned 200 but no token for ${email}: ${JSON.stringify(data).substring(0, 200)}`);
@@ -239,7 +221,7 @@ export async function loginViaTempContext(
   _browser: ReturnType<typeof getBrowser>,
   email: string,
   hashedPassword: string,
-  loginMutex: LoginMutex,
+  loginMutex: Mutex,
 ): Promise<AuthState | null> {
   const release = await loginMutex.acquire();
   try {
@@ -267,9 +249,10 @@ export async function loginViaTempContext(
         }
 
         // Also check set-cookie headers as fallback
-        const setCookies = response.headersArray()
-          .filter(h => h.name.toLowerCase() === 'set-cookie')
-          .map(h => h.value);
+        const setCookies = response
+          .headersArray()
+          .filter((h) => h.name.toLowerCase() === 'set-cookie')
+          .map((h) => h.value);
         for (const cookie of setCookies) {
           const tokenMatch = cookie.match(/\btoken=([^;]+)/);
           if (tokenMatch && !capturedToken) capturedToken = tokenMatch[1];
@@ -278,7 +261,7 @@ export async function loginViaTempContext(
         }
 
         await route.fulfill({ response });
-      } catch (err: any) {
+      } catch {
         // If route.fetch fails, let the request pass through normally
         await route.continue();
       }
@@ -296,7 +279,7 @@ export async function loginViaTempContext(
       await page.fill('input[type="password"], input[name="password"]', hashedPassword);
       await Promise.all([
         page.click('button[type="submit"], button:has-text("Sign in"), button:has-text("Log in"), button:has-text("Continue")'),
-        page.waitForURL(url => !url.toString().includes('/auth'), { timeout: 15_000 }).catch(() => {}),
+        page.waitForURL((url) => !url.toString().includes('/auth'), { timeout: 15_000 }).catch(() => {}),
       ]);
     } catch {
       logStore.log('warn', 'auth', `form fill/submit failed for ${email}`);
@@ -305,18 +288,18 @@ export async function loginViaTempContext(
     // Poll for token with shorter intervals instead of blind sleep
     for (let attempt = 0; attempt < 10; attempt++) {
       if (capturedToken) break;
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, 500));
 
       // Check cookies as fallback
       try {
         const cookies = await context.cookies();
-        const tokenCookie = cookies.find(c =>
-          c.name === 'token' ||
-          (c.name.toLowerCase().includes('token') && c.domain.includes('qwen') && !c.name.toLowerCase().includes('refresh'))
+        const tokenCookie = cookies.find(
+          (c) =>
+            c.name === 'token' ||
+            (c.name.toLowerCase().includes('token') && c.domain.includes('qwen') && !c.name.toLowerCase().includes('refresh')),
         );
-        const refreshCookie = cookies.find(c =>
-          c.name === 'refresh_token' ||
-          (c.name.toLowerCase().includes('refresh') && c.domain.includes('qwen'))
+        const refreshCookie = cookies.find(
+          (c) => c.name === 'refresh_token' || (c.name.toLowerCase().includes('refresh') && c.domain.includes('qwen')),
         );
         if (tokenCookie?.value) capturedToken = tokenCookie.value;
         if (refreshCookie?.value) capturedRefresh = refreshCookie.value;
@@ -336,9 +319,7 @@ export async function loginViaTempContext(
     }
 
     const cookies = await context.cookies();
-    logStore.log('warn', 'auth',
-      `Temp context login failed for ${email}. Cookies: ${cookies.map(c => c.name).join(', ')}`
-    );
+    logStore.log('warn', 'auth', `Temp context login failed for ${email}. Cookies: ${cookies.map((c) => c.name).join(', ')}`);
     return null;
   } catch (err: any) {
     logStore.log('error', 'auth', `Temp context login error for ${email}: ${err.message}`);

@@ -4,7 +4,7 @@ export interface NetworkDebugEntry {
   id: string;
   timestamp: string;
   phase: 'pending' | 'streaming' | 'completed' | 'error';
-  
+
   request: {
     url: string;
     method: string;
@@ -12,27 +12,27 @@ export interface NetworkDebugEntry {
     bodyPreview: string;
     bodySize: number;
   };
-  
+
   response: {
     status: number | null;
     statusText: string;
     headers: Record<string, string>;
   };
-  
+
   stream: {
     chunks: string[];
     totalChunks: number;
     firstChunkAt: string | null;
     lastChunkAt: string | null;
   };
-  
+
   timing: {
     startedAt: number;
     ttfb: number | null;
     totalDuration: number | null;
     chunksPerSecond: number | null;
   };
-  
+
   category: 'chat' | 'session-create' | 'session-delete' | 'models' | 'settings' | 'auth' | 'other';
   accountEmail: string | null;
   errors: string[];
@@ -57,10 +57,10 @@ const listeners = new Set<(entry: NetworkDebugEntry) => void>();
 
 function redactHeaders(headers: Record<string, string>): Record<string, string> {
   const redacted: Record<string, string> = {};
-  
+
   for (const [key, value] of Object.entries(headers)) {
     const lowerKey = key.toLowerCase();
-    
+
     if (lowerKey === 'cookie') {
       redacted[key] = value.length > 30 ? `${value.slice(0, 30)}...[redacted]` : value;
     } else if (lowerKey === 'authorization') {
@@ -69,7 +69,7 @@ function redactHeaders(headers: Record<string, string>): Record<string, string> 
       redacted[key] = value;
     }
   }
-  
+
   return redacted;
 }
 
@@ -118,19 +118,19 @@ export function createNetworkEntry(options: NetworkDebugOptions): NetworkDebugEn
     accountEmail: options.accountEmail ?? null,
     errors: [],
   };
-  
+
   // Add to front of array (newest first)
   entries.unshift(entry);
   entryIndex.set(entry.id, entry);
-  
+
   // Maintain FIFO - remove oldest if over limit
   if (entries.length > MAX_ENTRIES) {
     const removed = entries.pop()!;
     entryIndex.delete(removed.id);
   }
-  
+
   notifyListeners(entry);
-  
+
   return entry;
 }
 
@@ -139,19 +139,19 @@ export function recordResponse(entryId: string, response: Response): void {
   if (!entry) {
     return;
   }
-  
+
   const now = Date.now();
   entry.response.status = response.status;
   entry.response.statusText = response.statusText;
   entry.timing.ttfb = now - entry.timing.startedAt;
-  
+
   // Capture response headers
   const headers: Record<string, string> = {};
   response.headers.forEach((value, key) => {
     headers[key] = value;
   });
   entry.response.headers = headers;
-  
+
   notifyListeners(entry);
 }
 
@@ -160,23 +160,23 @@ export function recordStreamChunk(entryId: string, chunk: string): void {
   if (!entry) {
     return;
   }
-  
+
   const now = new Date().toISOString();
-  
+
   if (entry.stream.totalChunks === 0) {
     entry.phase = 'streaming';
     entry.stream.firstChunkAt = now;
   }
-  
+
   // Always increment total count
   entry.stream.totalChunks++;
   entry.stream.lastChunkAt = now;
-  
+
   // Store up to MAX_STORED_CHUNKS
   if (entry.stream.chunks.length < MAX_STORED_CHUNKS) {
     entry.stream.chunks.push(chunk);
   }
-  
+
   notifyListeners(entry);
 }
 
@@ -185,16 +185,16 @@ export function completeEntry(entryId: string): void {
   if (!entry) {
     return;
   }
-  
+
   const now = Date.now();
   entry.phase = 'completed';
   entry.timing.totalDuration = now - entry.timing.startedAt;
-  
+
   // Calculate chunks per second if we have chunks and duration
   if (entry.stream.totalChunks > 0 && entry.timing.totalDuration > 0) {
     entry.timing.chunksPerSecond = entry.stream.totalChunks / (entry.timing.totalDuration / 1000);
   }
-  
+
   notifyListeners(entry);
 }
 
@@ -203,14 +203,14 @@ export function errorEntry(entryId: string, error: string): void {
   if (!entry) {
     return;
   }
-  
+
   entry.phase = 'error';
   entry.errors.push(error);
-  
+
   // Calculate duration even on error
   const now = Date.now();
   entry.timing.totalDuration = now - entry.timing.startedAt;
-  
+
   notifyListeners(entry);
 }
 
@@ -224,7 +224,7 @@ export function getNetworkEntry(id: string): NetworkDebugEntry | undefined {
 
 export function subscribeNetwork(listener: (entry: NetworkDebugEntry) => void): () => void {
   listeners.add(listener);
-  
+
   return () => {
     listeners.delete(listener);
   };

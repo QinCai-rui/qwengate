@@ -33,7 +33,7 @@ export class TokenBucket {
   private getBucket(): BucketState {
     const existing = buckets.get(this.key);
     if (existing) return existing;
-    
+
     const initial: BucketState = {
       tokens: this.maxTokens,
       lastRefill: Date.now(),
@@ -46,7 +46,7 @@ export class TokenBucket {
     const now = Date.now();
     const elapsedMs = now - bucket.lastRefill;
     const elapsedMinutes = elapsedMs / 60000;
-    
+
     // Add tokens based on elapsed time
     const tokensToAdd = elapsedMinutes * this.config.requests_per_minute;
     bucket.tokens = Math.min(this.maxTokens, bucket.tokens + tokensToAdd);
@@ -57,7 +57,7 @@ export class TokenBucket {
     // Calculate seconds until enough tokens are available for one request
     const tokensNeeded = this.config.tokens_per_request - bucket.tokens;
     if (tokensNeeded <= 0) return 0;
-    
+
     // Time to accumulate needed tokens: tokens / (requests_per_minute / 60) = seconds
     const tokensPerSecond = this.config.requests_per_minute / 60;
     return Math.max(0.1, tokensNeeded / tokensPerSecond);
@@ -77,7 +77,7 @@ export class TokenBucket {
   getHeaders(): Record<string, string> {
     const bucket = this.getBucket();
     const retryAfter = this.calculateRetryAfter(bucket);
-    
+
     return {
       'X-RateLimit-Limit': String(this.maxTokens),
       'X-RateLimit-Remaining': String(Math.floor(bucket.tokens)),
@@ -90,32 +90,25 @@ export class TokenBucket {
 // Singleton cache: reuse existing TokenBucket instances per key
 const bucketInstances = new Map<string, TokenBucket>();
 
-export async function rateLimitMiddleware(
-  c: Context,
-  key: string,
-  config?: Partial<RateLimitConfig>
-): Promise<Response | null> {
+export async function rateLimitMiddleware(c: Context, key: string, config?: Partial<RateLimitConfig>): Promise<Response | null> {
   let bucket = bucketInstances.get(key);
   if (!bucket) {
     bucket = new TokenBucket(key, config);
     bucketInstances.set(key, bucket);
   }
   const consumed = bucket.tryConsume();
-  
+
   if (!consumed) {
     const headers = bucket.getHeaders();
-    return c.json(
-      { error: 'Rate limit exceeded', message: 'Too many requests' },
-      { status: 429, headers }
-    );
+    return c.json({ error: 'Rate limit exceeded', message: 'Too many requests' }, { status: 429, headers });
   }
-  
+
   // Attach rate limit headers to response for successful requests
   const headers = bucket.getHeaders();
   c.header('X-RateLimit-Limit', headers['X-RateLimit-Limit']);
   c.header('X-RateLimit-Remaining', headers['X-RateLimit-Remaining']);
   c.header('X-RateLimit-Reset', headers['X-RateLimit-Reset']);
-  
+
   return null;
 }
 

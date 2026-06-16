@@ -1,18 +1,13 @@
-import crypto from "crypto";
-import { config } from "../services/configService.ts";
+import crypto from 'crypto';
+import { config } from '../services/configService.ts';
 
 // Compare two strings in timing-constant fashion to prevent timing attacks on API key auth.
-// Length mismatch is intentionally NOT early-returned to avoid leaking length information.
 export function safeCompare(a: string, b: string): boolean {
   const bufA = Buffer.from(a);
   const bufB = Buffer.from(b);
-  const maxLen = Math.max(bufA.length, bufB.length);
-  const padA = Buffer.alloc(maxLen, 0);
-  const padB = Buffer.alloc(maxLen, 0);
-  bufA.copy(padA, maxLen - bufA.length);
-  bufB.copy(padB, maxLen - bufB.length);
+  if (bufA.length !== bufB.length) return false;
   try {
-    return crypto.timingSafeEqual(padA, padB);
+    return crypto.timingSafeEqual(bufA, bufB);
   } catch {
     return false;
   }
@@ -25,18 +20,18 @@ export function safeCompare(a: string, b: string): boolean {
  * Returns a Response (401) if unauthorized, or undefined if authorized / no key configured.
  */
 export function checkApiKeyAuth(c: any): Response | undefined {
-  const apiKey = config.get("API_KEY");
+  const apiKey = config.get('API_KEY');
   if (!apiKey) return undefined;
 
-  const authHeader = c.req.header("authorization");
-  if (authHeader && authHeader.startsWith("Bearer ") && safeCompare(authHeader.slice(7), apiKey)) {
+  const authHeader = c.req.header('authorization');
+  if (authHeader && authHeader.startsWith('Bearer ') && safeCompare(authHeader.slice(7), apiKey)) {
     return undefined;
   }
 
-  const tokenParam = c.req.query("token");
+  const tokenParam = c.req.query('token');
   if (tokenParam && safeCompare(tokenParam, apiKey)) {
     return undefined;
   }
 
-  return c.json({ error: "Unauthorized" }, 401);
+  return c.json({ error: 'Unauthorized' }, 401);
 }

@@ -1,12 +1,11 @@
 import { Hono } from 'hono';
-import { config, isValidKey, DEFAULT_CONFIG } from '../services/configService.ts';
+import { config, DEFAULT_CONFIG, isValidKey } from '../services/configService.ts';
 
 export const configRouter = new Hono();
 
 configRouter.get('/', (c) => {
   const all = config.getAll();
-  const envOverrides = (Object.keys(DEFAULT_CONFIG) as (keyof typeof DEFAULT_CONFIG)[])
-    .filter(key => process.env[key] !== undefined);
+  const envOverrides = (Object.keys(DEFAULT_CONFIG) as (keyof typeof DEFAULT_CONFIG)[]).filter((key) => process.env[key] !== undefined);
   return c.json({ config: all, envOverrides });
 });
 
@@ -39,10 +38,13 @@ configRouter.put('/', async (c) => {
   }
 
   if (invalidKeys.length > 0) {
-    return c.json({
-      error: `Invalid config key(s): ${invalidKeys.join(', ')}`,
-      validKeys,
-    }, 400);
+    return c.json(
+      {
+        error: `Invalid config key(s): ${invalidKeys.join(', ')}`,
+        validKeys,
+      },
+      400,
+    );
   }
 
   config.save();

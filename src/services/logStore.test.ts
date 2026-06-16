@@ -1,14 +1,9 @@
-import { test } from 'node:test';
 import assert from 'node:assert';
-import { logStore } from './logStore.js';
+import { test } from 'node:test';
+import { logStore } from './logStore.ts';
 
 test('logStore createLogEntry emits valid JSON with required structured fields', () => {
-  const entry = logStore.createLogEntry(
-    'test-123',
-    'qwen3.5-plus',
-    true,
-    'external-req-456'
-  );
+  const entry = logStore.createLogEntry('test-123', 'qwen3.5-plus', true, 'external-req-456');
 
   const jsonStr = JSON.stringify(entry);
   const parsed = JSON.parse(jsonStr);

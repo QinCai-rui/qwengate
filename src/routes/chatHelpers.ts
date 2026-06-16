@@ -1,16 +1,15 @@
-import { randomUUID } from "node:crypto";
-import { logStore } from "../services/logStore.ts";
-import { sessionPool } from "../services/sessionPool.ts";
-import { createQwenStream, buildFeatureConfig } from "../services/qwen.ts";
-import { modelRouter } from "../services/modelRouter.ts";
-import modelSpecs from "../models.json" with { type: "json" };
-import type { ModelSpec } from "../types/openai.ts";
-import { pendingCorrections } from "./chatHelpersCore.ts";
-import { compressToolResult } from "./compressToolResult.ts";
-import { THINK_TAG_NAMES, TOOL_CALL_KEYWORDS } from "../utils/tagNames.ts";
+import { randomUUID } from 'node:crypto';
+import modelSpecs from '../models.json' with { type: 'json' };
+import { modelRouter } from '../services/modelRouter.ts';
+import { buildFeatureConfig, createQwenStream } from '../services/qwen.ts';
+import { sessionPool } from '../services/sessionPool.ts';
+import type { ModelSpec } from '../types/openai.ts';
+import { THINK_TAG_NAMES, TOOL_CALL_KEYWORDS } from '../utils/tagNames.ts';
+import { pendingCorrections } from './chatHelpersCore.ts';
+import { compressToolResult } from './compressToolResult.ts';
 
 // Re-export everything from core utilities
-export * from "./chatHelpersCore.ts";
+export * from './chatHelpersCore.ts';
 
 /** Pre-compiled regex patterns for user content sanitization */
 const TAG_STRIP_RE = /<(?:system|instruction|prompt|rule)\b[^>]*>[\s\S]*?<\/(?:system|instruction|prompt|rule)>/gi;
@@ -24,7 +23,7 @@ export interface QwenMessage {
   fid: string;
   parentId: string | null;
   childrenIds: string[];
-  role: "user" | "assistant" | "function";
+  role: 'user' | 'assistant' | 'function';
   content: string | Record<string, any>;
   user_action: string;
   files: any[];
@@ -49,42 +48,35 @@ export interface BuildQwenMessagesResult {
 
 // ── Business logic ───────────────────────────────────────────────
 
-export function buildQwenMessages(
-  messages: any[],
-  body: any,
-  availableTokens: number,
-  _toolCalling: boolean,
-): BuildQwenMessagesResult {
+export function buildQwenMessages(messages: any[], body: any, availableTokens: number, _toolCalling: boolean): BuildQwenMessagesResult {
   const timestamp = Math.floor(Date.now() / 1000);
-  const model = (body.model || "").replace("-no-thinking", "");
+  const model = (body.model || '').replace('-no-thinking', '');
 
   const segments: string[] = [];
-  let accumulatedSystemContent = "";
+  let accumulatedSystemContent = '';
   let hasSystemContent = false;
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
 
-    let contentStr = "";
+    let contentStr = '';
     if (Array.isArray(msg.content)) {
-      contentStr = msg.content
-        .map((c: any) => c.text || JSON.stringify(c))
-        .join("\n");
-    } else if (typeof msg.content === "object" && msg.content !== null) {
+      contentStr = msg.content.map((c: any) => c.text || JSON.stringify(c)).join('\n');
+    } else if (typeof msg.content === 'object' && msg.content !== null) {
       contentStr = JSON.stringify(msg.content);
     } else {
-      contentStr = msg.content || "";
+      contentStr = msg.content || '';
     }
 
-    if (msg.role === "system") {
-      accumulatedSystemContent += (contentStr || "").trim() + "\n\n";
+    if (msg.role === 'system') {
+      accumulatedSystemContent += (contentStr || '').trim() + '\n\n';
       hasSystemContent = true;
-    } else if (msg.role === "user") {
+    } else if (msg.role === 'user') {
       let sanitized = contentStr
-        .replace(TAG_STRIP_RE, "")
-        .replace(THINK_TAG_STRIP_RE, "")
-        .replace(ROLE_PREFIX_RE, "")
-        .replace(CONTROL_CHAR_RE, "");
+        .replace(TAG_STRIP_RE, '')
+        .replace(THINK_TAG_STRIP_RE, '')
+        .replace(ROLE_PREFIX_RE, '')
+        .replace(CONTROL_CHAR_RE, '');
 
       // Prepend system content to first message
       if (hasSystemContent && !segments.length) {
@@ -100,8 +92,8 @@ export function buildQwenMessages(
           : sanitized;
 
       segments.push(`User: ${truncated}`);
-    } else if (msg.role === "assistant") {
-      let assistantContent = contentStr || "";
+    } else if (msg.role === 'assistant') {
+      let assistantContent = contentStr || '';
       const reasoning = msg.reasoning_content;
       if (reasoning) assistantContent = `${reasoning}\n\n${assistantContent}`;
 
@@ -109,33 +101,33 @@ export function buildQwenMessages(
         for (const tc of msg.tool_calls) {
           let parsedArgs: any = {};
           const args = tc.function?.arguments;
-          if (typeof args === "string") {
-            try { parsedArgs = JSON.parse(args); } catch { parsedArgs = {}; }
-          } else if (args && typeof args === "object") {
+          if (typeof args === 'string') {
+            try {
+              parsedArgs = JSON.parse(args);
+            } catch {
+              parsedArgs = {};
+            }
+          } else if (args && typeof args === 'object') {
             parsedArgs = args;
           }
           const FKW = TOOL_CALL_KEYWORDS[0];
           const PKW = TOOL_CALL_KEYWORDS[1];
           const xmlParams = Object.entries(parsedArgs)
             .map(([k, v]) => `<${PKW}=${k}>${typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}</${PKW}>`)
-            .join("\n");
+            .join('\n');
           const xmlPayload = `<${FKW}=${tc.function?.name}>\n${xmlParams}\n</${FKW}>`;
-          assistantContent = assistantContent
-            ? assistantContent + "\n" + xmlPayload
-            : xmlPayload;
+          assistantContent = assistantContent ? assistantContent + '\n' + xmlPayload : xmlPayload;
         }
       }
 
       segments.push(`Assistant: ${assistantContent}`);
-    } else if (msg.role === "tool" || msg.role === "function") {
+    } else if (msg.role === 'tool' || msg.role === 'function') {
       let toolName = msg.name;
       if (!toolName && msg.tool_call_id) {
         for (let j = i - 1; j >= 0; j--) {
           const prevMsg = messages[j];
-          if (prevMsg.role === "assistant" && prevMsg.tool_calls) {
-            const call = prevMsg.tool_calls.find(
-              (tc: any) => tc.id === msg.tool_call_id,
-            );
+          if (prevMsg.role === 'assistant' && prevMsg.tool_calls) {
+            const call = prevMsg.tool_calls.find((tc: any) => tc.id === msg.tool_call_id);
             if (call) {
               toolName = call.function?.name;
               break;
@@ -144,17 +136,19 @@ export function buildQwenMessages(
         }
       }
 
-      const truncated = compressToolResult(contentStr || "");
-      const qwenResultStr = JSON.stringify([{
-        type: "function",
-        tool: toolName || "unknown",
-        result: {
-          success: true,
-          stdout: truncated,
-          stderr: "",
-          command: toolName || "",
+      const truncated = compressToolResult(contentStr || '');
+      const qwenResultStr = JSON.stringify([
+        {
+          type: 'function',
+          tool: toolName || 'unknown',
+          result: {
+            success: true,
+            stdout: truncated,
+            stderr: '',
+            command: toolName || '',
+          },
         },
-      }]);
+      ]);
 
       segments.push(qwenResultStr);
     }
@@ -164,67 +158,62 @@ export function buildQwenMessages(
 
   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
     const localMcp: Record<string, any> = {};
-    localMcp["★"] = {};
+    localMcp['★'] = {};
     for (const t of body.tools) {
       const fn = t.function || {};
-      localMcp["★"][fn.name] = {
-        description: fn.description || "",
-        input_schema: fn.parameters || { type: "object", properties: {} },
+      localMcp['★'][fn.name] = {
+        description: fn.description || '',
+        input_schema: fn.parameters || { type: 'object', properties: {} },
       };
     }
     featureConfig.local_mcp = localMcp;
   }
 
   // Single message with all history flattened (Qwen API only accepts 1 message)
-  const prompt = segments.join("\n\n");
-  const qwenMessages: QwenMessage[] = [{
-    fid: randomUUID(),
-    parentId: null,
-    childrenIds: [],
-    role: "user",
-    content: prompt || "\n",
-    user_action: "chat",
-    files: [],
-    timestamp,
-    models: [model],
-    chat_type: "t2t",
-    feature_config: featureConfig,
-    extra: { meta: { subChatType: "t2t" } },
-    sub_chat_type: "t2t",
-    parent_id: null,
-  }];
+  const prompt = segments.join('\n\n');
+  const qwenMessages: QwenMessage[] = [
+    {
+      fid: randomUUID(),
+      parentId: null,
+      childrenIds: [],
+      role: 'user',
+      content: prompt || '\n',
+      user_action: 'chat',
+      files: [],
+      timestamp,
+      models: [model],
+      chat_type: 't2t',
+      feature_config: featureConfig,
+      extra: { meta: { subChatType: 't2t' } },
+      sub_chat_type: 't2t',
+      parent_id: null,
+    },
+  ];
 
   return { qwenMessages };
 }
 
 export function handleImageModelFallback(body: any, messages: any[]): void {
-  const hasImages = messages.some(
-    (m) =>
-      Array.isArray(m.content) &&
-      m.content.some((c: any) => c.type === "image_url"),
-  );
+  const hasImages = messages.some((m) => Array.isArray(m.content) && m.content.some((c: any) => c.type === 'image_url'));
   if (hasImages) {
     const modelId = (body.model as string)
       .toLowerCase()
-      .replace(/\./g, "-")
-      .replace(/-no-thinking$/, "");
+      .replace(/\./g, '-')
+      .replace(/-no-thinking$/, '');
     const specs = (modelSpecs as Record<string, ModelSpec>)[modelId];
-    const supportsImages = specs?.modalities.includes("image");
+    const supportsImages = specs?.modalities.includes('image');
     if (!supportsImages) {
       const original = body.model;
-      body.model =
-        "qwen3.6-plus" + (original.includes("-no-thinking") ? "-no-thinking" : "");
+      body.model = 'qwen3.6-plus' + (original.includes('-no-thinking') ? '-no-thinking' : '');
     }
   }
 }
 
-export function getModelSpecs(
-  body: any,
-): { maxContext: number; maxOutput: number } {
+export function getModelSpecs(body: any): { maxContext: number; maxOutput: number } {
   const modelId = (body.model as string)
     .toLowerCase()
-    .replace(/\./g, "-")
-    .replace(/-no-thinking$/, "");
+    .replace(/\./g, '-')
+    .replace(/-no-thinking$/, '');
   const specs = (modelSpecs as Record<string, ModelSpec>)[modelId];
   return {
     maxContext: specs?.max_context || 250000,
@@ -246,19 +235,17 @@ export async function acquireSessionWithCorrections(
   const prevCorrections =
     pendingCorrections.get(session.chatId) ||
     (accountEmail ? pendingCorrections.get(accountEmail) : undefined) ||
-    pendingCorrections.get("__echo_retry__");
+    pendingCorrections.get('__echo_retry__');
   if (prevCorrections && prevCorrections.length > 0) {
     pendingCorrections.delete(session.chatId);
     if (accountEmail) pendingCorrections.delete(accountEmail);
-    pendingCorrections.delete("__echo_retry__");
-    const correctionsBlock = prevCorrections
-      .map((c: string, i: number) => `${i + 1}. ${c}`)
-      .join("\n");
+    pendingCorrections.delete('__echo_retry__');
+    const correctionsBlock = prevCorrections.map((c: string, i: number) => `${i + 1}. ${c}`).join('\n');
     const correctionText = `### FEEDBACK FROM PREVIOUS TURN\nThe following issues were detected in your previous response. Address them now:\n${correctionsBlock}\n\n`;
 
     // Prepend correction text to the first message's content
     qwenMessages = qwenMessages.map((m, idx) => {
-      if (idx === 0 && typeof m.content === "string") {
+      if (idx === 0 && typeof m.content === 'string') {
         return { ...m, content: correctionText + m.content };
       }
       return m;
@@ -266,7 +253,7 @@ export async function acquireSessionWithCorrections(
   }
   const nextParentId: string | null = session.parentId;
   const sessionHeaders = session.cachedHeaders || {};
-  const resolvedEmail = session.accountEmail || accountEmail || "";
+  const resolvedEmail = session.accountEmail || accountEmail || '';
   return { session, qwenMessages, nextParentId, sessionHeaders, resolvedEmail };
 }
 
@@ -300,5 +287,3 @@ export async function createQwenStreamWithRetry(
     throw err;
   }
 }
-
-

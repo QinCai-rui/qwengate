@@ -1,7 +1,7 @@
-import test, { describe } from 'node:test';
 import assert from 'node:assert';
-import { commonPrefixLen, getNewContent } from './chat.ts';
+import test, { describe } from 'node:test';
 import { streamChunks } from '../tests/helpers.ts';
+import { commonPrefixLen, getNewContent } from './chat.ts';
 
 test('commonPrefixLen detects cumulative chunks', () => {
   const prev = 'Hello world';

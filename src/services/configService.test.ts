@@ -1,8 +1,8 @@
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdtempSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { resolve } from 'node:path';
+import { test } from 'node:test';
 import { ConfigService, DEFAULT_CONFIG } from './configService.ts';
 
 function tmpFile(prefix: string): string {
@@ -26,7 +26,11 @@ function restoreEnv(key: string) {
 test('load - creates config.json with defaults when missing', () => {
   const path = tmpFile('create');
   // Ensure file does not exist
-  try { unlinkSync(path); } catch { /* ok */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* ok */
+  }
   assert.equal(existsSync(path), false, 'test file should not exist before test');
 
   const svc = new ConfigService(path);
@@ -36,7 +40,11 @@ test('load - creates config.json with defaults when missing', () => {
   assert.equal(written.BROWSER, DEFAULT_CONFIG.BROWSER);
   assert.equal(written.API_KEY, DEFAULT_CONFIG.API_KEY);
 
-  try { unlinkSync(path); } catch { /* cleanup */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* cleanup */
+  }
 });
 
 test('get - returns process.env value (env wins)', () => {
@@ -51,7 +59,11 @@ test('get - returns process.env value (env wins)', () => {
   assert.equal(val, '99999');
   restoreEnv('PORT');
 
-  try { unlinkSync(path); } catch { /* cleanup */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* cleanup */
+  }
 });
 
 test('get - returns JSON value when no env set', () => {
@@ -65,7 +77,11 @@ test('get - returns JSON value when no env set', () => {
   assert.equal(val, '12345');
   restoreEnv('PORT');
 
-  try { unlinkSync(path); } catch { /* cleanup */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* cleanup */
+  }
 });
 
 test('get - returns default when neither JSON nor env set', () => {
@@ -80,7 +96,11 @@ test('get - returns default when neither JSON nor env set', () => {
   assert.equal(val, DEFAULT_CONFIG.PORT);
   restoreEnv('PORT');
 
-  try { unlinkSync(path); } catch { /* cleanup */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* cleanup */
+  }
 });
 
 test('get - returns default when config missing key and no env', () => {
@@ -93,7 +113,11 @@ test('get - returns default when config missing key and no env', () => {
   assert.equal(svc.get('PORT'), DEFAULT_CONFIG.PORT);
   restoreEnv('PORT');
 
-  try { unlinkSync(path); } catch { /* cleanup */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* cleanup */
+  }
 });
 
 test('set - updates in-memory value', () => {
@@ -104,7 +128,11 @@ test('set - updates in-memory value', () => {
   svc.set('PORT', '55555');
   assert.equal(svc.get('PORT'), '55555');
 
-  try { unlinkSync(path); } catch { /* cleanup */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* cleanup */
+  }
 });
 
 test('save - writes to config.json', () => {
@@ -121,7 +149,11 @@ test('save - writes to config.json', () => {
   assert.equal(parsed.BROWSER, 'firefox');
   assert.equal(parsed.PORT, '77777');
 
-  try { unlinkSync(path); } catch { /* cleanup */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* cleanup */
+  }
 });
 
 test('getAll - returns all keys', () => {
@@ -140,7 +172,11 @@ test('getAll - returns all keys', () => {
   assert.equal(all.BROWSER, 'firefox');
   assert.equal(all.MAX_LOGS, '99');
 
-  try { unlinkSync(path); } catch { /* cleanup */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* cleanup */
+  }
 });
 
 test('reset - reloads from disk', () => {
@@ -159,7 +195,11 @@ test('reset - reloads from disk', () => {
   svc.reset();
   assert.equal(svc.get('PORT'), 'disk-value');
 
-  try { unlinkSync(path); } catch { /* cleanup */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* cleanup */
+  }
 });
 
 test('config.json with bad JSON - uses defaults', () => {
@@ -172,7 +212,11 @@ test('config.json with bad JSON - uses defaults', () => {
   assert.equal(svc.get('PORT'), DEFAULT_CONFIG.PORT);
   restoreEnv('PORT');
 
-  try { unlinkSync(path); } catch { /* cleanup */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* cleanup */
+  }
 });
 
 test('validate - warns on negative PORT values', () => {
@@ -182,15 +226,21 @@ test('validate - warns on negative PORT values', () => {
 
   const warnings: string[] = [];
   const origWarn = console.warn;
-  console.warn = (msg: string) => { warnings.push(msg); };
+  console.warn = (msg: string) => {
+    warnings.push(msg);
+  };
   try {
     svc.validate();
-    assert.ok(warnings.some(w => w.includes('PORT') && w.includes('invalid')));
+    assert.ok(warnings.some((w) => w.includes('PORT') && w.includes('invalid')));
   } finally {
     console.warn = origWarn;
   }
 
-  try { unlinkSync(path); } catch { /* cleanup */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* cleanup */
+  }
 });
 
 test('load - warns on unknown config keys', () => {
@@ -199,13 +249,19 @@ test('load - warns on unknown config keys', () => {
 
   const warnings: string[] = [];
   const origWarn = console.warn;
-  console.warn = (msg: string) => { warnings.push(msg); };
+  console.warn = (msg: string) => {
+    warnings.push(msg);
+  };
   try {
     new ConfigService(path);
-    assert.ok(warnings.some(w => w.includes('Unknown key') && w.includes('FOOBAR')));
+    assert.ok(warnings.some((w) => w.includes('Unknown key') && w.includes('FOOBAR')));
   } finally {
     console.warn = origWarn;
   }
 
-  try { unlinkSync(path); } catch { /* cleanup */ }
+  try {
+    unlinkSync(path);
+  } catch {
+    /* cleanup */
+  }
 });

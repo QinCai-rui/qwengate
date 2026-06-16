@@ -1,6 +1,6 @@
 import type { RequestLogStore } from './logStore.ts';
 
-export type LogLevel = "debug" | "info" | "warn" | "error";
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 const LOG_LEVEL_RANK: Record<LogLevel, number> = {
   debug: 0,
   info: 1,
@@ -29,12 +29,7 @@ export class SystemLogger {
   protected systemListeners: Set<(entry: SystemLogEntry) => void> = new Set();
   protected systemIdCounter = 0;
 
-  log(
-    level: LogLevel,
-    category: string,
-    message: string,
-    metadata?: Record<string, unknown>,
-  ): void {
+  log(level: LogLevel, category: string, message: string, metadata?: Record<string, unknown>): void {
     const entry: SystemLogEntry = {
       id: `sys-${++this.systemIdCounter}`,
       timestamp: new Date().toISOString(),
@@ -44,43 +39,26 @@ export class SystemLogger {
       metadata,
     };
     this.systemEntries.unshift(entry);
-    if (this.systemEntries.length > MAX_SYSTEM_ENTRIES)
-      this.systemEntries.pop();
+    if (this.systemEntries.length > MAX_SYSTEM_ENTRIES) this.systemEntries.pop();
     for (const listener of this.systemListeners) {
       try {
         listener(entry);
       } catch (err) {
-        console.error("[SystemLogger] System log listener error:", err);
+        console.error('[SystemLogger] System log listener error:', err);
       }
     }
   }
-  debug(
-    category: string,
-    message: string,
-    metadata?: Record<string, unknown>,
-  ): void {
-    this.log("debug", category, message, metadata);
+  debug(category: string, message: string, metadata?: Record<string, unknown>): void {
+    this.log('debug', category, message, metadata);
   }
-  info(
-    category: string,
-    message: string,
-    metadata?: Record<string, unknown>,
-  ): void {
-    this.log("info", category, message, metadata);
+  info(category: string, message: string, metadata?: Record<string, unknown>): void {
+    this.log('info', category, message, metadata);
   }
-  warn(
-    category: string,
-    message: string,
-    metadata?: Record<string, unknown>,
-  ): void {
-    this.log("warn", category, message, metadata);
+  warn(category: string, message: string, metadata?: Record<string, unknown>): void {
+    this.log('warn', category, message, metadata);
   }
-  error(
-    category: string,
-    message: string,
-    metadata?: Record<string, unknown>,
-  ): void {
-    this.log("error", category, message, metadata);
+  error(category: string, message: string, metadata?: Record<string, unknown>): void {
+    this.log('error', category, message, metadata);
   }
   getSystemLogs(filter?: SystemLogFilter): SystemLogEntry[] {
     let result = this.systemEntries;
@@ -113,22 +91,17 @@ export function __registerLogStore(store: RequestLogStore): void {
 }
 
 /** Proxy-based lazy singleton — delegates to the real RequestLogStore once registered */
-export const logStore: RequestLogStore = new Proxy(
-  {} as RequestLogStore,
-  {
-    get(_, prop) {
-      if (!_logStore)
-        throw new Error("logStore accessed before initialization");
-      const store = _logStore as any;
-      const v = store[prop];
-      return typeof v === "function" ? v.bind(_logStore) : v;
-    },
-    set(_, prop, value) {
-      if (!_logStore)
-        throw new Error("logStore accessed before initialization");
-      const store = _logStore as any;
-      store[prop] = value;
-      return true;
-    },
+export const logStore: RequestLogStore = new Proxy({} as RequestLogStore, {
+  get(_, prop) {
+    if (!_logStore) throw new Error('logStore accessed before initialization');
+    const store = _logStore as any;
+    const v = store[prop];
+    return typeof v === 'function' ? v.bind(_logStore) : v;
   },
-);
+  set(_, prop, value) {
+    if (!_logStore) throw new Error('logStore accessed before initialization');
+    const store = _logStore as any;
+    store[prop] = value;
+    return true;
+  },
+});

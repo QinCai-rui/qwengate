@@ -1,9 +1,17 @@
 function fmtJson(raw) {
   if (!raw) return '';
   if (typeof raw === 'string') {
-    try { return JSON.stringify(JSON.parse(raw), null, 2); } catch(e) { return raw; }
+    try {
+      return JSON.stringify(JSON.parse(raw), null, 2);
+    } catch {
+      return raw;
+    }
   }
-  try { return JSON.stringify(raw, null, 2); } catch(e) { return String(raw); }
+  try {
+    return JSON.stringify(raw, null, 2);
+  } catch {
+    return String(raw);
+  }
 }
 
 function methodBadgeClass(method) {
@@ -61,7 +69,7 @@ function getFilters() {
   return {
     method: document.getElementById('methodFilter').value.toUpperCase(),
     status: document.getElementById('statusFilter').value,
-    category: document.getElementById('categoryFilter').value
+    category: document.getElementById('categoryFilter').value,
   };
 }
 
@@ -107,7 +115,9 @@ async function fetchNetworkEntries() {
 function renderNetworkEntries(entries) {
   var container = document.getElementById('netContainer');
   var filters = getFilters();
-  var filtered = entries.filter(function(e) { return matchesFilters(e, filters); });
+  var filtered = entries.filter(function (e) {
+    return matchesFilters(e, filters);
+  });
   var filteredCountEl = document.getElementById('filteredCount');
   if (filteredCountEl) {
     var total = entries.length;
@@ -140,19 +150,40 @@ function renderNetworkEntries(entries) {
     card.className = 'net-entry';
 
     /* ── Entry Header ── */
-    card.innerHTML = '<div class="net-entry-header" onclick="toggleEntry(this)">'
-      + '<span class="badge ' + methodBadgeClass(method) + '">' + escHtml(method.toUpperCase()) + '</span>'
-      + '<span class="net-url" title="' + escHtml(url) + '">' + escHtml(truncateUrl(url)) + '</span>'
-      + '<span class="net-meta">'
-      + (status != null ? '<span class="badge ' + statusBadgeClass(status) + '">' + status + '</span>' : '<span class="badge badge-neutral">\u2014</span>')
-      + ' <span class="phase-badge ' + phaseBadgeClass(phase) + '">' + escHtml(phase) + '</span>'
-      + '</span>'
-      + '<span class="net-duration ' + durationClass(duration) + '">' + (duration != null ? Math.round(duration) + 'ms' : '\u2014') + '</span>'
-      + '<span class="net-time">' + ts + '</span>'
-      + '</div>'
-      + '<div class="net-entry-body">'
-      + renderEntryDetail(e)
-      + '</div>';
+    card.innerHTML =
+      '<div class="net-entry-header" onclick="toggleEntry(this)">' +
+      '<span class="badge ' +
+      methodBadgeClass(method) +
+      '">' +
+      escHtml(method.toUpperCase()) +
+      '</span>' +
+      '<span class="net-url" title="' +
+      escHtml(url) +
+      '">' +
+      escHtml(truncateUrl(url)) +
+      '</span>' +
+      '<span class="net-meta">' +
+      (status != null
+        ? '<span class="badge ' + statusBadgeClass(status) + '">' + status + '</span>'
+        : '<span class="badge badge-neutral">\u2014</span>') +
+      ' <span class="phase-badge ' +
+      phaseBadgeClass(phase) +
+      '">' +
+      escHtml(phase) +
+      '</span>' +
+      '</span>' +
+      '<span class="net-duration ' +
+      durationClass(duration) +
+      '">' +
+      (duration != null ? Math.round(duration) + 'ms' : '\u2014') +
+      '</span>' +
+      '<span class="net-time">' +
+      ts +
+      '</span>' +
+      '</div>' +
+      '<div class="net-entry-body">' +
+      renderEntryDetail(e) +
+      '</div>';
 
     container.appendChild(card);
   }
@@ -163,7 +194,7 @@ function renderEntryDetail(entry) {
   var reqHeaders = (entry.request && entry.request.headers) || entry.requestHeaders;
   var reqBody = (entry.request && entry.request.bodyPreview) || entry.requestBody;
   var resHeaders = (entry.response && entry.response.headers) || entry.responseHeaders;
-  var resBody = entry.response ? entry.response.body : (entry.responseBody || null);
+  var resBody = entry.response ? entry.response.body : entry.responseBody || null;
   var stream = entry.stream;
   var timing = entry.timing;
   var cat = entry.category;
@@ -173,56 +204,82 @@ function renderEntryDetail(entry) {
   if (cat) metaParts.push('<span class="badge ' + categoryCssClass(cat) + '">' + escHtml(cat) + '</span>');
   if (email) metaParts.push('<span class="badge badge-neutral">' + escHtml(email) + '</span>');
   if (timing && timing.ttfb != null) metaParts.push('<span class="net-stat">TTFB: ' + Math.round(timing.ttfb) + 'ms</span>');
-  if (timing && timing.chunksPerSecond != null) metaParts.push('<span class="net-stat">' + timing.chunksPerSecond.toFixed(1) + 'ch/s</span>');
+  if (timing && timing.chunksPerSecond != null)
+    metaParts.push('<span class="net-stat">' + timing.chunksPerSecond.toFixed(1) + 'ch/s</span>');
 
   var html = '';
   if (metaParts.length > 0) {
-    html += '<div class="net-meta-row">'
-      + metaParts.join('')
-      + (stream && stream.totalChunks ? '<span class="net-stat">' + stream.totalChunks + ' chunks</span>' : '')
-      + '</div>';
+    html +=
+      '<div class="net-meta-row">' +
+      metaParts.join('') +
+      (stream && stream.totalChunks ? '<span class="net-stat">' + stream.totalChunks + ' chunks</span>' : '') +
+      '</div>';
   }
 
   html += '<div class="detail-grid">';
 
   /* Request Headers */
-  html += '<div class="detail-section">'
-    + '<div class="section-header"><span class="section-arrow">\u25b6</span> Request Headers</div>'
-    + '<div class="section-body"><pre>' + escHtml(reqHeaders ? JSON.stringify(reqHeaders, null, 2) : '(none)') + '</pre></div>'
-    + '</div>';
+  html +=
+    '<div class="detail-section">' +
+    '<div class="section-header"><span class="section-arrow">\u25b6</span> Request Headers</div>' +
+    '<div class="section-body"><pre>' +
+    escHtml(reqHeaders ? JSON.stringify(reqHeaders, null, 2) : '(none)') +
+    '</pre></div>' +
+    '</div>';
 
   /* Request Body */
-  html += '<div class="detail-section">'
-    + '<div class="section-header"><span class="section-arrow">\u25b6</span> Request Body</div>'
-    + '<div class="section-body"><pre>' + escHtml(reqBody ? fmtJson(reqBody) : '(empty)') + '</pre></div>'
-    + '</div>';
+  html +=
+    '<div class="detail-section">' +
+    '<div class="section-header"><span class="section-arrow">\u25b6</span> Request Body</div>' +
+    '<div class="section-body"><pre>' +
+    escHtml(reqBody ? fmtJson(reqBody) : '(empty)') +
+    '</pre></div>' +
+    '</div>';
 
   /* Response Headers */
-  html += '<div class="detail-section">'
-    + '<div class="section-header"><span class="section-arrow">\u25b6</span> Response Headers</div>'
-    + '<div class="section-body"><pre>' + escHtml(resHeaders ? JSON.stringify(resHeaders, null, 2) : '(none)') + '</pre></div>'
-    + '</div>';
+  html +=
+    '<div class="detail-section">' +
+    '<div class="section-header"><span class="section-arrow">\u25b6</span> Response Headers</div>' +
+    '<div class="section-body"><pre>' +
+    escHtml(resHeaders ? JSON.stringify(resHeaders, null, 2) : '(none)') +
+    '</pre></div>' +
+    '</div>';
 
   /* Response Body */
-  html += '<div class="detail-section">'
-    + '<div class="section-header"><span class="section-arrow">\u25b6</span> Response Body</div>'
-    + '<div class="section-body"><pre>' + escHtml(resBody ? fmtJson(resBody) : '(empty)') + '</pre></div>'
-    + '</div>';
+  html +=
+    '<div class="detail-section">' +
+    '<div class="section-header"><span class="section-arrow">\u25b6</span> Response Body</div>' +
+    '<div class="section-body"><pre>' +
+    escHtml(resBody ? fmtJson(resBody) : '(empty)') +
+    '</pre></div>' +
+    '</div>';
 
   /* Stream chunks if present */
   if (stream && stream.chunks && stream.chunks.length > 0) {
-    html += '<div class="detail-section">'
-      + '<div class="section-header"><span class="section-arrow">\u25b6</span> Stream Chunks (' + stream.totalChunks + ' total, showing ' + stream.chunks.length + ')</div>'
-      + '<div class="section-body"><pre>' + escHtml(stream.chunks.join('\\n')) + '</pre></div>'
-      + '</div>';
+    html +=
+      '<div class="detail-section">' +
+      '<div class="section-header"><span class="section-arrow">\u25b6</span> Stream Chunks (' +
+      stream.totalChunks +
+      ' total, showing ' +
+      stream.chunks.length +
+      ')</div>' +
+      '<div class="section-body"><pre>' +
+      escHtml(stream.chunks.join('\\n')) +
+      '</pre></div>' +
+      '</div>';
   }
 
   /* Errors if present */
   if (entry.errors && entry.errors.length > 0) {
-    html += '<div class="detail-section">'
-      + '<div class="section-header"><span class="section-arrow">\u25b6</span> Errors (' + entry.errors.length + ')</div>'
-      + '<div class="section-body" style="background:var(--danger-soft)"><pre style="color:var(--danger)">' + escHtml(entry.errors.join('\\n')) + '</pre></div>'
-      + '</div>';
+    html +=
+      '<div class="detail-section">' +
+      '<div class="section-header"><span class="section-arrow">\u25b6</span> Errors (' +
+      entry.errors.length +
+      ')</div>' +
+      '<div class="section-body" style="background:var(--danger-soft)"><pre style="color:var(--danger)">' +
+      escHtml(entry.errors.join('\\n')) +
+      '</pre></div>' +
+      '</div>';
   }
 
   html += '</div>';

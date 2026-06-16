@@ -104,7 +104,7 @@ The server starts on [http://localhost:26405](http://localhost:26405).
 
 Qwen Gate works with any tool that speaks OpenAI's API: **Claude Code, OpenCode, Qwen Code, Cursor**, standard OpenAI SDKs (Python, Node.js, curl), and anything else using the `/v1/chat/completions` format — just point it at `http://localhost:26405/v1`.
 
-> **Tip:** Use `model: "qwen3.7-max"` for the latest Qwen model. Available models: `qwen3-max`, `qwen3.7-max`, `qwen3-plus`, `qwen-turbo`, `qwen3`.
+> **Tip:** Use `model: "qwen3-7-max"` for the latest Qwen model. Available models: `qwen3-7-max`, `qwen3-6-plus`, `qwen3-max`, `qwen3-coder`, `qwen3-5-plus`, `qwen3-5-flash`, and more.
 
 ### Chat Completion
 
@@ -162,7 +162,7 @@ All settings in `config.json`. Key options:
 | ------------------------- | ------------ | ----------------------------------------------- |
 | `PORT`                    | `"26405"`    | Server port                                     |
 | `API_KEY`                 | `""`         | Bearer token for API auth (empty = no auth)     |
-| `BROWSER`                 | `"chromium"` | Browser engine: `chromium`, `firefox`, `webkit` |
+| `BROWSER`                 | `"chromium"` | Browser engine: `chromium`, `firefox`, `webkit`, `chrome`, `edge` |
 | `TOOL_CALLING`            | `"true"`     | Enable tool call parsing                        |
 | `CLEAN_OUTPUT`            | `"true"`     | Strip internal artifacts from responses         |
 | `STREAMING_MODE`           | `"auto"`     | Streaming mode: `auto`, `on`, `off`             |
@@ -171,7 +171,7 @@ All settings in `config.json`. Key options:
 | `RATE_LIMIT_COOLDOWN_MS`  | `"120000"`   | Cooldown after rate limit (2 min)               |
 | `RETRY_MAX_ATTEMPTS`      | `"3"`        | Max retry attempts                              |
 
-Full reference: [docs/API.md](docs/API.md) and `config.example.jsonc`.
+> **Note:** This is a partial list of 10 commonly-used keys. `config.example.jsonc` has the full reference with all 23 keys and descriptions.
 
 ## Architecture
 
@@ -207,7 +207,7 @@ Commands:
 
 Options:
   --port <n>     Override port
-  --browser <e>  Browser engine: chromium, firefox, chrome, edge
+  --browser <e>  Browser engine: chromium, firefox, webkit, chrome, edge
   --host <addr>  Bind address
 
 Account management is done via the web dashboard → Accounts page.
@@ -255,6 +255,7 @@ src/
 ├── models.json              Model definitions (context lengths, modalities)
 ├── routes/                  API route handlers
 │   ├── chat.ts              Chat completions dispatch
+│   ├── chatHelpers.ts       Chat request orchestration helpers
 │   ├── chatStreaming.ts     Streaming SSE logic
 │   ├── chatNonStreaming.ts  Non-streaming responses
 │   ├── chatHelpersCore.ts   Core chat response handling
@@ -266,8 +267,13 @@ src/
 │   ├── accounts.ts          Account CRUD API
 │   ├── config.ts            Config read/write API
 │   └── dashboard/           Web dashboard (vanilla HTML/JS)
+│       ├── accounts.ts      Account management page
 │       ├── dashboardRoutes.ts  Dashboard routing hub
+│       ├── logs.ts          Request log page
 │       ├── monitor.ts       Real-time monitoring page
+│       ├── network.ts       Network debug page
+│       ├── overview.ts      Dashboard overview/KPI page
+│       ├── settings.ts      Settings page
 │       ├── sidebar.ts       Sidebar navigation
 │       └── public/          Static dashboard assets (JS/CSS/SVG)
 ├── services/                Business logic
@@ -307,6 +313,8 @@ src/
 │   ├── version.ts           Version information
 │   ├── xmlStripper.ts       XML/tool call artifact removal
 │   └── xmlStripper.test.ts  XML stripper tests
+├── tests/                   Integration tests
+├── types/                   TypeScript interfaces
 └── middleware/
     └── rateLimit.ts         Token bucket rate limiter
 ```

@@ -6,9 +6,8 @@
  *
  * Data is stored in .qwen/monitor.json as a bounded rolling buffer.
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { join } from "path";
-import { projectPath } from "../utils/paths.ts";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { projectPath } from '../utils/paths.ts';
 
 // ── Types ──
 
@@ -21,7 +20,7 @@ export interface MonitorEntry {
   success: boolean;
   latencyMs: number | null;
   error: string | null;
-  mode: "streaming" | "non-streaming";
+  mode: 'streaming' | 'non-streaming';
 }
 
 export interface ModeStats {
@@ -93,8 +92,8 @@ function computeLatencyStats(latencies: number[]): {
 
 function computeModeStats(entries: MonitorEntry[]): ModeStats | null {
   if (!entries.length) return null;
-  const errors = entries.filter(e => !e.success);
-  const lats = entries.filter(e => e.latencyMs != null).map(e => e.latencyMs as number);
+  const errors = entries.filter((e) => !e.success);
+  const lats = entries.filter((e) => e.latencyMs != null).map((e) => e.latencyMs as number);
   return {
     totalRequests: entries.length,
     successCount: entries.length - errors.length,
@@ -116,7 +115,7 @@ class MonitorStore {
   private dirty = false;
 
   constructor(maxEntries = DEFAULT_MAX_ENTRIES) {
-    this.storePath = projectPath(".qwen", "monitor.json");
+    this.storePath = projectPath('.qwen', 'monitor.json');
     this.maxEntries = maxEntries;
     this.load();
   }
@@ -139,7 +138,7 @@ class MonitorStore {
       success: params.success,
       latencyMs: params.latencyMs,
       error: params.error || null,
-      mode: params.stream ? "streaming" : "non-streaming",
+      mode: params.stream ? 'streaming' : 'non-streaming',
     };
 
     this.entries.unshift(entry);
@@ -160,7 +159,7 @@ class MonitorStore {
     // Group by account email
     const byAccount = new Map<string, MonitorEntry[]>();
     for (const entry of all) {
-      const email = entry.accountEmail || "unknown";
+      const email = entry.accountEmail || 'unknown';
       let group = byAccount.get(email);
       if (!group) {
         group = [];
@@ -172,25 +171,23 @@ class MonitorStore {
     // Per-account metrics
     const accounts: AccountMetrics[] = [];
     for (const [email, entries] of byAccount) {
-      const errors = entries.filter(e => !e.success);
-      const lats = entries.filter(e => e.latencyMs != null).map(e => e.latencyMs as number);
+      const errors = entries.filter((e) => !e.success);
+      const lats = entries.filter((e) => e.latencyMs != null).map((e) => e.latencyMs as number);
       const latStats = computeLatencyStats(lats);
-      const streamingEntries = entries.filter(e => e.stream);
-      const nonStreamingEntries = entries.filter(e => !e.stream);
+      const streamingEntries = entries.filter((e) => e.stream);
+      const nonStreamingEntries = entries.filter((e) => !e.stream);
 
       // Collect unique recent errors
       const errSet = new Set<string>();
       for (const e of errors) {
         if (e.error) {
-          const truncated = e.error.length > 120 ? e.error.substring(0, 120) + "..." : e.error;
+          const truncated = e.error.length > 120 ? e.error.substring(0, 120) + '...' : e.error;
           errSet.add(truncated);
         }
       }
 
       // Find last activity timestamp
-      const sortedByTime = [...entries].sort(
-        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      );
+      const sortedByTime = [...entries].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
       accounts.push({
         email,
@@ -221,32 +218,32 @@ class MonitorStore {
     });
 
     // Totals
-    const totalErrors = all.filter(e => !e.success).length;
-    const allLatencies = all.filter(e => e.latencyMs != null).map(e => e.latencyMs as number);
+    const totalErrors = all.filter((e) => !e.success).length;
+    const allLatencies = all.filter((e) => e.latencyMs != null).map((e) => e.latencyMs as number);
     const totalLatStats = computeLatencyStats(allLatencies);
 
     // Mode comparison
-    const streamAll = all.filter(e => e.stream);
-    const nonStreamAll = all.filter(e => !e.stream);
+    const streamAll = all.filter((e) => e.stream);
+    const nonStreamAll = all.filter((e) => !e.stream);
 
     const streamModeStats: ModeStats = {
       totalRequests: streamAll.length,
-      successCount: streamAll.filter(e => e.success).length,
-      errorCount: streamAll.filter(e => !e.success).length,
+      successCount: streamAll.filter((e) => e.success).length,
+      errorCount: streamAll.filter((e) => !e.success).length,
       avgLatencyMs: null,
     };
-    const streamLats = streamAll.filter(e => e.latencyMs != null).map(e => e.latencyMs as number);
+    const streamLats = streamAll.filter((e) => e.latencyMs != null).map((e) => e.latencyMs as number);
     if (streamLats.length) {
       streamModeStats.avgLatencyMs = Math.round(streamLats.reduce((a, b) => a + b, 0) / streamLats.length);
     }
 
     const nonStreamModeStats: ModeStats = {
       totalRequests: nonStreamAll.length,
-      successCount: nonStreamAll.filter(e => e.success).length,
-      errorCount: nonStreamAll.filter(e => !e.success).length,
+      successCount: nonStreamAll.filter((e) => e.success).length,
+      errorCount: nonStreamAll.filter((e) => !e.success).length,
       avgLatencyMs: null,
     };
-    const nonStreamLats = nonStreamAll.filter(e => e.latencyMs != null).map(e => e.latencyMs as number);
+    const nonStreamLats = nonStreamAll.filter((e) => e.latencyMs != null).map((e) => e.latencyMs as number);
     if (nonStreamLats.length) {
       nonStreamModeStats.avgLatencyMs = Math.round(nonStreamLats.reduce((a, b) => a + b, 0) / nonStreamLats.length);
     }
@@ -255,7 +252,7 @@ class MonitorStore {
     const errorCounts = new Map<string, number>();
     for (const e of all) {
       if (e.error) {
-        const normalized = e.error.length > 100 ? e.error.substring(0, 100) + "..." : e.error;
+        const normalized = e.error.length > 100 ? e.error.substring(0, 100) + '...' : e.error;
         errorCounts.set(normalized, (errorCounts.get(normalized) || 0) + 1);
       }
     }
@@ -265,12 +262,8 @@ class MonitorStore {
       .map(([message, count]) => ({ message, count }));
 
     // Time range
-    const sorted = [...all].sort(
-      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
-    const timeRange = sorted.length
-      ? { from: sorted[0].timestamp, to: sorted[sorted.length - 1].timestamp }
-      : null;
+    const sorted = [...all].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    const timeRange = sorted.length ? { from: sorted[0].timestamp, to: sorted[sorted.length - 1].timestamp } : null;
 
     return {
       accounts,
@@ -299,7 +292,7 @@ class MonitorStore {
    */
   getRecentEntries(hours = 24): MonitorEntry[] {
     const cutoff = Date.now() - hours * 60 * 60 * 1000;
-    return this.entries.filter(e => new Date(e.timestamp).getTime() >= cutoff);
+    return this.entries.filter((e) => new Date(e.timestamp).getTime() >= cutoff);
   }
 
   /** Count of entries currently stored. */
@@ -322,13 +315,13 @@ class MonitorStore {
 
   private load(): void {
     try {
-      const dir = projectPath(".qwen");
+      const dir = projectPath('.qwen');
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       if (!existsSync(this.storePath)) {
-        writeFileSync(this.storePath, "[]", "utf-8");
+        writeFileSync(this.storePath, '[]', 'utf-8');
         return;
       }
-      const raw = readFileSync(this.storePath, "utf-8");
+      const raw = readFileSync(this.storePath, 'utf-8');
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         this.entries = parsed.slice(0, this.maxEntries);
@@ -340,11 +333,11 @@ class MonitorStore {
 
   private save(): void {
     try {
-      const dir = projectPath(".qwen");
+      const dir = projectPath('.qwen');
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      writeFileSync(this.storePath, JSON.stringify(this.entries), "utf-8");
+      writeFileSync(this.storePath, JSON.stringify(this.entries), 'utf-8');
     } catch (err: any) {
-      console.error("[MonitorStore] Failed to save:", err.message);
+      console.error('[MonitorStore] Failed to save:', err.message);
     }
   }
 }

@@ -1,4 +1,4 @@
-import { TOOL_RESULT_KEYWORDS, ALL_TOOL_KEYWORDS } from './tagNames.ts';
+import { ALL_TOOL_KEYWORDS, TOOL_RESULT_KEYWORDS } from './tagNames.ts';
 
 /**
  * Tool echo patterns — strip lines where the model echoes tool results
@@ -17,7 +17,9 @@ export function stripToolCallArtifacts(text: string): string {
   // Strip orphaned <tool_result without matching close
   const orphanOpenRe = new RegExp(`<${TOOL_RESULT_KEYWORDS[0]}(?:\\s[^>]*)?>`);
   const unmatchedOpenIdx = text.search(orphanOpenRe);
-  if (unmatchedOpenIdx !== -1) { text = text.substring(0, unmatchedOpenIdx); }
+  if (unmatchedOpenIdx !== -1) {
+    text = text.substring(0, unmatchedOpenIdx);
+  }
   // Strip residual </tool_result> without matching open
   const orphanCloseRe = new RegExp(`<\\/${TOOL_RESULT_KEYWORDS[0]}\\s*>`, 'g');
   text = text.replace(orphanCloseRe, '');
@@ -48,16 +50,22 @@ export function stripToolEcho(text: string): string {
   const filteredLines: string[] = [];
   for (const line of originalLines) {
     const trimmed = line.trim();
-    if (!trimmed) { filteredLines.push(line); continue; }
+    if (!trimmed) {
+      filteredLines.push(line);
+      continue;
+    }
     let isEcho = false;
     for (const pattern of TOOL_ECHO_PATTERNS) {
-      if (pattern.test(trimmed)) { isEcho = true; break; }
+      if (pattern.test(trimmed)) {
+        isEcho = true;
+        break;
+      }
     }
-    if (!isEcho) { filteredLines.push(line); }
+    if (!isEcho) {
+      filteredLines.push(line);
+    }
   }
   result = filteredLines.join('\n');
   result = result.replace(/\n{3,}/g, '\n\n');
   return result;
 }
-
-

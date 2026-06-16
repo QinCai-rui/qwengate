@@ -4,14 +4,14 @@
  * Handles account CRUD, discovery, persistence, and the account file watcher.
  */
 import crypto from 'crypto';
+import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from 'fs';
+import os from 'os';
 import path from 'path';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, watch } from 'fs';
-import { loginFresh, saveCookies, accounts, type AccountEntry } from "./auth.ts";
-import { configureAccount } from './qwenModels.ts';
+import { projectPath } from '../utils/paths.ts';
+import { type AccountEntry, accounts, loginFresh } from './auth.ts';
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
-import { projectPath } from '../utils/paths.ts';
-import os from 'os';
+import { configureAccount } from './qwenModels.ts';
 
 const ACCOUNTS_FILE = projectPath('.qwen', 'accounts.json');
 const QWEN_DIR = projectPath('.qwen');
@@ -19,7 +19,10 @@ const QWEN_DIR = projectPath('.qwen');
 const OLD_ACCOUNTS_FILE = projectPath('qwen_profile', 'accounts.json');
 
 function getProfileDirForEmail(email: string): string {
-  const safe = email.toLowerCase().trim().replace(/[^a-z0-9]/g, '_');
+  const safe = email
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]/g, '_');
   return projectPath('.qwen', 'browser-profiles', safe);
 }
 
@@ -97,7 +100,7 @@ const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
 
 function getEncryptionKey(): string {
-  const apiKey = config.get("API_KEY");
+  const apiKey = config.get('API_KEY');
   if (apiKey) return apiKey;
   const machineId = `${os.hostname()}-${projectPath('.')}`;
   return crypto.createHash('sha256').update(machineId).digest('hex');
@@ -161,8 +164,8 @@ export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
     mkdirSync(dir, { recursive: true });
   }
   const data: PersistedAccountData[] = accounts
-    .filter(a => a.password)
-    .map(a => ({
+    .filter((a) => a.password)
+    .map((a) => ({
       email: a.email,
       password: encryptPassword(a.password),
       ...(a.throttledUntil > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
@@ -175,22 +178,21 @@ export function loadAccountsFromFile(): Array<{ email: string; password: string;
       return [];
     }
     const data: PersistedAccountData[] = JSON.parse(readFileSync(ACCOUNTS_FILE, 'utf-8'));
-    return data.filter(d => d.email && d.password).map(d => ({
-      email: d.email,
-      password: decryptPassword(d.password),
-      throttledUntil: d.throttledUntil,
-    }));
+    return data
+      .filter((d) => d.email && d.password)
+      .map((d) => ({
+        email: d.email,
+        password: decryptPassword(d.password),
+        throttledUntil: d.throttledUntil,
+      }));
   } catch (err: any) {
     logStore.log('error', 'auth', `Failed to load accounts file: ${err.message}`);
     return [];
   }
 }
-export async function addAccount(
-  email: string,
-  password: string,
-): Promise<{ loginSucceeded: boolean; loginError?: string }> {
+export async function addAccount(email: string, password: string): Promise<{ loginSucceeded: boolean; loginError?: string }> {
   const normalizedEmail = email.toLowerCase().trim();
-  const existing = accounts.find(a => a.email.toLowerCase().trim() === normalizedEmail);
+  const existing = accounts.find((a) => a.email.toLowerCase().trim() === normalizedEmail);
   if (existing) {
     throw new Error(`Account with email ${normalizedEmail} already exists`);
   }
@@ -219,8 +221,8 @@ export async function addAccount(
     const profileState = await loadCookiesFromProfile(normalizedEmail);
     if (profileState) {
       entry.state = profileState;
-      await configureAccount(normalizedEmail).catch(err =>
-        logStore.log('error', 'account', `Failed to configure ${normalizedEmail}: ${err.message}`)
+      await configureAccount(normalizedEmail).catch((err) =>
+        logStore.log('error', 'account', `Failed to configure ${normalizedEmail}: ${err.message}`),
       );
       return { loginSucceeded: true };
     }
@@ -230,21 +232,19 @@ export async function addAccount(
   const newState = await loginFresh(normalizedEmail, password);
   if (newState) {
     entry.state = newState;
-    await configureAccount(normalizedEmail).catch(err =>
-        logStore.log('error', 'account', `Failed to configure ${normalizedEmail}: ${err.message}`)
-      );
-      return { loginSucceeded: true };
-    } else {
-      const msg = `Login failed: wrong password or CAPTCHA required for ${normalizedEmail}. Check system logs.`;
-      logStore.log('warn', 'auth', msg);
+    await configureAccount(normalizedEmail).catch((err) =>
+      logStore.log('error', 'account', `Failed to configure ${normalizedEmail}: ${err.message}`),
+    );
+    return { loginSucceeded: true };
+  } else {
+    const msg = `Login failed: wrong password or CAPTCHA required for ${normalizedEmail}. Check system logs.`;
+    logStore.log('warn', 'auth', msg);
     return { loginSucceeded: false, loginError: msg };
   }
 }
-export async function removeAccount(
-  email: string,
-): Promise<void> {
+export async function removeAccount(email: string): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
-  const index = accounts.findIndex(a => a.email.toLowerCase().trim() === normalizedEmail);
+  const index = accounts.findIndex((a) => a.email.toLowerCase().trim() === normalizedEmail);
   if (index === -1) {
     throw new Error(`Account with email ${normalizedEmail} not found`);
   }
@@ -270,8 +270,8 @@ export async function reloadAccounts(): Promise<void> {
     return;
   }
   const discovered = discoverSavedAccounts();
-  const discoveredEmails = new Set(discovered.map(d => d.email.toLowerCase().trim()));
-  const existingEmails = new Set(accounts.map(a => a.email.toLowerCase().trim()));
+  const discoveredEmails = new Set(discovered.map((d) => d.email.toLowerCase().trim()));
+  const existingEmails = new Set(accounts.map((a) => a.email.toLowerCase().trim()));
   let added = 0;
   let removed = 0;
   for (const d of discovered) {
@@ -331,14 +331,16 @@ export function setupAccountWatcher(): void {
       if (reloadDebounceTimer) clearTimeout(reloadDebounceTimer);
       reloadDebounceTimer = setTimeout(() => {
         reloadDebounceTimer = null;
-        reloadAccounts().catch(err => {
+        reloadAccounts().catch((err) => {
           logStore.log('error', 'auth', `Hot-reload failed: ${err.message}`);
         });
       }, 500);
     });
     accountWatcher.on('error', (err: any) => {
       logStore.log('error', 'auth', `Account watcher error: ${err.message}`);
-      try { accountWatcher?.close(); } catch {
+      try {
+        accountWatcher?.close();
+      } catch {
         // non-blocking: watcher may already be closed
       }
       accountWatcher = null;
@@ -350,7 +352,9 @@ export function setupAccountWatcher(): void {
       }, 10000);
       watcherRetryTimer.unref();
     });
-    setTimeout(() => { watcherReady = true; }, 2000);
+    setTimeout(() => {
+      watcherReady = true;
+    }, 2000);
   } catch (err: any) {
     logStore.log('error', 'auth', `Failed to set up account watcher: ${err.message}`);
   }
@@ -391,7 +395,7 @@ export async function pickAccount(): Promise<AccountEntry | null> {
       logStore.log('warn', 'auth', `All ${accounts.length} accounts throttled — returning null`);
       return null;
     }
-    const pool = available.filter(a => a.inFlight === 0);
+    const pool = available.filter((a) => a.inFlight === 0);
     const candidates = pool.length > 0 ? pool : available;
     // Single-pass O(N) min-find instead of O(N log N) sort
     let bestIdx = 0;
@@ -460,7 +464,7 @@ export function getAccountStats(): Array<{
   totalRequests: number;
 }> {
   const now = Date.now();
-  return accounts.map(a => ({
+  return accounts.map((a) => ({
     email: a.email,
     authenticated: a.state !== null,
     throttled: a.throttledUntil > now,
@@ -479,7 +483,7 @@ export function getAvailableCount(): number {
   return accounts.filter(isAvailable).length;
 }
 export function getAllAccountEmails(): string[] {
-  return accounts.map(a => a.email);
+  return accounts.map((a) => a.email);
 }
 export function getAccounts(): readonly AccountEntry[] {
   return [...accounts];

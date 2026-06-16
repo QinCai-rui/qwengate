@@ -176,8 +176,8 @@ Runs `bun src/index.tsx` directly (no build step needed — Bun runs TypeScript 
 ```bash
 bun run scripts/setup.js   # Run the interactive setup wizard
 bun run src/cli.ts         # Launch the CLI (qg)
-bun src/cli.ts login       # CLI login shortcut
 bun src/cli.ts restart     # CLI restart
+bun src/cli.ts help        # CLI help
 bun cluster                # Multi-core cluster mode
 ```
 
@@ -512,16 +512,15 @@ app.route('/api/hello', helloRouter);
 
 ```typescript
 // src/routes/hello.test.ts
-import test from 'node:test';
-import assert from 'node:assert';
+import { test, expect } from 'bun:test';
 import { helloRouter } from './hello.ts';
 
 test('GET /api/hello returns greeting', async () => {
   const req = new Request('http://localhost/');
   const res = await helloRouter.fetch(req);
-  assert.strictEqual(res.status, 200);
+  expect(res.status).toBe(200);
   const body = await res.json();
-  assert.strictEqual(body.message, 'Hello from the new endpoint!');
+  expect(body.message).toBe('Hello from the new endpoint!');
 });
 ```
 
@@ -616,13 +615,12 @@ import './tools/myTool.ts';
 
 ```typescript
 // src/tools/myTool.test.ts
-import test from 'node:test';
-import assert from 'node:assert';
+import { test, expect } from 'bun:test';
 import { registry } from './registry.ts';
 
 test('my_custom_tool does what it should', async () => {
   const result = await registry.execute('my_custom_tool', { input1: 'test' }, {} as any);
-  assert.ok(result);
+  expect(result).toBeTruthy();
   // ... more assertions
 });
 ```

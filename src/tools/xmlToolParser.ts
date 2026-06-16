@@ -27,12 +27,13 @@ export function parseXmlToolCalls(text: string): { toolCalls: ParsedXmlToolCall[
   let cleanedText = text;
 
   // Fast path: skip the expensive regex exec loop when there's no tool call content
-  const hasToolCallStart = TOOL_CALL_KEYWORDS.some(kw => text.includes(`<${kw}=`));
+  const hasToolCallStart = TOOL_CALL_KEYWORDS.some((kw) => text.includes(`<${kw}=`));
   if (!hasToolCallStart) return { toolCalls, cleanedText };
 
   // Semantics: <keyword=NAME...chars...> body </keyword>
   // Matches the opening <keyword=, captures until first >, then lazily until </keyword> or end.
-  const re = new RegExp(FUNCTION_BLOCK_RE.source, 'g');
+  FUNCTION_BLOCK_RE.lastIndex = 0;
+  const re = FUNCTION_BLOCK_RE;
   const sections: string[] = [];
   let lastIdx = 0;
   let match: RegExpExecArray | null;
@@ -50,7 +51,8 @@ export function parseXmlToolCalls(text: string): { toolCalls: ParsedXmlToolCall[
     const body = match[0].slice(match[0].indexOf('>') + 1, closingIndex);
 
     const parameters: Record<string, string> = {};
-    const paramRe = new RegExp(PARAM_RE.source, 'g');
+    PARAM_RE.lastIndex = 0;
+    const paramRe = PARAM_RE;
     let pm: RegExpExecArray | null;
     while ((pm = paramRe.exec(body)) !== null) {
       parameters[pm[1].trim()] = pm[2].trim();
@@ -84,16 +86,11 @@ const [TOOL_MARKUP_RE, EXCESS_NEWLINES_RE] = (() => {
     // 4. Opening/closing tag
     markupParts.push(`<\\/?${kw}>`);
   }
-  return [
-    new RegExp(markupParts.join('|'), 'g'),
-    /\n{3,}/g,
-  ];
+  return [new RegExp(markupParts.join('|'), 'g'), /\n{3,}/g];
 })();
 
 function stripRemainingXmlMarkup(text: string): string {
-  return text
-    .replace(TOOL_MARKUP_RE, '')
-    .replace(EXCESS_NEWLINES_RE, '\n\n');
+  return text.replace(TOOL_MARKUP_RE, '').replace(EXCESS_NEWLINES_RE, '\n\n');
 }
 
 export function cleanTextOfXmlArtifacts(text: string): { toolCalls: ParsedXmlToolCall[]; cleanedText: string } {
@@ -102,13 +99,20 @@ export function cleanTextOfXmlArtifacts(text: string): { toolCalls: ParsedXmlToo
   return { toolCalls, cleanedText: fullyCleaned };
 }
 
-export function xmlToolCallToParsed(block: ParsedXmlToolCall, _index: number): { id: string; name: string; arguments: Record<string, unknown> } {
+export function xmlToolCallToParsed(
+  block: ParsedXmlToolCall,
+  _index: number,
+): { id: string; name: string; arguments: Record<string, unknown> } {
   const args: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(block.parameters)) {
-    try { args[key] = JSON.parse(value); } catch { args[key] = value; }
+    try {
+      args[key] = JSON.parse(value);
+    } catch {
+      args[key] = value;
+    }
   }
   const rawName = block.name;
-  const name = rawName.startsWith("★-") ? rawName.slice(2) : rawName;
+  const name = rawName.startsWith('★-') ? rawName.slice(2) : rawName;
   return {
     id: `call_${crypto.randomUUID()}`,
     name,

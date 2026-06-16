@@ -1,29 +1,14 @@
-import {
-  parseQwenErrorPayload,
-  getSnapshotDelta,
-  checkAmplificationGuard,
-  type AmplificationGuardState,
-} from "./chatHelpers.ts";
+import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
-import { parseXmlToolCalls, cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
-import {
-  writeEvent,
-  writeReasoningEvent,
-  makeChoice,
-  buildChunkEvent,
-  buildUsage,
-} from "./writeHelpers.ts";
+import { cleanTextOfXmlArtifacts, parseXmlToolCalls } from '../tools/xmlToolParser.ts';
+import { type AmplificationGuardState, checkAmplificationGuard, getSnapshotDelta, parseQwenErrorPayload } from './chatHelpers.ts';
+import { filterContentPipeline, processStreamData, type StreamProcessingCtx, type StreamProcessingState } from './chatStreamingHelpers.ts';
 import { checkFinalAmplification, scheduleCleanup } from './cleanupHelpers.ts';
-import {
-  processStreamData,
-  filterContentPipeline,
-  type StreamProcessingState,
-  type StreamProcessingCtx,
-} from './chatStreamingHelpers.ts';
+import { buildChunkEvent, buildUsage, makeChoice, writeEvent, writeReasoningEvent } from './writeHelpers.ts';
 
 /** Shared TextDecoder — stateless, safe to reuse across streams */
 export const sharedDecoder = new TextDecoder();
-const IDLE_TIMEOUT_MS = Math.max(10_000, parseInt(process.env.STREAM_IDLE_TIMEOUT_MS || '') || 45_000);
+const IDLE_TIMEOUT_MS = Math.max(10_000, parseInt(config.get('STREAM_IDLE_TIMEOUT_MS', '60000')));
 
 export interface StreamLoopResult {
   buffer: string;
@@ -44,20 +29,27 @@ export async function runStreamLoop(
 
   while (true) {
     if (streamDone) break;
-    if (c.req.raw?.signal?.aborted) { reader.cancel(); break; }
+    if (c.req.raw?.signal?.aborted) {
+      reader.cancel();
+      break;
+    }
 
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     let readResult: Awaited<ReturnType<typeof reader.read>>;
+    let idleTimedOut = false;
     try {
       readResult = await Promise.race([
         reader.read(),
         new Promise<any>((_, reject) => {
-          idleTimer = setTimeout(() => reject(new Error(`Upstream stream idle timeout — no data for ${IDLE_TIMEOUT_MS / 1000}s`)), IDLE_TIMEOUT_MS);
+          idleTimer = setTimeout(() => {
+            idleTimedOut = true;
+            reject(new Error(`Upstream stream idle timeout — no data for ${IDLE_TIMEOUT_MS / 1000}s`));
+          }, IDLE_TIMEOUT_MS);
         }),
       ]);
     } catch (timeoutErr) {
       if (idleTimer) clearTimeout(idleTimer);
-      reader.cancel();
+      if (!idleTimedOut) await reader.cancel();
       return { buffer: bufferRef.text, nextParentId, error: (timeoutErr as Error).message };
     }
     if (idleTimer) clearTimeout(idleTimer);
@@ -83,7 +75,10 @@ export async function runStreamLoop(
         const chunk = JSON.parse(dataStr);
 
         const result = await processStreamData(chunk, streamState, streamCtx);
-        if (result === 'break_stream') { streamDone = true; break; }
+        if (result === 'break_stream') {
+          streamDone = true;
+          break;
+        }
       } catch (e) {
         console.error('[Chat] Streaming: parse error on chunk, ignoring partial:', (e as Error)?.message, 'raw:', dataStr.slice(0, 200));
       }
@@ -118,9 +113,17 @@ export async function handlePostStreamCompletion(
   },
 ): Promise<void> {
   const {
-    streamWriter, completionId, model, streamState, ampState,
-    logId, resolvedEmail, emittedToolCallCount,
-    buffer, enableContentFiltering, includeUsage,
+    streamWriter,
+    completionId,
+    model,
+    streamState,
+    ampState,
+    logId,
+    resolvedEmail,
+    emittedToolCallCount,
+    buffer,
+    enableContentFiltering,
+    includeUsage,
   } = args;
   const { reader, heartbeatInterval, chatId, sessionHeaders, email, sessionPool } = cleanup;
 
@@ -131,15 +134,16 @@ export async function handlePostStreamCompletion(
       await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ content: cleanErrorMessage })]));
       await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({}, 'stop')]));
       await streamWriter.write('data: [DONE]\n\n');
-      logStore.updateEntry(logId, entry => { entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' }; entry.finalResponse.finishReason = 'upstream_error'; });
+      logStore.updateEntry(logId, (entry) => {
+        entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
+        entry.finalResponse.finishReason = 'upstream_error';
+      });
       logStore.finalizeRequest(logId);
       return;
     }
 
     // Count tool calls from the final assembled content
-    const finalToolCalls = streamState.lastFullContent
-      ? parseXmlToolCalls(streamState.lastFullContent).toolCalls.length
-      : 0;
+    const finalToolCalls = streamState.lastFullContent ? parseXmlToolCalls(streamState.lastFullContent).toolCalls.length : 0;
     const effectiveToolCallCount = Math.max(emittedToolCallCount, finalToolCalls);
 
     // Populate parsedToolCalls from full accumulated content (per-chunk extraction
@@ -148,7 +152,7 @@ export async function handlePostStreamCompletion(
       const parsed = parseXmlToolCalls(streamState.lastFullContent).toolCalls;
       // Avoid double-counting: only add tool calls that weren't already emitted
       for (const tc of parsed.slice(emittedToolCallCount)) {
-        logStore.updateEntry(logId, entry => {
+        logStore.updateEntry(logId, (entry) => {
           entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.parameters) });
         });
       }
@@ -169,7 +173,17 @@ export async function handlePostStreamCompletion(
       const contentDelta = getSnapshotDelta(flushCleaned, streamState.lastFilteredSnapshot);
       if (contentDelta) {
         streamState.lastFilteredSnapshot = flushCleaned;
-        if (checkAmplificationGuard(ampState, contentDelta.length, logId, resolvedEmail, model, streamState.lastRawContent, streamState.lastVStrRaw)) {
+        if (
+          checkAmplificationGuard(
+            ampState,
+            contentDelta.length,
+            logId,
+            resolvedEmail,
+            model,
+            streamState.lastRawContent,
+            streamState.lastVStrRaw,
+          )
+        ) {
           // guard triggered — skip content emission
         } else {
           const ct = contentDelta.replace(/[\n\s]*$/, '');
@@ -182,13 +196,13 @@ export async function handlePostStreamCompletion(
       }
     }
 
-
     const usage = buildUsage(streamState.promptTokens, streamState.completionTokens, streamState.reasoningBuffer);
     const finalFinishReason = effectiveToolCallCount > 0 ? 'tool_calls' : 'stop';
 
-    await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({}, finalFinishReason)],
-      includeUsage ? undefined : { usage },
-    ));
+    await writeEvent(
+      streamWriter,
+      buildChunkEvent(completionId, model, [makeChoice({}, finalFinishReason)], includeUsage ? undefined : { usage }),
+    );
 
     if (includeUsage) {
       await writeEvent(streamWriter, buildChunkEvent(completionId, model, [], { usage }));
@@ -222,7 +236,11 @@ export async function handlePostStreamCompletion(
     });
     logStore.finalizeRequest(logId);
     // Always write [DONE] so the SSE stream terminates cleanly, even on error
-    try { await streamWriter.write('data: [DONE]\n\n'); } catch { /* stream may already be closed */ }
+    try {
+      await streamWriter.write('data: [DONE]\n\n');
+    } catch {
+      /* stream may already be closed */
+    }
   } finally {
     // Always release session to prevent pool exhaustion, even if writeEvent fails
     scheduleCleanup(reader, heartbeatInterval, chatId, streamState.nextParentId, sessionHeaders, email, sessionPool);

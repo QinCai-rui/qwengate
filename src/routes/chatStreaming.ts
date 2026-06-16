@@ -1,25 +1,13 @@
 import { Context } from 'hono';
 import { stream as honoStream } from 'hono/streaming';
-import type { OpenAIRequest, Message } from '../types/openai.ts';
-import { sessionPool } from '../services/sessionPool.ts';
-import { type AmplificationGuardState } from './chatHelpers.ts';
-import {
-  writeEvent,
-  makeChoice,
-  buildChunkEvent,
-} from './writeHelpers.ts';
-import {
-  cleanupImmediately,
-} from './cleanupHelpers.ts';
 import { logStore } from '../services/logStore.ts';
-import {
-  type StreamProcessingState,
-  type StreamProcessingCtx,
-} from './chatStreamingHelpers.ts';
-import {
-  runStreamLoop,
-  handlePostStreamCompletion,
-} from './streamLoop.ts';
+import { sessionPool } from '../services/sessionPool.ts';
+import type { Message, OpenAIRequest } from '../types/openai.ts';
+import { type AmplificationGuardState } from './chatHelpers.ts';
+import { type StreamProcessingCtx, type StreamProcessingState } from './chatStreamingHelpers.ts';
+import { cleanupImmediately } from './cleanupHelpers.ts';
+import { handlePostStreamCompletion, runStreamLoop } from './streamLoop.ts';
+import { buildChunkEvent, makeChoice, writeEvent } from './writeHelpers.ts';
 
 export interface StreamingContext {
   c: Context;
@@ -38,12 +26,14 @@ export interface StreamingContext {
 }
 
 function buildPromptString(messages: Message[]): string {
-  return messages.map(m => {
-    const content = Array.isArray(m.content)
-      ? m.content.map((c: any) => c.text || JSON.stringify(c)).join('\n')
-      : String(m.content ?? '');
-    return `${m.role}: ${content}`;
-  }).join('\n\n');
+  return messages
+    .map((m) => {
+      const content = Array.isArray(m.content)
+        ? m.content.map((c: any) => c.text || JSON.stringify(c)).join('\n')
+        : String(m.content ?? '');
+      return `${m.role}: ${content}`;
+    })
+    .join('\n\n');
 }
 
 export async function handleStreamingRequest(ctx: StreamingContext): Promise<Response> {
@@ -71,9 +61,15 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       const streamState = buildInitialStreamState(finalPrompt, ctx.initialParentId);
 
       const streamCtx: StreamProcessingCtx = {
-        streamWriter, completionId, model: body.model,
-        enableContentFiltering, cleanOutput,
-        logId, resolvedEmail, ampState, qwenAbortController,
+        streamWriter,
+        completionId,
+        model: body.model,
+        enableContentFiltering,
+        cleanOutput,
+        logId,
+        resolvedEmail,
+        ampState,
+        qwenAbortController,
         qwenLogFile: ctx.qwenLogFile,
         emittedToolCallCount: 0,
       };
@@ -86,7 +82,7 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
         console.warn(`[Chat] Stream timeout for ${logId}: ${loopResult.error}`);
         logStore.addError(logId, loopResult.error);
         await streamWriter.write('data: [DONE]\n\n');
-        logStore.updateEntry(logId, entry => {
+        logStore.updateEntry(logId, (entry) => {
           if (streamState.reasoningBuffer) entry.reasoningContent = streamState.reasoningBuffer;
           if (streamState.lastFullContent) entry.remainingText = streamState.lastFullContent;
           entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
@@ -95,21 +91,41 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
         logStore.finalizeRequest(ctx.logId);
         // Release session and trigger deleteSession() — without this, the session
         // leaks in the pool and the chat persists on Qwen's servers indefinitely.
-        cleanupImmediately(streamReader, heartbeatInterval, session.chatId, ctx.initialParentId, sessionHeaders, resolvedEmail, sessionPool, false);
+        cleanupImmediately(
+          streamReader,
+          heartbeatInterval,
+          session.chatId,
+          ctx.initialParentId,
+          sessionHeaders,
+          resolvedEmail,
+          sessionPool,
+          false,
+        );
         streamReleased = true;
         return;
       }
 
       await handlePostStreamCompletion(
         {
-          streamWriter, completionId, model: body.model, streamState, ampState,
-          logId, resolvedEmail, emittedToolCallCount: streamCtx.emittedToolCallCount,
-          buffer: loopResult.buffer, enableContentFiltering,
+          streamWriter,
+          completionId,
+          model: body.model,
+          streamState,
+          ampState,
+          logId,
+          resolvedEmail,
+          emittedToolCallCount: streamCtx.emittedToolCallCount,
+          buffer: loopResult.buffer,
+          enableContentFiltering,
           includeUsage: !!body.stream_options?.include_usage,
         },
         {
-          reader, heartbeatInterval, chatId: session.chatId,
-          sessionHeaders, email: resolvedEmail, sessionPool,
+          reader,
+          heartbeatInterval,
+          chatId: session.chatId,
+          sessionHeaders,
+          email: resolvedEmail,
+          sessionPool,
         },
       );
 
@@ -117,13 +133,26 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
     } finally {
       if (!streamReleased) {
         // Always write [DONE] so the SSE stream terminates cleanly, even on error
-        try { await streamWriter.write('data: [DONE]\n\n'); } catch { /* stream may already be closed */ }
-        logStore.updateEntry(logId, entry => {
+        try {
+          await streamWriter.write('data: [DONE]\n\n');
+        } catch {
+          /* stream may already be closed */
+        }
+        logStore.updateEntry(logId, (entry) => {
           entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
           entry.finalResponse.finishReason = entry.finalResponse.finishReason || 'error';
         });
         logStore.finalizeRequest(ctx.logId);
-        cleanupImmediately(streamReader, heartbeatInterval, session.chatId, ctx.initialParentId, sessionHeaders, resolvedEmail, sessionPool, false);
+        cleanupImmediately(
+          streamReader,
+          heartbeatInterval,
+          session.chatId,
+          ctx.initialParentId,
+          sessionHeaders,
+          resolvedEmail,
+          sessionPool,
+          false,
+        );
       }
     }
   });
@@ -133,7 +162,7 @@ function createHeartbeat(streamWriter: any): any {
   const hb = setInterval(async () => {
     try {
       await streamWriter.write(': keep-alive\n\n');
-    } catch (_e) {
+    } catch {
       clearInterval(hb);
     }
   }, 15000);

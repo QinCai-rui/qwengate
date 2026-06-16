@@ -29,9 +29,7 @@
     "modalities": ["text"],
     "fallback_chain": {
       "primary": "qwen3-6-max-preview",
-      "fallbacks": [
-        { "model": "qwen3-5-max-preview", "weight": 0.85, "health_threshold": 0.9 }
-      ]
+      "fallbacks": [{ "model": "qwen3-5-max-preview", "weight": 0.85, "health_threshold": 0.9 }]
     }
   },
   "qwen3-6-27b": {
@@ -40,9 +38,7 @@
     "modalities": ["text", "image", "video"],
     "fallback_chain": {
       "primary": "qwen3-6-27b",
-      "fallbacks": [
-        { "model": "qwen3-5-27b", "weight": 0.9, "health_threshold": 0.9 }
-      ]
+      "fallbacks": [{ "model": "qwen3-5-27b", "weight": 0.9, "health_threshold": 0.9 }]
     }
   },
   "qwen3-7-max-preview": {
@@ -51,9 +47,7 @@
     "modalities": ["text"],
     "fallback_chain": {
       "primary": "qwen3-7-max-preview",
-      "fallbacks": [
-        { "model": "qwen3-6-plus-preview", "weight": 0.8, "health_threshold": 0.9 }
-      ]
+      "fallbacks": [{ "model": "qwen3-6-plus-preview", "weight": 0.8, "health_threshold": 0.9 }]
     }
   },
   "qwen3-7-plus": {
@@ -86,9 +80,7 @@
     "modalities": ["text", "image", "video"],
     "fallback_chain": {
       "primary": "qwen3-5-plus",
-      "fallbacks": [
-        { "model": "qwen3-5-flash", "weight": 0.7, "health_threshold": 0.85 }
-      ]
+      "fallbacks": [{ "model": "qwen3-5-flash", "weight": 0.7, "health_threshold": 0.85 }]
     }
   },
   "qwen3-5-omni-plus": {
@@ -97,9 +89,7 @@
     "modalities": ["text", "image", "video", "audio"],
     "fallback_chain": {
       "primary": "qwen3-5-omni-plus",
-      "fallbacks": [
-        { "model": "qwen3-5-omni-flash", "weight": 0.8, "health_threshold": 0.9 }
-      ]
+      "fallbacks": [{ "model": "qwen3-5-omni-flash", "weight": 0.8, "health_threshold": 0.9 }]
     }
   },
   "qwen3-6-35b-a3b": {
@@ -108,9 +98,7 @@
     "modalities": ["text", "image", "video"],
     "fallback_chain": {
       "primary": "qwen3-6-35b-a3b",
-      "fallbacks": [
-        { "model": "qwen3-5-397b-a17b", "weight": 0.75, "health_threshold": 0.85 }
-      ]
+      "fallbacks": [{ "model": "qwen3-5-397b-a17b", "weight": 0.75, "health_threshold": 0.85 }]
     }
   },
   "qwen3-5-flash": {
@@ -128,9 +116,7 @@
     "modalities": ["text"],
     "fallback_chain": {
       "primary": "qwen3-5-max-preview",
-      "fallbacks": [
-        { "model": "qwen3-5-plus", "weight": 0.7, "health_threshold": 0.85 }
-      ]
+      "fallbacks": [{ "model": "qwen3-5-plus", "weight": 0.7, "health_threshold": 0.85 }]
     }
   },
   "qwen3-6-plus-preview": {
@@ -139,9 +125,7 @@
     "modalities": ["text"],
     "fallback_chain": {
       "primary": "qwen3-6-plus-preview",
-      "fallbacks": [
-        { "model": "qwen3-5-plus", "weight": 0.8, "health_threshold": 0.9 }
-      ]
+      "fallbacks": [{ "model": "qwen3-5-plus", "weight": 0.8, "health_threshold": 0.9 }]
     }
   },
   "qwen3-5-397b-a17b": {
@@ -150,9 +134,7 @@
     "modalities": ["text", "image", "video"],
     "fallback_chain": {
       "primary": "qwen3-5-397b-a17b",
-      "fallbacks": [
-        { "model": "qwen3-5-122b-a10b", "weight": 0.8, "health_threshold": 0.85 }
-      ]
+      "fallbacks": [{ "model": "qwen3-5-122b-a10b", "weight": 0.8, "health_threshold": 0.85 }]
     }
   },
   "qwen3-5-122b-a10b": {
@@ -161,9 +143,7 @@
     "modalities": ["text", "image", "video"],
     "fallback_chain": {
       "primary": "qwen3-5-122b-a10b",
-      "fallbacks": [
-        { "model": "qwen3-5-27b", "weight": 0.75, "health_threshold": 0.85 }
-      ]
+      "fallbacks": [{ "model": "qwen3-5-27b", "weight": 0.75, "health_threshold": 0.85 }]
     }
   },
   "qwen3-5-omni-flash": {

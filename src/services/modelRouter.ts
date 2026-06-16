@@ -4,8 +4,8 @@
  * Implements LiteLLM-style weighted fallback chain selection
  */
 
-import { logStore } from './logStore.js';
 import modelsConfig from '../models.json' with { type: 'json' };
+import { logStore } from './logStore.ts';
 
 export interface FallbackEntry {
   model: string;
@@ -36,22 +36,22 @@ export class ModelRouter {
    */
   async route(requestedModel: string, attemptCount = 0): Promise<string> {
     const config = modelsConfig[requestedModel as keyof typeof modelsConfig] as ModelConfig | undefined;
-    
+
     if (!config?.fallback_chain) {
       // No fallback config, return as-is
       return requestedModel;
     }
 
     const { primary, fallbacks } = config.fallback_chain;
-    
+
     // Check if primary is healthy enough
     if (attemptCount === 0 && this.isModelHealthy(primary)) {
       return primary;
     }
 
     // Primary failed or unhealthy, select from fallbacks
-    const candidates = fallbacks.filter(f => this.isModelHealthy(f.model, f.health_threshold));
-    
+    const candidates = fallbacks.filter((f) => this.isModelHealthy(f.model, f.health_threshold));
+
     if (candidates.length === 0) {
       // No healthy fallbacks, return primary as last resort
       return primary;
@@ -69,7 +69,7 @@ export class ModelRouter {
     metrics.errors += 1;
     metrics.lastChecked = Date.now();
     this.modelHealth.set(model, metrics);
-    
+
     // Also log to logStore for persistence/monitoring
     logStore.recordModelError(model);
   }
@@ -90,8 +90,8 @@ export class ModelRouter {
    */
   private isModelHealthy(model: string, customThreshold?: number): boolean {
     const metrics = this.modelHealth.get(model);
-    const threshold = customThreshold ?? (1 - this.ERROR_THRESHOLD);
-    
+    const threshold = customThreshold ?? 1 - this.ERROR_THRESHOLD;
+
     if (!metrics) {
       // No data yet, assume healthy
       return true;
@@ -119,14 +119,14 @@ export class ModelRouter {
 
     const totalWeight = candidates.reduce((sum, c) => sum + c.weight, 0);
     let random = Math.random() * totalWeight;
-    
+
     for (const candidate of candidates) {
       random -= candidate.weight;
       if (random <= 0) {
         return candidate.model;
       }
     }
-    
+
     // Fallback to first if rounding issues
     return candidates[0].model;
   }
@@ -143,11 +143,11 @@ export class ModelRouter {
 
     const errorRate = metrics.errors / total;
     const successRate = metrics.successes / total;
-    
+
     return {
       errorRate,
       successRate,
-      isHealthy: successRate >= (1 - this.ERROR_THRESHOLD)
+      isHealthy: successRate >= 1 - this.ERROR_THRESHOLD,
     };
   }
 

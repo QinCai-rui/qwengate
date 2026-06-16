@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -117,7 +117,7 @@ async function main() {
 
   writeFileSync(CONFIG_PATH, JSON.stringify(newConfig, null, 2) + '\n');
   if (!useDefaults) console.log(`\n  ✅ Config saved to ${CONFIG_PATH}`);
-  console.log('\n  Run `npm start` to launch Qwen Gate.\n');
+  console.log('\n  Run `bun start` (preferred) or `npm start` to launch Qwen Gate.\n');
 }
 
 main().catch((e) => {

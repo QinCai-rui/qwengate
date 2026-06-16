@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 
 import { spawn } from 'node:child_process';
-import { resolve, dirname } from 'node:path';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { isBun } from './utils/env.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = resolve(__dirname, 'index.tsx');
-const DIST_ENTRY = resolve(__dirname, '..', 'dist', 'index.js');
 
 const out = (s: string) => process.stdout.write(s + '\n');
-function err(msg: string) { console.error(`[qg] ${msg}`); }
+function err(msg: string) {
+  console.error(`[qg] ${msg}`);
+}
+const DEFAULT_PORT = '26405';
 
 function showHelp() {
   out('');
@@ -46,8 +49,6 @@ function showHelp() {
 }
 
 function findEntry(): string {
-  if (SERVER_ENTRY.endsWith('.tsx')) return SERVER_ENTRY;
-  if (DIST_ENTRY.endsWith('.js')) return DIST_ENTRY;
   return SERVER_ENTRY;
 }
 
@@ -62,9 +63,9 @@ async function startServer(args: string[]) {
   if (hostIdx !== -1 && args[hostIdx + 1]) extraArgs.push('--host', args[hostIdx + 1]);
 
   const entry = findEntry();
-  const runner = entry.endsWith('.tsx') ? 'tsx' : 'node';
+  const runner = 'bun';
 
-  out(`Starting server (${runner} ${entry})...`);
+  out(`Starting server (bun ${entry})...`);
   if (extraArgs.length) out(`Extra args: ${extraArgs.join(' ')}`);
 
   const server = spawn(runner, [entry, ...extraArgs], {
@@ -72,7 +73,10 @@ async function startServer(args: string[]) {
     shell: true,
   });
 
-  server.on('error', (e) => { err(`Failed to start: ${e.message}`); process.exit(1); });
+  server.on('error', (e) => {
+    err(`Failed to start: ${e.message}`);
+    process.exit(1);
+  });
   server.on('exit', (code) => process.exit(code ?? 0));
 }
 
@@ -82,20 +86,43 @@ async function doUpdate() {
 
   out('Pulling latest code...');
   const pull = spawn('git', ['pull', '--ff-only'], { cwd: repoDir, stdio: 'inherit', shell: true });
-  const pullCode = await new Promise<number | null>((r) => { pull.on('close', r); });
-  if (pullCode !== 0) { err('git pull failed'); process.exit(1); }
+  const pullCode = await new Promise<number | null>((r) => {
+    pull.on('close', r);
+  });
+  if (pullCode !== 0) {
+    err('git pull failed');
+    process.exit(1);
+  }
 
-  out('Reinstalling dependencies...');
+  out(isBun ? 'Reinstalling dependencies (bun)...' : 'Reinstalling dependencies (npm)...');
+
+  if (isBun) {
+    const bunInstall = spawn('bun', ['install'], { cwd: repoDir, stdio: 'inherit', shell: true });
+    const bunCode = await new Promise<number | null>((r) => {
+      bunInstall.on('close', r);
+    });
+    if (bunCode === 0) {
+      out('Update complete. Restart the server with: qg restart');
+      return;
+    }
+    err('bun install failed — falling back to npm...');
+  }
+
   const npmCmd = isWin ? 'npm.cmd' : 'npm';
   const install = spawn(npmCmd, ['install'], { cwd: repoDir, stdio: 'inherit', shell: true });
-  const installCode = await new Promise<number | null>((r) => { install.on('close', r); });
-  if (installCode !== 0) { err('npm install failed'); process.exit(1); }
+  const installCode = await new Promise<number | null>((r) => {
+    install.on('close', r);
+  });
+  if (installCode !== 0) {
+    err('npm install failed');
+    process.exit(1);
+  }
 
   out('Update complete. Restart the server with: qg restart');
 }
 
 async function checkStatus() {
-  const port = process.env.PORT || '26405';
+  const port = process.env.PORT || DEFAULT_PORT;
   try {
     const res = await fetch(`http://127.0.0.1:${port}/v1/models`, { signal: AbortSignal.timeout(5000) });
     if (res.ok) {
@@ -121,14 +148,29 @@ async function restartServer() {
     try {
       const pid = parseInt(readFileSync(pidFile, 'utf-8').trim(), 10);
       if (!isNaN(pid)) {
-        try { process.kill(pid, 'SIGTERM'); } catch { /* process already dead */ }
+        try {
+          process.kill(pid, 'SIGTERM');
+        } catch {
+          /* process already dead */
+        }
         // Wait for process to exit
         for (let i = 0; i < 30; i++) {
-          try { process.kill(pid, 0); await new Promise((r) => setTimeout(r, 200)); } catch { break; }
+          try {
+            process.kill(pid, 0);
+            await new Promise((r) => setTimeout(r, 200));
+          } catch {
+            break;
+          }
         }
       }
-      try { unlinkSync(pidFile); } catch { /* best effort */ }
-    } catch { /* pid file read error */ }
+      try {
+        unlinkSync(pidFile);
+      } catch {
+        /* best effort */
+      }
+    } catch {
+      /* pid file read error */
+    }
   }
 
   await new Promise((r) => setTimeout(r, 1000));
@@ -168,7 +210,10 @@ async function main() {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url).endsWith('cli.ts')) {
-  main().catch((e) => { err(`Fatal: ${e.message}`); process.exit(1); });
+  main().catch((e) => {
+    err(`Fatal: ${e.message}`);
+    process.exit(1);
+  });
 }
 
-export { startServer, restartServer };
+export { restartServer, startServer };

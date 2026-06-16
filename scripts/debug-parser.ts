@@ -1,4 +1,5 @@
 import { StreamingToolParser } from './src/tools/parser.ts';
+
 const p = new StreamingToolParser();
 const r1 = p.feed('{"name": "read", "arguments": {"path": ');
 console.log('after chunk1 - buffer:', p.buffer, '| toolCalls:', r1.toolCalls.length);

@@ -1,7 +1,7 @@
-import { describe, it } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { validateSingleToolCall, detectParallelToolLoop } from './guard.ts';
+import { describe, it } from 'node:test';
 import type { ParsedToolCall } from '../types/openai.ts';
+import { detectParallelToolLoop, validateSingleToolCall } from './guard.ts';
 
 describe('validateSingleToolCall', () => {
   it('should accept valid single tool call', () => {
@@ -19,9 +19,7 @@ describe('validateSingleToolCall', () => {
 
 describe('detectParallelToolLoop', () => {
   it('should pass with single tool call', () => {
-    const tcs: ParsedToolCall[] = [
-      { id: 't1', name: 'read_file', arguments: { path: '/tmp/x' } },
-    ];
+    const tcs: ParsedToolCall[] = [{ id: 't1', name: 'read_file', arguments: { path: '/tmp/x' } }];
     const result = detectParallelToolLoop(tcs);
     assert.ok(result.ok);
   });

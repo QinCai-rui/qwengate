@@ -1,7 +1,7 @@
 #!/usr/bin/env npx tsx
 /**
  * Test multi-turn via the running server's API
- * 
+ *
  * Uses the existing session pool infrastructure to verify proper multi-turn works.
  * The server should use chat_id + parent_id chain automatically.
  */
@@ -13,7 +13,7 @@ async function sendChat(session: string, message: string): Promise<{ response: s
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      ...(session ? { 'Authorization': `Bearer ${session}` } : {}),
+      ...(session ? { Authorization: `Bearer ${session}` } : {}),
     },
     body: JSON.stringify({
       model: 'qwen3.7-max',

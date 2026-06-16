@@ -44,7 +44,7 @@ function buildCorrectionPrompt(errors: string[]): string {
  */
 function serializeArgs(args: Record<string, unknown>): string {
   const keys = Object.keys(args).sort();
-  const parts = keys.map(k => `${k}:${JSON.stringify(args[k])}`);
+  const parts = keys.map((k) => `${k}:${JSON.stringify(args[k])}`);
   return parts.join('|');
 }
 

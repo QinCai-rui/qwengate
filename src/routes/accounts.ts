@@ -1,13 +1,13 @@
 import { Hono } from 'hono';
-import { getAccounts, addAccount, removeAccount, getAccountByEmail } from '../services/auth.ts';
+import { addAccount, getAccountByEmail, getAccounts, removeAccount } from '../services/auth.ts';
+import { logStore } from '../services/logStore.ts';
 
 const accountActionRateLimit = new Map<string, number[]>();
 
 function checkRateLimit(key: string, maxPerMinute: number = 10): boolean {
   const now = Date.now();
   const window = 60_000;
-  const timestamps = (accountActionRateLimit.get(key) || [])
-    .filter(t => now - t < window);
+  const timestamps = (accountActionRateLimit.get(key) || []).filter((t) => now - t < window);
   if (timestamps.length >= maxPerMinute) return false;
   timestamps.push(now);
   accountActionRateLimit.set(key, timestamps);
@@ -18,7 +18,7 @@ export const accountsRouter = new Hono();
 
 accountsRouter.get('/', (c) => {
   const accounts = getAccounts();
-  const masked = accounts.map(a => ({
+  const masked = accounts.map((a) => ({
     email: a.email,
     passwordMasked: a.password ? '••••••••' : '',
     authenticated: a.state !== null && a.state.token !== '',
@@ -50,7 +50,10 @@ accountsRouter.post('/', async (c) => {
 
     const result = await addAccount(email, password);
 
-    return c.json({ success: true, email: email.toLowerCase().trim(), loginSucceeded: result.loginSucceeded, loginError: result.loginError }, 201);
+    return c.json(
+      { success: true, email: email.toLowerCase().trim(), loginSucceeded: result.loginSucceeded, loginError: result.loginError },
+      201,
+    );
   } catch (err: any) {
     if (err.message.includes('already exists')) {
       return c.json({ error: { message: err.message } }, 409);
@@ -130,12 +133,16 @@ accountsRouter.get('/:email/autofill', async (c) => {
     if (!account.password) return c.json({ error: { message: 'No password stored' } }, 400);
 
     (async () => {
-      const { openBrowserProfile } = await import('../services/playwright.ts');
-      const loginResult = await openBrowserProfile(account.email, account.password, { headless: false });
-      if (loginResult === 'success') {
-        const { loadCookiesFromProfile } = await import('../services/auth.ts');
-        const profileState = await loadCookiesFromProfile(account.email);
-        if (profileState) account.state = profileState;
+      try {
+        const { openBrowserProfile } = await import('../services/playwright.ts');
+        const loginResult = await openBrowserProfile(account.email, account.password, { headless: false });
+        if (loginResult === 'success') {
+          const { loadCookiesFromProfile } = await import('../services/auth.ts');
+          const profileState = await loadCookiesFromProfile(account.email);
+          if (profileState) account.state = profileState;
+        }
+      } catch (err: any) {
+        logStore.log('error', 'auth', err.message || String(err));
       }
     })();
 

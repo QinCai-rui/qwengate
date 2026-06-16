@@ -1,22 +1,22 @@
-import test from 'node:test';
 import assert from 'node:assert';
+import test from 'node:test';
 
 process.env.TEST_MOCK_PLAYWRIGHT = 'true';
 // Set a test API key (never empty — prevents auth bypass in tests)
 process.env.API_KEY = 'test-key-for-testing';
 
 import { app } from '../index.tsx';
-import { initPlaywright, closePlaywright } from '../services/playwright.ts';
+import { closePlaywright, initPlaywright } from '../services/playwright.ts';
 
 const TEST_API_KEY = 'test-key-for-testing';
-const authHeaders = { 'Authorization': `Bearer ${TEST_API_KEY}` };
+const authHeaders = { Authorization: `Bearer ${TEST_API_KEY}` };
 
 test('Health check returns degraded when Playwright not initialized', async () => {
   const req = new Request('http://localhost/health');
   const res = await app.fetch(req);
-  
+
   assert.strictEqual(res.status, 200);
-  
+
   const body = await res.json();
   assert.strictEqual(body.status, 'degraded');
   assert.strictEqual(body.playwright, false);
@@ -36,9 +36,9 @@ test('Models endpoint returns qwen3.6-plus and qwen3.6-plus-no-thinking', async 
   try {
     const req = new Request('http://localhost/v1/models', { headers: authHeaders });
     const res = await app.fetch(req);
-    
+
     assert.strictEqual(res.status, 200);
-    
+
     const body = await res.json();
     assert.strictEqual(body.object, 'list');
     assert.ok(Array.isArray(body.data));
@@ -59,11 +59,15 @@ test('Chat Completions endpoint with qwen3.6-plus (thinking enabled)', async () 
     if (url.includes('/api/v2/chat/completions')) {
       const stream = new ReadableStream({
         start(c) {
-          c.enqueue(new TextEncoder().encode('data: {"choices": [{"delta": {"phase": "thinking_summary", "extra": {"summary_thought": {"content": ["Thinking..."]}}}}]}\n\n'));
+          c.enqueue(
+            new TextEncoder().encode(
+              'data: {"choices": [{"delta": {"phase": "thinking_summary", "extra": {"summary_thought": {"content": ["Thinking..."]}}}}]}\n\n',
+            ),
+          );
           c.enqueue(new TextEncoder().encode('data: {"choices": [{"delta": {"phase": "answer", "content": "Hello"}}]}\n\n'));
           c.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
           c.close();
-        }
+        },
       });
       return new Response(stream, { status: 200 });
     }
@@ -77,13 +81,13 @@ test('Chat Completions endpoint with qwen3.6-plus (thinking enabled)', async () 
     const payload = {
       model: 'qwen3.6-plus',
       messages: [{ role: 'user', content: 'What is 99 * 182? Please think step by step.' }],
-      stream: true
+      stream: true,
     };
 
     const req = new Request('http://localhost/v1/chat/completions', {
       method: 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders),
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
 
     const res = await app.fetch(req);
@@ -103,7 +107,7 @@ test('Chat Completions endpoint with qwen3.6-plus (thinking enabled)', async () 
 
       const chunk = decoder.decode(value);
       const lines = chunk.split('\n');
-      
+
       for (const line of lines) {
         if (line.trim() === 'data: [DONE]') {
           break;
@@ -113,18 +117,18 @@ test('Chat Completions endpoint with qwen3.6-plus (thinking enabled)', async () 
             const dataStr = line.slice(6);
             if (dataStr !== '[DONE]') {
               const data = JSON.parse(dataStr);
-              
+
               if (data.choices && data.choices[0] && data.choices[0].delta) {
-              const delta = data.choices[0].delta;
-              if (delta.content) {
-                hasContent = true;
-              }
+                const delta = data.choices[0].delta;
+                if (delta.content) {
+                  hasContent = true;
+                }
                 if (delta.reasoning_content) {
                   hasReasoning = true;
                 }
               }
             }
-          } catch (err) {
+          } catch {
             // Partial JSON ignored
             // console.error("Parse error:", err);
           }
@@ -145,14 +149,17 @@ test('Chat Completions returns explicit error for non-SSE upstream JSON errors',
   (globalThis as any).fetch = async (input: any) => {
     const url = typeof input === 'string' ? input : input.url;
     if (url.includes('/api/v2/chat/completions')) {
-      return new Response(JSON.stringify({
-        success: false,
-        data: {
-          code: 'RateLimited',
-          details: "You've reached the upper limit for today's usage.",
-          num: 3
-        }
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(
+        JSON.stringify({
+          success: false,
+          data: {
+            code: 'RateLimited',
+            details: "You've reached the upper limit for today's usage.",
+            num: 3,
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
     }
     return originalFetch(input);
   };
@@ -166,8 +173,8 @@ test('Chat Completions returns explicit error for non-SSE upstream JSON errors',
       body: JSON.stringify({
         model: 'qwen3.6-plus',
         messages: [{ role: 'user', content: 'hello' }],
-        stream: false
-      })
+        stream: false,
+      }),
     });
 
     const res = await app.fetch(req);
@@ -192,7 +199,7 @@ test('Chat Completions returns a JSON chat.completion object for non-streaming r
           c.enqueue(new TextEncoder().encode('data: {"choices": [{"delta": {"phase": "answer", "content": "Hello"}}]}\n\n'));
           c.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
           c.close();
-        }
+        },
       });
       return new Response(stream, { status: 200 });
     }
@@ -208,8 +215,8 @@ test('Chat Completions returns a JSON chat.completion object for non-streaming r
       body: JSON.stringify({
         model: 'qwen3.6-plus',
         messages: [{ role: 'user', content: 'hello' }],
-        stream: false
-      })
+        stream: false,
+      }),
     });
 
     const res = await app.fetch(req);
@@ -237,7 +244,7 @@ test('API Key protection', async () => {
 
     // 2. Test request with wrong API Key
     const req2 = new Request('http://localhost/v1/models', {
-      headers: { 'Authorization': 'Bearer wrong-key' }
+      headers: { Authorization: 'Bearer wrong-key' },
     });
     const res2 = await app.fetch(req2);
     assert.strictEqual(res2.status, 401, 'Should return 401 Unauthorized with wrong API Key');
@@ -249,7 +256,7 @@ test('API Key protection', async () => {
 
     try {
       const req3 = new Request('http://localhost/v1/models', {
-        headers: { 'Authorization': 'Bearer test-api-key' }
+        headers: { Authorization: 'Bearer test-api-key' },
       });
       const res3 = await app.fetch(req3);
       assert.strictEqual(res3.status, 200, 'Should return 200 OK with correct API Key');
@@ -271,11 +278,15 @@ test('Chat Completions endpoint - Non-streaming (stream: false)', async () => {
     if (url.includes('/api/v2/chat/completions')) {
       const stream = new ReadableStream({
         start(c) {
-          c.enqueue(new TextEncoder().encode('data: {"choices": [{"delta": {"phase": "thinking_summary", "extra": {"summary_thought": {"content": ["Thinking non-stream..."]}}}}]}\n\n'));
+          c.enqueue(
+            new TextEncoder().encode(
+              'data: {"choices": [{"delta": {"phase": "thinking_summary", "extra": {"summary_thought": {"content": ["Thinking non-stream..."]}}}}]}\n\n',
+            ),
+          );
           c.enqueue(new TextEncoder().encode('data: {"choices": [{"delta": {"phase": "answer", "content": "Hello non-stream"}}]}\n\n'));
           c.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
           c.close();
-        }
+        },
       });
       return new Response(stream, { status: 200 });
     }
@@ -289,13 +300,13 @@ test('Chat Completions endpoint - Non-streaming (stream: false)', async () => {
     const payload = {
       model: 'qwen3.6-plus',
       messages: [{ role: 'user', content: 'Hello' }],
-      stream: false
+      stream: false,
     };
 
     const req = new Request('http://localhost/v1/chat/completions', {
       method: 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders),
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
 
     const res = await app.fetch(req);
@@ -307,13 +318,13 @@ test('Chat Completions endpoint - Non-streaming (stream: false)', async () => {
     assert.strictEqual(body.model, 'qwen3.6-plus');
     assert.ok(body.choices);
     assert.strictEqual(body.choices.length, 1);
-    
+
     const choice = body.choices[0];
     assert.strictEqual(choice.message.role, 'assistant');
     assert.strictEqual(choice.message.content, 'Hello non-stream');
     assert.strictEqual(choice.message.reasoning_content, 'Thinking non-stream...');
     assert.strictEqual(choice.finish_reason, 'stop');
-    
+
     assert.ok(body.usage);
     assert.ok(body.usage.prompt_tokens > 0);
     assert.ok(body.usage.completion_tokens >= 0);

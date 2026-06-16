@@ -30,9 +30,4 @@ export const THINK_TAG_NAMES = ['think', 'thinking', 'thought'] as const;
 export const TOOL_RESULT_KEYWORDS = ['tool_result'] as const;
 
 /** Every known tool-related XML tag name (all Qwen API versions). */
-export const ALL_TOOL_KEYWORDS = [
-  ...TOOL_CALL_KEYWORDS,
-  ...TOOL_RESULT_KEYWORDS,
-  'tool_call',
-  'tool_use',
-] as const;
+export const ALL_TOOL_KEYWORDS = [...TOOL_CALL_KEYWORDS, ...TOOL_RESULT_KEYWORDS, 'tool_call', 'tool_use'] as const;

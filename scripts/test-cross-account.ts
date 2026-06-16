@@ -1,7 +1,7 @@
 #!/usr/bin/env npx tsx
 /**
  * Test cross-account chat_id sharing
- * 
+ *
  * Hypothesis: Can Account B continue a conversation started by Account A?
  * Test: Create chat with Account A → send turn 1 → try turn 2 with Account B
  */
@@ -12,11 +12,7 @@ const QWEN_API_BASE = 'https://chat.qwen.ai';
 const QWEN_CHAT_COMPLETIONS = `${QWEN_API_BASE}/api/v2/chat/completions`;
 const QWEN_CHATS_NEW = `${QWEN_API_BASE}/api/v2/chats/new`;
 
-const ACCOUNTS = [
-  'tubby-stray-sherry@duck.com',
-  'surfer-word-slacks@duck.com',
-  'evasion-lip-bottle@duck.com',
-];
+const ACCOUNTS = ['tubby-stray-sherry@duck.com', 'surfer-word-slacks@duck.com', 'evasion-lip-bottle@duck.com'];
 
 // Import from project to reuse existing auth infrastructure
 async function getHeaders(email: string) {
@@ -25,19 +21,25 @@ async function getHeaders(email: string) {
 }
 
 // Create a new chat using full headers from browser profile
-async function createChat(headers: { cookie: string; userAgent: string; bxUa?: string; bxUmidtoken?: string; bxV?: string }): Promise<string | null> {
+async function createChat(headers: {
+  cookie: string;
+  userAgent: string;
+  bxUa?: string;
+  bxUmidtoken?: string;
+  bxV?: string;
+}): Promise<string | null> {
   const requestId = crypto.randomUUID();
   const response = await fetch(QWEN_CHATS_NEW, {
     method: 'POST',
     headers: {
-      'accept': 'application/json, text/plain, */*',
+      accept: 'application/json, text/plain, */*',
       'content-type': 'application/json',
-      'cookie': headers.cookie,
-      'origin': QWEN_API_BASE,
-      'referer': `${QWEN_API_BASE}/`,
+      cookie: headers.cookie,
+      origin: QWEN_API_BASE,
+      referer: `${QWEN_API_BASE}/`,
       'user-agent': headers.userAgent,
       'x-request-id': requestId,
-      'source': 'web',
+      source: 'web',
       ...(headers.bxUmidtoken ? { 'bx-umidtoken': headers.bxUmidtoken } : {}),
       ...(headers.bxUa ? { 'bx-ua': headers.bxUa } : {}),
       ...(headers.bxV ? { 'bx-v': headers.bxV } : {}),
@@ -80,30 +82,32 @@ async function sendMessage(
     chat_mode: 'normal',
     model: model,
     parent_id: parentId,
-    messages: [{
-      fid: userMsgId,
-      parentId: parentId,
-      childrenIds: [],
-      role: 'user',
-      content: content,
-      user_action: 'chat',
-      files: [],
-      timestamp,
-      models: [model],
-      chat_type: 't2t',
-      feature_config: {
-        thinking_enabled: true,
-        output_schema: 'phase',
-        research_mode: 'normal',
-        auto_thinking: false,
-        thinking_mode: 'Thinking',
-        thinking_format: 'summary',
-        auto_search: false,
+    messages: [
+      {
+        fid: userMsgId,
+        parentId: parentId,
+        childrenIds: [],
+        role: 'user',
+        content: content,
+        user_action: 'chat',
+        files: [],
+        timestamp,
+        models: [model],
+        chat_type: 't2t',
+        feature_config: {
+          thinking_enabled: true,
+          output_schema: 'phase',
+          research_mode: 'normal',
+          auto_thinking: false,
+          thinking_mode: 'Thinking',
+          thinking_format: 'summary',
+          auto_search: false,
+        },
+        extra: { meta: { subChatType: 't2t' } },
+        sub_chat_type: 't2t',
+        parent_id: parentId,
       },
-      extra: { meta: { subChatType: 't2t' } },
-      sub_chat_type: 't2t',
-      parent_id: parentId,
-    }],
+    ],
     timestamp: timestamp + 1,
   };
 
@@ -114,15 +118,15 @@ async function sendMessage(
   const response = await fetch(url.href, {
     method: 'POST',
     headers: {
-      'accept': 'application/json',
+      accept: 'application/json',
       'content-type': 'application/json',
-      'cookie': headers.cookie,
-      'origin': QWEN_API_BASE,
-      'referer': `${QWEN_API_BASE}/c/${chatId}`,
+      cookie: headers.cookie,
+      origin: QWEN_API_BASE,
+      referer: `${QWEN_API_BASE}/c/${chatId}`,
       'user-agent': headers.userAgent,
       'x-request-id': requestId,
       'x-accel-buffering': 'no',
-      'timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       ...(headers.bxUmidtoken ? { 'bx-umidtoken': headers.bxUmidtoken } : {}),
       ...(headers.bxUa ? { 'bx-ua': headers.bxUa } : {}),
       ...(headers.bxV ? { 'bx-v': headers.bxV } : {}),

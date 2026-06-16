@@ -86,8 +86,12 @@
   border-radius: 4px;
   transition: width 0.3s;
 }
-.mode-bar-fill.success { background: var(--success); }
-.mode-bar-fill.error { background: var(--danger); }
+.mode-bar-fill.success {
+  background: var(--success);
+}
+.mode-bar-fill.error {
+  background: var(--danger);
+}
 .mode-bar-num {
   font-family: var(--mono);
   font-size: 0.7rem;

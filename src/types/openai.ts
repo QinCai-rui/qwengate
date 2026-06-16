@@ -56,12 +56,7 @@ export interface FunctionToolDefinition {
   inputSchema?: JsonSchema;
 }
 
-export type ToolChoice =
-  | 'auto'
-  | 'none'
-  | 'required'
-  | 'any'
-  | { type: 'function'; function: { name: string } };
+export type ToolChoice = 'auto' | 'none' | 'required' | 'any' | { type: 'function'; function: { name: string } };
 
 export interface ToolCallFunction {
   name: string;
@@ -113,10 +108,7 @@ export interface ToolCallResult {
   isError: boolean;
 }
 
-export type ToolHandler<TArgs = any, TResult = any> = (
-  args: TArgs,
-  context: ToolContext
-) => Promise<TResult>;
+export type ToolHandler<TArgs = any, TResult = any> = (args: TArgs, context: ToolContext) => Promise<TResult>;
 
 export interface ToolContext {
   /** The original messages from the request */

@@ -1,16 +1,16 @@
-import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { afterEach, beforeEach, describe, test } from 'node:test';
 
 import {
-  incrementInFlight,
-  decrementInFlight,
-  incrementTotalRequests,
-  hasInFlight,
-  saveCookies,
-  getAccountByEmail,
   accounts,
+  decrementInFlight,
+  getAccountByEmail,
+  hasInFlight,
+  incrementInFlight,
+  incrementTotalRequests,
   rebuildEmailIndex,
-} from './auth.js';
+  saveCookies,
+} from './auth.ts';
 
 describe('account inFlight and totalRequests tracking', () => {
   test('incrementInFlight increments and decrementInFlight decrements', () => {
@@ -52,9 +52,9 @@ describe('saveCookies and account state', () => {
   });
 
   test('saveCookies updates account state', async () => {
-    assert.equal(accounts.find(a => a.email === testEmail)?.state, null);
+    assert.equal(accounts.find((a) => a.email === testEmail)?.state, null);
     await saveCookies(testEmail, 'test-token-value', 'test-refresh', Date.now() + 3600000);
-    const acct = accounts.find(a => a.email === testEmail);
+    const acct = accounts.find((a) => a.email === testEmail);
     assert.notEqual(acct?.state, null);
     assert.equal(acct?.state?.token, 'test-token-value');
     assert.equal(acct?.state?.refreshToken, 'test-refresh');
@@ -64,8 +64,28 @@ describe('saveCookies and account state', () => {
 describe('getAccountByEmail', () => {
   beforeEach(() => {
     accounts.push(
-      { email: 'MixedCase@Example.com', password: 'p1', state: null, lastUsed: 0, throttledUntil: 0, refreshInFlight: null, loginAttempt: 0, inFlight: 0, totalRequests: 0 },
-      { email: 'lowercase@example.com', password: 'p2', state: null, lastUsed: 0, throttledUntil: 0, refreshInFlight: null, loginAttempt: 0, inFlight: 0, totalRequests: 0 },
+      {
+        email: 'MixedCase@Example.com',
+        password: 'p1',
+        state: null,
+        lastUsed: 0,
+        throttledUntil: 0,
+        refreshInFlight: null,
+        loginAttempt: 0,
+        inFlight: 0,
+        totalRequests: 0,
+      },
+      {
+        email: 'lowercase@example.com',
+        password: 'p2',
+        state: null,
+        lastUsed: 0,
+        throttledUntil: 0,
+        refreshInFlight: null,
+        loginAttempt: 0,
+        inFlight: 0,
+        totalRequests: 0,
+      },
     );
     rebuildEmailIndex();
   });

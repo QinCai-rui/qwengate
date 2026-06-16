@@ -5,10 +5,7 @@ import type { QwenPayload } from './qwen.ts';
 // Request/response/SSE files from the upstream Qwen API are no longer written.
 // Keeping function signatures to avoid breaking callers.
 
-export function logQwenRequest(
-  _payload: QwenPayload,
-  _url: string,
-): string {
+export function logQwenRequest(_payload: QwenPayload, _url: string): string {
   return '';
 }
 
@@ -22,11 +19,6 @@ export function logQwenResponse(
   // no-op
 }
 
-export function logQwenSSE(
-  _logFile: string | undefined,
-  _sseEvents: number,
-  _toolCallEvents: number,
-  _toolCalls: ParsedToolCall[],
-): void {
+export function logQwenSSE(_logFile: string | undefined, _sseEvents: number, _toolCallEvents: number, _toolCalls: ParsedToolCall[]): void {
   // no-op
 }

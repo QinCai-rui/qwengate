@@ -1,9 +1,9 @@
 import crypto from 'node:crypto';
-import { getBasicHeaders, type BasicHeaders } from './playwright.ts';
-import { pickAccount, decrementInFlight, incrementTotalRequests, getAccountByEmail, throttleAccount, getAllAccountEmails } from './auth.ts';
-import { createNetworkEntry, recordResponse, completeEntry, errorEntry } from './networkDebug.ts';
-import { logStore } from './logStore.js';
+import { decrementInFlight, getAccountByEmail, getAllAccountEmails, incrementTotalRequests, pickAccount, throttleAccount } from './auth.ts';
 import { config } from './configService.ts';
+import { logStore } from './logStore.ts';
+import { completeEntry, createNetworkEntry, errorEntry, recordResponse } from './networkDebug.ts';
+import { type BasicHeaders, getBasicHeaders } from './playwright.ts';
 import { QWEN_API_BASE } from './qwen.ts';
 
 interface PoolEntry {
@@ -121,7 +121,7 @@ export class SessionPool {
     }
     return new Promise<PoolEntry>((resolve, reject) => {
       const timer = setTimeout(() => {
-        const idx = this.waiting.findIndex(w => w.timer === timer);
+        const idx = this.waiting.findIndex((w) => w.timer === timer);
         if (idx >= 0) this.waiting.splice(idx, 1);
         reject(new SessionPoolWaitTimeoutError(this.WAIT_TIMEOUT_MS));
       }, this.WAIT_TIMEOUT_MS);
@@ -130,7 +130,13 @@ export class SessionPool {
     });
   }
 
-  async release(chatId: string, _newParentId: string | null, cachedHeaders?: { cookie: string; userAgent: string }, accountEmail?: string, isSuccess: boolean = true): Promise<void> {
+  async release(
+    chatId: string,
+    _newParentId: string | null,
+    cachedHeaders?: { cookie: string; userAgent: string },
+    accountEmail?: string,
+    isSuccess: boolean = true,
+  ): Promise<void> {
     // Idempotency guard: if chatId not tracked as active, this session was already released.
     // Prevents double-release from competing cleanup paths (setTimeout + finally).
     if (!this.activeSessions.has(chatId)) {
@@ -158,7 +164,13 @@ export class SessionPool {
           const id = await this.createSessionWithHeaders(waiterEmail, headers);
           this.activeSessions.add(id);
           this.activeCount++;
-          waiter.resolve({ chatId: id, parentId: _newParentId, inUse: true, cachedHeaders: { cookie: headers.cookie, userAgent: headers.userAgent }, accountEmail: headers.email || waiterEmail });
+          waiter.resolve({
+            chatId: id,
+            parentId: _newParentId,
+            inUse: true,
+            cachedHeaders: { cookie: headers.cookie, userAgent: headers.userAgent },
+            accountEmail: headers.email || waiterEmail,
+          });
         } catch (err: any) {
           console.error('[SessionPool] Failed to create session for waiter:', err.message);
           // pickAccount() incremented inFlight — decrement on failure to prevent leak
@@ -189,7 +201,7 @@ export class SessionPool {
 
     let cookie: string, userAgent: string;
     try {
-      const headers = cachedHeaders || await getBasicHeaders(accountEmail);
+      const headers = cachedHeaders || (await getBasicHeaders(accountEmail));
       cookie = headers.cookie;
       userAgent = headers.userAgent;
     } catch (err: any) {
@@ -212,13 +224,13 @@ export class SessionPool {
         method: 'DELETE',
         signal: controller.signal,
         headers: {
-          'accept': 'application/json, text/plain, */*',
+          accept: 'application/json, text/plain, */*',
           'content-type': 'application/json',
-          'cookie': cookie,
-          'referer': `${QWEN_API_BASE}/`,
+          cookie: cookie,
+          referer: `${QWEN_API_BASE}/`,
           'user-agent': userAgent,
           'x-request-id': requestId,
-          'source': 'web',
+          source: 'web',
         },
       });
       clearTimeout(timeout);
@@ -259,13 +271,13 @@ export class SessionPool {
     const bearerToken = acct?.state?.token;
 
     const fetchHeaders: Record<string, string> = {
-      'accept': 'application/json, text/plain, */*',
+      accept: 'application/json, text/plain, */*',
       'content-type': 'application/json',
-      'cookie': cookie,
-      'referer': 'https://chat.qwen.ai/',
+      cookie: cookie,
+      referer: 'https://chat.qwen.ai/',
       'user-agent': userAgent,
       'x-request-id': requestId,
-      'source': 'web',
+      source: 'web',
       'bx-umidtoken': bxUmidtoken,
       'bx-ua': bxUa,
       'bx-v': bxV,

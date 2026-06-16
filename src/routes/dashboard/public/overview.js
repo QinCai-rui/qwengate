@@ -31,7 +31,7 @@ async function refreshHealth() {
     var totalReqs = 0;
     for (var i = 0; i < acctData.length; i++) {
       if (acctData[i].authenticated) authed++;
-      totalReqs += (acctData[i].totalRequests || 0);
+      totalReqs += acctData[i].totalRequests || 0;
     }
     setText('kpiAuthenticated', authed);
     var authPct = total > 0 ? Math.round((authed / total) * 100) : 0;
@@ -71,17 +71,31 @@ async function refreshModelHealth() {
   var keys = Object.keys(data).sort();
   var rows = '';
   for (var i = 0; i < keys.length; i++) {
-    var k = keys[i], m = data[k];
+    var k = keys[i],
+      m = data[k];
     var total = (m.successCount || 0) + (m.errorCount || 0);
     var rate = total > 0 ? Math.round(((m.successCount || 0) / total) * 100) : 0;
     var rateClass = rate >= 95 ? 'badge-success' : rate >= 80 ? 'badge-warning' : 'badge-danger';
-    rows += '<tr>'
-      + '<td>' + escHtml(k) + '</td>'
-      + '<td>' + (m.successCount || 0) + '</td>'
-      + '<td>' + (m.errorCount || 0) + '</td>'
-      + '<td><span class="badge ' + rateClass + '">' + rate + '%</span></td>'
-      + '<td>' + fmtTime(m.lastActivity) + '</td>'
-      + '</tr>';
+    rows +=
+      '<tr>' +
+      '<td>' +
+      escHtml(k) +
+      '</td>' +
+      '<td>' +
+      (m.successCount || 0) +
+      '</td>' +
+      '<td>' +
+      (m.errorCount || 0) +
+      '</td>' +
+      '<td><span class="badge ' +
+      rateClass +
+      '">' +
+      rate +
+      '%</span></td>' +
+      '<td>' +
+      fmtTime(m.lastActivity) +
+      '</td>' +
+      '</tr>';
   }
   tbody.innerHTML = rows;
 }
@@ -100,12 +114,23 @@ async function refreshSysLogs() {
     if (!l.id || l.id <= _lastSysLogId) continue;
     var lvl = (l.level || 'info').toLowerCase();
     var cls = lvl === 'debug' ? 'log-debug' : lvl === 'warn' || lvl === 'warning' ? 'log-warn' : lvl === 'error' ? 'log-error' : 'log-info';
-    html += '<div class="sys-log-entry">'
-      + '<span class="sys-log-ts">' + fmtTime(l.timestamp) + '</span>'
-      + '<span class="sys-log-level ' + cls + '">' + escHtml(lvl) + '</span>'
-      + '<span class="sys-log-cat">' + escHtml(l.category || '') + '</span>'
-      + '<span class="sys-log-msg">' + escHtml(l.message || '') + '</span>'
-      + '</div>';
+    html +=
+      '<div class="sys-log-entry">' +
+      '<span class="sys-log-ts">' +
+      fmtTime(l.timestamp) +
+      '</span>' +
+      '<span class="sys-log-level ' +
+      cls +
+      '">' +
+      escHtml(lvl) +
+      '</span>' +
+      '<span class="sys-log-cat">' +
+      escHtml(l.category || '') +
+      '</span>' +
+      '<span class="sys-log-msg">' +
+      escHtml(l.message || '') +
+      '</span>' +
+      '</div>';
     if (lvl === 'error' || lvl === 'warn') {
       showNotif(lvl, l.category || '', l.message || '');
     }
@@ -124,11 +149,17 @@ function showNotif(level, category, message) {
   }
   var el = document.createElement('div');
   el.className = 'notif notif-' + level;
-  el.innerHTML = '<strong>' + escHtml(level.toUpperCase()) + '</strong>'
-    + (category ? ' [' + escHtml(category) + ']' : '')
-    + ' ' + escHtml(message.length > 120 ? message.substring(0, 120) + '...' : message);
+  el.innerHTML =
+    '<strong>' +
+    escHtml(level.toUpperCase()) +
+    '</strong>' +
+    (category ? ' [' + escHtml(category) + ']' : '') +
+    ' ' +
+    escHtml(message.length > 120 ? message.substring(0, 120) + '...' : message);
   container.appendChild(el);
-  setTimeout(function() { if (el.parentNode) el.remove(); }, 6000);
+  setTimeout(function () {
+    if (el.parentNode) el.remove();
+  }, 6000);
 }
 /* ── Init ── */
 function init() {

@@ -65,7 +65,7 @@ Qwen Gate is an OpenAI-compatible API proxy that provides access to Qwen AI mode
 │  └────────────────┬─────────────────────────────────────┘  │
 │                   │                                        │
 │  ┌────────────────▼─────────────────────────────────────┐  │
-│  │        Browser Automation Layer (Playwright)         │  │
+│  │        Browser Automation Layer (CloakBrowser)        │  │
 │  │  - Browser instance management                       │  │
 │  │  - Qwen chat interface interaction                   │  │
 │  │  - Response extraction                               │  │
@@ -142,7 +142,7 @@ Manages browser sessions and Qwen account rotation.
 
 **Location**: `src/services/playwright.ts`
 
-Handles Playwright browser automation for Qwen interaction.
+Handles CloakBrowser browser automation for Qwen interaction.
 
 **Responsibilities**:
 
@@ -395,7 +395,7 @@ Flush Path (full pipeline):
 | **Bun**        | Runtime              | 1.3+    |
 | **TypeScript** | Type safety          | 5.7+    |
 | **Hono**       | Web framework        | Latest  |
-| **Playwright** | Browser automation   | Latest  |
+| **CloakBrowser** | Browser automation (wraps Playwright) | Latest  |
 | **tsx**        | TypeScript execution | Latest  |
 
 ### Frontend
@@ -415,11 +415,11 @@ Flush Path (full pipeline):
 - Excellent TypeScript support
 - Built-in streaming support
 
-**Playwright**:
+**CloakBrowser**:
 
-- Reliable browser automation
-- Multi-browser support
-- Excellent API for web scraping
+- Wraps Playwright with anti-detection and stealth patches
+- Reliable browser automation with evasion of bot detection
+- Multi-browser support via underlying Playwright engine
 - Active development
 
 **TypeScript**:
@@ -433,7 +433,7 @@ Flush Path (full pipeline):
 
 ### 1. Browser Automation vs. Direct API
 
-**Decision**: Use browser automation (Playwright) instead of direct Qwen API.
+**Decision**: Use browser automation (CloakBrowser, which wraps Playwright) instead of direct Qwen API.
 
 **Rationale**:
 
@@ -441,6 +441,7 @@ Flush Path (full pipeline):
 - Web interface is the only access method
 - Browser automation provides full feature access
 - Can handle authentication and session management
+- CloakBrowser adds anti-detection patches over Playwright for reliable access
 
 **Tradeoffs**:
 

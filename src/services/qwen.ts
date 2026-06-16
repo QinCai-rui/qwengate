@@ -1,13 +1,13 @@
-import { getQwenHeaders } from './playwright.ts';
 import crypto from 'node:crypto';
-import { withRetry, CircuitBreaker, CircuitOpenError } from '../utils/retry.ts';
-import { throttleAccount, pickAccount, decrementInFlight } from './auth.ts';
-import { createNetworkEntry, recordResponse, recordStreamChunk, completeEntry, errorEntry } from './networkDebug.ts';
+import { CircuitBreaker, CircuitOpenError, withRetry } from '../utils/retry.ts';
+import { decrementInFlight, pickAccount, throttleAccount } from './auth.ts';
 import { config } from './configService.ts';
-import { logQwenRequest, logQwenResponse } from './qwenLogger.ts';
 import { logStore } from './logStore.ts';
+import { completeEntry, createNetworkEntry, errorEntry, recordResponse, recordStreamChunk } from './networkDebug.ts';
+import { getQwenHeaders } from './playwright.ts';
+import { logQwenRequest, logQwenResponse } from './qwenLogger.ts';
 
-export { fetchQwenModels, disableNativeTools, disablePersonalization, setCustomInstruction, configureAccount, deleteAllChats } from './qwenModels.ts';
+export { configureAccount, deleteAllChats, fetchQwenModels } from './qwenModels.ts';
 
 // Shared URL constants for Qwen API
 export const QWEN_API_BASE = 'https://chat.qwen.ai';
@@ -29,6 +29,7 @@ export function buildFeatureConfig(enableThinking: boolean): Record<string, any>
 }
 export const QWEN_CHATS_URL = `${QWEN_API_BASE}/api/v2/chats/`;
 export const QWEN_MODELS_URL = `${QWEN_API_BASE}/api/models`;
+export const QWEN_BX_V = '2.5.36';
 
 export class RetryableQwenStreamError extends Error {
   readonly retryAfterMs: number;
@@ -108,7 +109,7 @@ const QWEN_FETCH_TIMEOUT_MS = parseInt(config.get('QWEN_FETCH_TIMEOUT_MS', '3000
 // Cache Intl.DateTimeFormat — avoids re-creating per request (expensive)
 const cachedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-function createFetchTimeout(): { controller: AbortController; cleanup: () => void } {
+export function createFetchTimeout(): { controller: AbortController; cleanup: () => void } {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), QWEN_FETCH_TIMEOUT_MS);
   return { controller, cleanup: () => clearTimeout(timeout) };
@@ -128,7 +129,7 @@ export async function createQwenStream(
   parentId?: string | null,
   accountEmail?: string,
   tools?: unknown[],
-  toolChoice?: unknown
+  toolChoice?: unknown,
 ): Promise<QwenStreamResult> {
   const actualParentId: string | null = parentId !== undefined ? parentId : null;
   const timestamp = Math.floor(Date.now() / 1000);
@@ -151,13 +152,15 @@ export async function createQwenStream(
     sub_chat_type: msg.sub_chat_type || 't2t',
     parent_id: msg.parent_id ?? (i === 0 ? actualParentId : null),
     // Function-specific fields
-    ...(msg.role === 'function' ? {
-      model: msg.model || model,
-      modelName: msg.modelName || modelId,
-      modelIdx: msg.modelIdx ?? 0,
-      userContext: msg.userContext ?? null,
-      info: msg.info || {},
-    } : {}),
+    ...(msg.role === 'function'
+      ? {
+          model: msg.model || model,
+          modelName: msg.modelName || modelId,
+          modelIdx: msg.modelIdx ?? 0,
+          userContext: msg.userContext ?? null,
+          info: msg.info || {},
+        }
+      : {}),
   }));
 
   const payload: QwenPayload = {
@@ -194,16 +197,16 @@ export async function createQwenStream(
 
   function buildRequestHeaders(reqHeaders: Record<string, string>, cId?: string): Record<string, string> {
     return {
-      'accept': 'application/json',
+      accept: 'application/json',
       'accept-language': 'pt-BR,pt;q=0.9',
       'content-type': 'application/json',
-      'cookie': reqHeaders['cookie'],
-      'origin': QWEN_API_BASE,
-      'referer': cId ? `https://chat.qwen.ai/c/${cId}` : 'https://chat.qwen.ai/',
+      cookie: reqHeaders['cookie'],
+      origin: QWEN_API_BASE,
+      referer: cId ? `https://chat.qwen.ai/c/${cId}` : 'https://chat.qwen.ai/',
       'sec-fetch-dest': 'empty',
       'sec-fetch-mode': 'cors',
       'sec-fetch-site': 'same-origin',
-      'timezone': cachedTimezone,
+      timezone: cachedTimezone,
       'user-agent': reqHeaders['user-agent'],
       'x-accel-buffering': 'no',
       'x-request-id': crypto.randomUUID(),
@@ -219,8 +222,7 @@ export async function createQwenStream(
     if (contentType.includes('application/json')) {
       try {
         const errorJson = JSON.parse(errText);
-        if (errorJson?.data?.details?.includes('chat is in progress') ||
-            errorJson?.data?.details?.includes('The chat is in progress')) {
+        if (errorJson?.data?.details?.includes('chat is in progress') || errorJson?.data?.details?.includes('The chat is in progress')) {
           const retryAfterMs = 2000 + Math.floor(Math.random() * 2000);
           errorEntry(debugEntryId, errorJson.data.details);
           throw new RetryableQwenStreamError(`Qwen: ${errorJson.data.details}`, retryAfterMs);
@@ -228,9 +230,7 @@ export async function createQwenStream(
         if (errorJson?.success === false) {
           const code = errorJson.data?.code || errorJson.code || 'UpstreamError';
           const details = errorJson.data?.details || errorJson.message || 'Qwen returned an error';
-          const wait = errorJson.data?.num !== undefined
-            ? ` Wait about ${errorJson.data.num} hour(s) before trying again.`
-            : '';
+          const wait = errorJson.data?.num !== undefined ? ` Wait about ${errorJson.data.num} hour(s) before trying again.` : '';
           if (code === 'RateLimited' && currentAccountEmail) {
             const throttleMs = (errorJson.data?.num || 1) * 3600_000;
             // Use the full duration from Qwen (e.g. 7 hours) — do NOT cap at 2h.
@@ -244,10 +244,7 @@ export async function createQwenStream(
               decrementInFlight(nextAccount.email);
             } else if (!nextAccount) {
               // All accounts are throttled — include wait time in error for the user
-              throw new QwenUpstreamError(
-                `All accounts rate-limited. ${details}.${wait}`,
-                code, 429
-              );
+              throw new QwenUpstreamError(`All accounts rate-limited. ${details}.${wait}`, code, 429);
             }
           }
           let status: number;
@@ -258,15 +255,16 @@ export async function createQwenStream(
           errorEntry(debugEntryId, `${code}: ${details}`);
           throw new QwenUpstreamError(`Qwen upstream error: ${code}: ${details}.${wait}`, code, status);
         }
-        if (errorJson?.data?.details?.includes('is not exist') ||
-            errorJson?.data?.details?.includes('not exist') ||
-            errorJson?.data?.details?.includes('does not exist')) {
+        if (
+          errorJson?.data?.details?.includes('is not exist') ||
+          errorJson?.data?.details?.includes('not exist') ||
+          errorJson?.data?.details?.includes('does not exist')
+        ) {
           errorEntry(debugEntryId, errorJson.data.details);
           throw new RetryableQwenStreamError(`Qwen: ${errorJson.data.details}`, 0);
         }
       } catch (parseOrRetryError) {
-        if (parseOrRetryError instanceof RetryableQwenStreamError ||
-            parseOrRetryError instanceof QwenUpstreamError) {
+        if (parseOrRetryError instanceof RetryableQwenStreamError || parseOrRetryError instanceof QwenUpstreamError) {
           throw parseOrRetryError;
         }
       }
@@ -277,7 +275,7 @@ export async function createQwenStream(
       .slice(0, 500);
     throw new UpstreamStatusError(
       `Failed to fetch from Qwen: ${response.status} ${response.statusText} - ${sanitizedErrText}`,
-      response.status
+      response.status,
     );
   }
 
@@ -286,8 +284,12 @@ export async function createQwenStream(
     const { headers: reqHeaders } = await getQwenHeaders(currentAccountEmail);
     const requestHeaders = buildRequestHeaders(reqHeaders, chatId);
     const debugEntry = createNetworkEntry({
-      url, method: 'POST', headers: requestHeaders, body: payload,
-      category: 'chat', accountEmail: currentAccountEmail,
+      url,
+      method: 'POST',
+      headers: requestHeaders,
+      body: payload,
+      category: 'chat',
+      accountEmail: currentAccountEmail,
     });
     lastDebugEntryId = debugEntry.id;
     try {
@@ -309,15 +311,19 @@ export async function createQwenStream(
         try {
           const bodyStr = JSON.stringify(payload);
 
-          if (config.get("SAVE_REQUEST_LOGS") === "true") {
+          if (config.get('SAVE_REQUEST_LOGS') === 'true') {
             makeRequestQwenLogFile = logQwenRequest(payload, url);
           }
           response = await fetch(url, {
-            method: 'POST', headers: requestHeaders,
-            body: bodyStr, signal: controller.signal,
+            method: 'POST',
+            headers: requestHeaders,
+            body: bodyStr,
+            signal: controller.signal,
           });
           const respHeaders: Record<string, string> = {};
-          response.headers.forEach((v, k) => { respHeaders[k] = v; });
+          response.headers.forEach((v, k) => {
+            respHeaders[k] = v;
+          });
           if (makeRequestQwenLogFile) logQwenResponse(makeRequestQwenLogFile, response.status, response.statusText, respHeaders, '');
         } finally {
           cleanup();
@@ -355,7 +361,7 @@ export async function createQwenStream(
     result = await withRetry(makeRequest, { ...retryConfig, circuitBreaker: qwenCircuitBreaker });
   } else {
     result = await makeRequest();
-    qwenCircuitBreaker.recordSuccess();
+    await qwenCircuitBreaker.recordSuccess();
   }
   if (!result.response.body) {
     throw new Error(`Qwen returned empty response body (status ${result.response.status})`);
@@ -374,8 +380,15 @@ export async function createQwenStream(
         if (streamDebugEntryId) {
           completeEntry(streamDebugEntryId);
         }
-      }
-    })
+      },
+    }),
   );
-  return { stream: wrappedStream, headers: result.headers, uiSessionId: chatId || '', accountEmail: currentAccountEmail, abortController: streamAbortController, qwenLogFile: result.qwenLogFile };
+  return {
+    stream: wrappedStream,
+    headers: result.headers,
+    uiSessionId: chatId || '',
+    accountEmail: currentAccountEmail,
+    abortController: streamAbortController,
+    qwenLogFile: result.qwenLogFile,
+  };
 }

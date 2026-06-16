@@ -37,14 +37,14 @@ const RATIO_DEFAULT = 3.5;
 function isCJK(char: string): boolean {
   const cp = char.charCodeAt(0);
   return (
-    (cp >= 0x4E00 && cp <= 0x9FFF) ||   // CJK Unified Ideographs
-    (cp >= 0x3400 && cp <= 0x4DBF) ||   // CJK Extension A
-    (cp >= 0x2E80 && cp <= 0x2EFF) ||   // CJK Radicals
-    (cp >= 0x3000 && cp <= 0x303F) ||   // CJK Symbols and Punctuation
-    (cp >= 0xFF00 && cp <= 0xFFEF) ||   // Fullwidth Forms
-    (cp >= 0xAC00 && cp <= 0xD7AF) ||   // Hangul Syllables
-    (cp >= 0x3040 && cp <= 0x309F) ||   // Hiragana
-    (cp >= 0x30A0 && cp <= 0x30FF)      // Katakana
+    (cp >= 0x4e00 && cp <= 0x9fff) || // CJK Unified Ideographs
+    (cp >= 0x3400 && cp <= 0x4dbf) || // CJK Extension A
+    (cp >= 0x2e80 && cp <= 0x2eff) || // CJK Radicals
+    (cp >= 0x3000 && cp <= 0x303f) || // CJK Symbols and Punctuation
+    (cp >= 0xff00 && cp <= 0xffef) || // Fullwidth Forms
+    (cp >= 0xac00 && cp <= 0xd7af) || // Hangul Syllables
+    (cp >= 0x3040 && cp <= 0x309f) || // Hiragana
+    (cp >= 0x30a0 && cp <= 0x30ff) // Katakana
   );
 }
 
@@ -67,7 +67,7 @@ function isCodeChar(char: string): boolean {
  */
 export function estimateTokens(
   text: string,
-  options?: { tools?: Array<{function?: {name: string; description: string; parameters?: object}}>; messageCount?: number }
+  options?: { tools?: Array<{ function?: { name: string; description: string; parameters?: object } }>; messageCount?: number },
 ): number {
   if (!text) return 0;
 
@@ -116,10 +116,7 @@ export function estimateTokens(
  * Used when performance matters more than precision.
  * Falls back to the original `length / 3.5` heuristic.
  */
-export function estimateTokensFast(
-  text: string,
-  options?: { tools?: unknown[] }
-): number {
+export function estimateTokensFast(text: string, options?: { tools?: unknown[] }): number {
   if (!text) return 0;
   let estimate = Math.ceil(text.length / RATIO_DEFAULT);
   if (options?.tools?.length) {
@@ -143,10 +140,7 @@ export interface TokenBreakdown {
  * @param originalMessages - Concatenated text of the user's original messages
  * @param finalPrompt - The full prompt sent to Qwen (after all injection)
  */
-export function calculateTokenOverhead(
-  originalMessages: string,
-  finalPrompt: string,
-): TokenBreakdown {
+export function calculateTokenOverhead(originalMessages: string, finalPrompt: string): TokenBreakdown {
   const clientTokens = estimateTokens(originalMessages);
   const totalTokens = estimateTokens(finalPrompt);
 
@@ -198,22 +192,28 @@ export function checkContextWindow(
 
   if (totalEstimatedTokens > maxContext) {
     return contextErrorResult(
-      totalEstimatedTokens, maxContext, maxOutput, availableTokens,
+      totalEstimatedTokens,
+      maxContext,
+      maxOutput,
+      availableTokens,
       `Context window exceeded for model "${modelName}": ` +
-      `estimated ${totalEstimatedTokens} prompt tokens (including ${messageOverhead} message overhead) exceeds ` +
-      `the model's ${maxContext} context window. ` +
-      `Reduce your prompt length or switch to a model with a larger context window.`,
+        `estimated ${totalEstimatedTokens} prompt tokens (including ${messageOverhead} message overhead) exceeds ` +
+        `the model's ${maxContext} context window. ` +
+        `Reduce your prompt length or switch to a model with a larger context window.`,
     );
   }
 
   if (totalEstimatedTokens > availableTokens) {
     return contextErrorResult(
-      totalEstimatedTokens, maxContext, maxOutput, availableTokens,
+      totalEstimatedTokens,
+      maxContext,
+      maxOutput,
+      availableTokens,
       `Prompt too long for model "${modelName}": ` +
-      `estimated ${totalEstimatedTokens} prompt tokens (including ${messageOverhead} message overhead) leaves ` +
-      `only ${maxContext - totalEstimatedTokens} tokens for the response, ` +
-      `but max output is limited to ${maxOutput}, leaving ${maxContext - totalEstimatedTokens} tokens for generation. ` +
-      `Reduce your prompt or increase available context.`,
+        `estimated ${totalEstimatedTokens} prompt tokens (including ${messageOverhead} message overhead) leaves ` +
+        `only ${maxContext - totalEstimatedTokens} tokens for the response, ` +
+        `but max output is limited to ${maxOutput}, leaving ${maxContext - totalEstimatedTokens} tokens for generation. ` +
+        `Reduce your prompt or increase available context.`,
     );
   }
 

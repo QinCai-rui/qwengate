@@ -1,9 +1,11 @@
-import { chromium, firefox, webkit, BrowserContext, Page, Cookie, Browser } from 'playwright';
 import { launch as cloakLaunch } from 'cloakbrowser';
 import crypto from 'crypto';
+import { Browser, BrowserContext, Cookie, chromium, firefox, Page, webkit } from 'playwright';
 import { logStore } from './logStore.ts';
+import { QWEN_BX_V } from './qwen.ts';
+
+export type { BrowserProfileOptions, LoginResult } from './browserProfiles.ts';
 export { getProfileDir, openBrowserProfile, refreshViaProfile } from './browserProfiles.ts';
-export type { LoginResult, BrowserProfileOptions } from './browserProfiles.ts';
 
 const QWEN_BASE_URL = 'https://chat.qwen.ai';
 export type BrowserType = 'chromium' | 'firefox' | 'webkit' | 'chrome' | 'edge';
@@ -25,7 +27,7 @@ let lastCookiesTime = 0;
 const COOKIES_TTL = 30 * 1000;
 let cookiesInFlight: Promise<string> | null = null;
 const COOKIE_REFRESH_INTERVAL = 120 * 1000;
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export function validateQwenUrl(url: string): void {
   let parsed: URL;
   try {
@@ -40,9 +42,11 @@ export function validateQwenUrl(url: string): void {
   if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '0.0.0.0') {
     throw new Error(`Blocked loopback URL: ${url}`);
   }
-  if (/^10\.\d+\.\d+\.\d+$/.test(hostname) ||
-      /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(hostname) ||
-      /^192\.168\.\d+\.\d+$/.test(hostname)) {
+  if (
+    /^10\.\d+\.\d+\.\d+$/.test(hostname) ||
+    /^172\.(1[6-9]|2\d|3[01])\.\d+\.\d+$/.test(hostname) ||
+    /^192\.168\.\d+\.\d+$/.test(hostname)
+  ) {
     throw new Error(`Blocked private IP URL: ${url}`);
   }
 }
@@ -54,41 +58,48 @@ export class Mutex {
       this.locked = true;
       return () => this.release();
     }
-    return new Promise<() => void>(resolve => {
-      this.queue.push(() => { resolve(() => this.release()); });
+    return new Promise<() => void>((resolve) => {
+      this.queue.push(() => {
+        resolve(() => this.release());
+      });
     });
   }
   private release(): void {
     const next = this.queue.shift();
-    if (next) { next(); } else { this.locked = false; }
+    if (next) {
+      next();
+    } else {
+      this.locked = false;
+    }
   }
 }
-const uiMutex = new Mutex();
 export async function getCookies(email?: string): Promise<string> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return 'token=mock';
   if (email) {
     const accCtx = accountContexts.get(email);
     if (!accCtx) return '';
     const cookies = await accCtx.context.cookies();
-    return cookies.map(c => `${c.name}=${c.value}`).join('; ');
+    return cookies.map((c) => `${c.name}=${c.value}`).join('; ');
   }
-  if (cachedCookies && (Date.now() - lastCookiesTime < COOKIES_TTL)) {
+  if (cachedCookies && Date.now() - lastCookiesTime < COOKIES_TTL) {
     return cachedCookies;
   }
   if (cookiesInFlight) return cookiesInFlight;
   cookiesInFlight = (async () => {
-    if (cachedCookies && (Date.now() - lastCookiesTime < COOKIES_TTL)) {
+    if (cachedCookies && Date.now() - lastCookiesTime < COOKIES_TTL) {
       return cachedCookies;
     }
     const allCookieStrings: string[] = [];
     for (const accCtx of accountContexts.values()) {
       const cookies = await accCtx.context.cookies();
-      allCookieStrings.push(cookies.map(c => `${c.name}=${c.value}`).join('; '));
+      allCookieStrings.push(cookies.map((c) => `${c.name}=${c.value}`).join('; '));
     }
     cachedCookies = allCookieStrings.join('; ');
     lastCookiesTime = Date.now();
     return cachedCookies;
-  })().finally(() => { cookiesInFlight = null; });
+  })().finally(() => {
+    cookiesInFlight = null;
+  });
   return cookiesInFlight;
 }
 export interface BasicHeaders {
@@ -100,9 +111,10 @@ export interface BasicHeaders {
   email?: string;
 }
 export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
-  if (process.env.TEST_MOCK_PLAYWRIGHT) return { cookie: 'token=mock', userAgent: 'mock', bxV: '2.5.36', bxUmidtoken: '', bxUa: '', email: 'mock@test' };
+  if (process.env.TEST_MOCK_PLAYWRIGHT)
+    return { cookie: 'token=mock', userAgent: 'mock', bxV: QWEN_BX_V, bxUmidtoken: '', bxUa: '', email: 'mock@test' };
   await initPlaywright();
-    if (!cachedUserAgent) {
+  if (!cachedUserAgent) {
     try {
       for (const accCtx of accountContexts.values()) {
         cachedUserAgent = await Promise.race([
@@ -125,7 +137,7 @@ export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
     const tokenEntry = `token=${tokenInfo.token}`;
     cookieStr = tokenEntry + (cookieStr ? '; ' + cookieStr : '');
   }
-  const bxV = '2.5.36';
+  const bxV = QWEN_BX_V;
   let bxUmidtoken = '';
   let bxUa = '';
   if (email) {
@@ -140,16 +152,29 @@ export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
 export async function initPlaywright(headless = true, browserType: BrowserType = 'chromium') {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return;
   if (defaultBrowser) return;
-  if (initInFlight) { await initInFlight; return; }
+  if (initInFlight) {
+    await initInFlight;
+    return;
+  }
   initInFlight = (async () => {
     if (defaultBrowser) return;
     let browserEngine: any;
     let channel: string | undefined;
     switch (browserType) {
-      case 'firefox': browserEngine = firefox; break;
-      case 'webkit': browserEngine = webkit; break;
-      case 'chrome': browserEngine = chromium; channel = 'chrome'; break;
-      case 'edge': browserEngine = chromium; channel = 'msedge'; break;
+      case 'firefox':
+        browserEngine = firefox;
+        break;
+      case 'webkit':
+        browserEngine = webkit;
+        break;
+      case 'chrome':
+        browserEngine = chromium;
+        channel = 'chrome';
+        break;
+      case 'edge':
+        browserEngine = chromium;
+        channel = 'msedge';
+        break;
       case 'chromium':
       default:
         defaultBrowser = await cloakLaunch({
@@ -157,10 +182,17 @@ export async function initPlaywright(headless = true, browserType: BrowserType =
           humanize: true,
           geoip: true,
           args: [
-            '--disable-dev-shm-usage', '--no-sandbox', '--disable-setuid-sandbox',
-            '--disable-popup-blocking', '--mute-audio', '--no-first-run',
-            '--disable-background-networking', '--disable-default-apps',
-            '--disable-sync', '--disable-translate', '--metrics-recording-only',
+            '--disable-dev-shm-usage',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-popup-blocking',
+            '--mute-audio',
+            '--no-first-run',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-sync',
+            '--disable-translate',
+            '--metrics-recording-only',
             '--disable-blink-features=AutomationControlled',
           ],
         });
@@ -168,7 +200,8 @@ export async function initPlaywright(headless = true, browserType: BrowserType =
     }
     if (browserEngine) {
       defaultBrowser = await browserEngine.launch({
-        headless, channel,
+        headless,
+        channel,
         ignoreDefaultArgs: ['--enable-automation'],
         args: ['--disable-blink-features=AutomationControlled'],
       });
@@ -179,19 +212,31 @@ export async function initPlaywright(headless = true, browserType: BrowserType =
         await accCtx.context.close();
       }
       accountContexts.clear();
-      if (defaultBrowser) { await defaultBrowser.close(); defaultBrowser = null; }
+      if (defaultBrowser) {
+        await defaultBrowser.close();
+        defaultBrowser = null;
+      }
     };
-    process.on('exit', () => {});
     process.on('SIGTERM', cleanupAllContexts);
     process.on('SIGINT', cleanupAllContexts);
-  })().finally(() => { initInFlight = null; });
+  })().finally(() => {
+    initInFlight = null;
+  });
   return initInFlight;
 }
-function typedCast<T>(v: unknown): T { return v as T; }
+function typedCast<T>(v: unknown): T {
+  return v as T;
+}
 
 export async function createAccountContext(email: string, cookies?: Record<string, string>): Promise<AccountContext> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) {
-    return { context: typedCast<BrowserContext>(null), page: typedCast<Page>(null), lastRefresh: Date.now(), cookies: cookies || {}, headers: {} };
+    return {
+      context: typedCast<BrowserContext>(null),
+      page: typedCast<Page>(null),
+      lastRefresh: Date.now(),
+      cookies: cookies || {},
+      headers: {},
+    };
   }
   const existing = accountContexts.get(email);
   if (existing) return existing;
@@ -199,18 +244,35 @@ export async function createAccountContext(email: string, cookies?: Record<strin
   if (inFlight) return inFlight;
   const creationPromise = createContextInternal(email, cookies);
   contextCreationInFlight.set(email, creationPromise);
-  try { return await creationPromise; } finally { contextCreationInFlight.delete(email); }
+  try {
+    return await creationPromise;
+  } finally {
+    contextCreationInFlight.delete(email);
+  }
 }
 async function createContextInternal(email: string, cookies?: Record<string, string>): Promise<AccountContext> {
   await initPlaywright();
   if (!defaultBrowser) throw new Error('Playwright browser not initialized');
   if (accountContexts.has(email)) return accountContexts.get(email)!;
   const context = await defaultBrowser.newContext({
-    storageState: cookies ? { cookies: Object.entries(cookies).map(([name, value]) => ({
-      name, value, domain: '.qwen.ai', path: '/',
-      expires: Math.floor(Date.now() / 1000) + 3600,
-      httpOnly: true, secure: true, sameSite: 'Lax'
-    } as Cookie)), origins: [] } : undefined
+    storageState: cookies
+      ? {
+          cookies: Object.entries(cookies).map(
+            ([name, value]) =>
+              ({
+                name,
+                value,
+                domain: '.qwen.ai',
+                path: '/',
+                expires: Math.floor(Date.now() / 1000) + 3600,
+                httpOnly: true,
+                secure: true,
+                sameSite: 'Lax',
+              }) as Cookie,
+          ),
+          origins: [],
+        }
+      : undefined,
   });
   const page = await context.newPage();
   const extractedHeaders: Record<string, string> = {};
@@ -226,8 +288,13 @@ async function createContextInternal(email: string, cookies?: Record<string, str
     const url = route.request().url();
     if (resourceType === 'image' || resourceType === 'font' || resourceType === 'stylesheet' || resourceType === 'media') {
       route.abort();
-    } else if (url.includes('google-analytics.com') || url.includes('googletagmanager.com') ||
-               url.includes('facebook.com') || url.includes('hotjar.com') || url.includes('sentry.io')) {
+    } else if (
+      url.includes('google-analytics.com') ||
+      url.includes('googletagmanager.com') ||
+      url.includes('facebook.com') ||
+      url.includes('hotjar.com') ||
+      url.includes('sentry.io')
+    ) {
       route.abort();
     } else {
       route.continue();
@@ -235,17 +302,27 @@ async function createContextInternal(email: string, cookies?: Record<string, str
   });
   if (cookies) {
     const cookieList = Object.entries(cookies).map(([name, value]) => ({
-      name, value, domain: 'chat.qwen.ai', path: '/', secure: true, httpOnly: true
+      name,
+      value,
+      domain: 'chat.qwen.ai',
+      path: '/',
+      secure: true,
+      httpOnly: true,
     }));
     await context.addCookies(cookieList);
   }
   const accCtx: AccountContext = { context, page, lastRefresh: Date.now(), cookies: cookies || {}, headers: extractedHeaders };
   accountContexts.set(email, accCtx);
-  accCtx.refreshInterval = setInterval(async () => {
-    try { await refreshAccountCookies(email); } catch (err) {
-      console.error(`[AccountContext] Refresh failed for ${email}:`, err);
-    }
-  }, COOKIE_REFRESH_INTERVAL + Math.random() * 30000);
+  accCtx.refreshInterval = setInterval(
+    async () => {
+      try {
+        await refreshAccountCookies(email);
+      } catch (err) {
+        console.error(`[AccountContext] Refresh failed for ${email}:`, err);
+      }
+    },
+    COOKIE_REFRESH_INTERVAL + Math.random() * 30000,
+  );
   return accCtx;
 }
 export async function refreshAccountCookies(email: string): Promise<void> {
@@ -259,22 +336,24 @@ export async function refreshAccountCookies(email: string): Promise<void> {
     const acct = getAccountByEmail(email);
     if (acct?.state?.token) {
       const existingCookies = await context.cookies();
-      const hasTokenCookie = existingCookies.some(c => c.name === 'token' && c.value === acct.state!.token);
+      const hasTokenCookie = existingCookies.some((c) => c.name === 'token' && c.value === acct.state!.token);
       if (!hasTokenCookie) {
-        await context.addCookies([{
-          name: 'token',
-          value: acct.state.token,
-          domain: '.qwen.ai',
-          path: '/',
-          httpOnly: true,
-          secure: true,
-          sameSite: 'Lax',
-        }]);
+        await context.addCookies([
+          {
+            name: 'token',
+            value: acct.state.token,
+            domain: '.qwen.ai',
+            path: '/',
+            httpOnly: true,
+            secure: true,
+            sameSite: 'Lax',
+          },
+        ]);
       }
     }
 
     const cookies = await context.cookies();
-    const hasAuthCookie = cookies.some(c => {
+    const hasAuthCookie = cookies.some((c) => {
       const n = c.name.toLowerCase();
       if (n.includes('refresh')) return false;
       return n.includes('token') || n.includes('session');
@@ -284,7 +363,7 @@ export async function refreshAccountCookies(email: string): Promise<void> {
       await page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded', timeout: 15000 });
       await sleep(2000);
       const postCookies = await context.cookies();
-      const hasPostAuth = postCookies.some(c => {
+      const hasPostAuth = postCookies.some((c) => {
         const n = c.name.toLowerCase();
         if (n.includes('refresh')) return false;
         return n.includes('token') || n.includes('session');
@@ -305,7 +384,9 @@ export async function refreshAccountCookies(email: string): Promise<void> {
     }
     const freshCookies = await context.cookies();
     const cookieRecord: Record<string, string> = {};
-    for (const c of freshCookies) { cookieRecord[c.name] = c.value; }
+    for (const c of freshCookies) {
+      cookieRecord[c.name] = c.value;
+    }
     accCtx.cookies = cookieRecord;
     accCtx.lastRefresh = Date.now();
   } catch (err) {
@@ -329,17 +410,28 @@ export async function closePlaywright() {
     await accCtx.context.close();
   }
   accountContexts.clear();
-  if (defaultBrowser) { await defaultBrowser.close(); defaultBrowser = null; }
+  if (defaultBrowser) {
+    await defaultBrowser.close();
+    defaultBrowser = null;
+  }
   cachedUserAgent = null;
   cachedCookies = null;
   lastCookiesTime = 0;
 }
-export function getCachedUserAgent(): string | null { return cachedUserAgent; }
-export function getCachedCookies(): string | null { return cachedCookies; }
-export function getLastCookiesTime(): number { return lastCookiesTime; }
+export function getCachedUserAgent(): string | null {
+  return cachedUserAgent;
+}
+export function getCachedCookies(): string | null {
+  return cachedCookies;
+}
+export function getLastCookiesTime(): number {
+  return lastCookiesTime;
+}
 export function getActivePage(email?: string): Page | null {
   if (email) return accountContexts.get(email)?.page || null;
-  for (const accCtx of accountContexts.values()) { return accCtx.page; }
+  for (const accCtx of accountContexts.values()) {
+    return accCtx.page;
+  }
   return null;
 }
 export function getBrowser(): Browser | null {
@@ -350,7 +442,7 @@ async function captureBxHeaders(accCtx: AccountContext): Promise<void> {
     await accCtx.page.evaluate(async (baseUrl) => {
       await fetch(`${baseUrl}/api/v2/models`, {
         method: 'GET',
-        headers: { 'accept': 'application/json', 'source': 'web' },
+        headers: { accept: 'application/json', source: 'web' },
       }).catch(() => {});
     }, QWEN_BASE_URL);
     await sleep(500);
@@ -358,17 +450,19 @@ async function captureBxHeaders(accCtx: AccountContext): Promise<void> {
     console.warn(`[AccountContext] bx-header capture fetch failed: ${err.message}`);
   }
 }
-export async function getQwenHeaders(email?: string): Promise<{ headers: Record<string, string>, chatSessionId: string, parentMessageId: string | null }> {
+export async function getQwenHeaders(
+  email?: string,
+): Promise<{ headers: Record<string, string>; chatSessionId: string; parentMessageId: string | null }> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) {
     return {
       headers: {
         'bx-umidtoken': 'mock-umid-' + crypto.randomUUID().slice(0, 8),
         'bx-ua': 'mock-ua-' + crypto.randomUUID().slice(0, 8),
         'user-agent': 'mock-user-agent',
-        'cookie': 'token=mock'
+        cookie: 'token=mock',
       },
       chatSessionId: 'mock-session-' + crypto.randomUUID().slice(0, 8),
-      parentMessageId: null
+      parentMessageId: null,
     };
   }
   await initPlaywright();
@@ -390,8 +484,8 @@ export async function getQwenHeaders(email?: string): Promise<{ headers: Record<
       accCtx = accountContexts.get(targetEmail)!;
     }
     const cookies = await accCtx.context.cookies();
-    const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-    const headers: Record<string, string> = { ...accCtx.headers, 'cookie': cookieStr };
+    const cookieStr = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+    const headers: Record<string, string> = { ...accCtx.headers, cookie: cookieStr };
     accCtx.headers = headers;
     accCtx.lastRefresh = Date.now();
     const chatSessionId = crypto.randomUUID();

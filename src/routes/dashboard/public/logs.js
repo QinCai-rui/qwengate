@@ -4,12 +4,13 @@ var logEntries = [];
 var logEntryMap = {};
 var hiddenEntries = [];
 
-
-
-
 function fmtJson(raw) {
   if (!raw) return '';
-  try { return JSON.stringify(JSON.parse(raw), null, 2); } catch(e) { return raw; }
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
 }
 function fmtTokens(tokens) {
   if (!tokens) return '';
@@ -20,10 +21,14 @@ function fmtTokens(tokens) {
 
 /* ── Fetch wrapper ── */
 function apiFetch(url) {
-  return fetch(url).then(function(r) {
-    if (!r.ok) return null;
-    return r.json();
-  }).catch(function() { return null; });
+  return fetch(url)
+    .then(function (r) {
+      if (!r.ok) return null;
+      return r.json();
+    })
+    .catch(function () {
+      return null;
+    });
 }
 
 /* ── Connection status ── */
@@ -44,82 +49,88 @@ function setConnStatus(state) {
 }
 
 /* ── SSE Connection (buffered) ── */
-  function fetchChunkStream(id, btn) {
-    var container = document.getElementById('chunks-' + id);
-    if (!container) return;
-    if (container.style.display === 'block') {
-      container.style.display = 'none';
-      btn.textContent = 'Load from disk';
-      return;
-    }
-    btn.textContent = 'Loading...';
-    btn.disabled = true;
-    fetch('/dashboard/logs/' + encodeURIComponent(id) + '/chunk_stream.txt')
-      .then(function(r) { if (!r.ok) throw new Error('Not found'); return r.text(); })
-      .then(function(text) {
-        var lines = text.split('\\n');
-        var html = '';
-        for (var i = 0; i < lines.length; i++) {
-          if (lines[i]) html += '<div class="chunk-line">' + escHtml(lines[i]) + '</div>';
-        }
-        container.innerHTML = html || '<div style="color:var(--text-secondary);font-size:0.8rem">No chunks recorded</div>';
-        container.style.display = 'block';
-        btn.textContent = 'Hide (' + lines.length + ' chunks)';
-        btn.disabled = false;
-      })
-      .catch(function() {
-        container.innerHTML = '<div style="color:var(--danger);font-size:0.8rem">Chunk stream not available on disk</div>';
-        container.style.display = 'block';
-        btn.textContent = 'Not available';
-        btn.disabled = false;
-      });
+function fetchChunkStream(id, btn) {
+  var container = document.getElementById('chunks-' + id);
+  if (!container) return;
+  if (container.style.display === 'block') {
+    container.style.display = 'none';
+    btn.textContent = 'Load from disk';
+    return;
   }
-  window.fetchChunkStream = fetchChunkStream;
+  btn.textContent = 'Loading...';
+  btn.disabled = true;
+  fetch('/dashboard/logs/' + encodeURIComponent(id) + '/chunk_stream.txt')
+    .then(function (r) {
+      if (!r.ok) throw new Error('Not found');
+      return r.text();
+    })
+    .then(function (text) {
+      var lines = text.split('\\n');
+      var html = '';
+      for (var i = 0; i < lines.length; i++) {
+        if (lines[i]) html += '<div class="chunk-line">' + escHtml(lines[i]) + '</div>';
+      }
+      container.innerHTML = html || '<div style="color:var(--text-secondary);font-size:0.8rem">No chunks recorded</div>';
+      container.style.display = 'block';
+      btn.textContent = 'Hide (' + lines.length + ' chunks)';
+      btn.disabled = false;
+    })
+    .catch(function () {
+      container.innerHTML = '<div style="color:var(--danger);font-size:0.8rem">Chunk stream not available on disk</div>';
+      container.style.display = 'block';
+      btn.textContent = 'Not available';
+      btn.disabled = false;
+    });
+}
+window.fetchChunkStream = fetchChunkStream;
 
-  function fetchLogFile(id, file, containerId, btn) {
-    var container = document.getElementById(containerId);
-    if (!container) return;
-    if (container.style.display === 'block') {
-      container.style.display = 'none';
-      btn.textContent = 'Load full from disk';
-      return;
-    }
-    btn.textContent = 'Loading...';
-    btn.disabled = true;
-    fetch('/dashboard/logs/' + encodeURIComponent(id) + '/' + encodeURIComponent(file))
-      .then(function(r) { if (!r.ok) throw new Error('Not found'); return r.text(); })
-      .then(function(text) {
-        container.innerHTML = '<pre class="req-pre" style="max-height:none">' + escHtml(text) + '</pre>';
-        container.style.display = 'block';
-        btn.textContent = 'Hide full';
-        btn.disabled = false;
-      })
-      .catch(function() {
-        container.innerHTML = '<div style="color:var(--danger);font-size:0.8rem">File not available on disk</div>';
-        container.style.display = 'block';
-        btn.textContent = 'Not available';
-        btn.disabled = false;
-      });
+function fetchLogFile(id, file, containerId, btn) {
+  var container = document.getElementById(containerId);
+  if (!container) return;
+  if (container.style.display === 'block') {
+    container.style.display = 'none';
+    btn.textContent = 'Load full from disk';
+    return;
   }
-  window.fetchLogFile = fetchLogFile;
+  btn.textContent = 'Loading...';
+  btn.disabled = true;
+  fetch('/dashboard/logs/' + encodeURIComponent(id) + '/' + encodeURIComponent(file))
+    .then(function (r) {
+      if (!r.ok) throw new Error('Not found');
+      return r.text();
+    })
+    .then(function (text) {
+      container.innerHTML = '<pre class="req-pre" style="max-height:none">' + escHtml(text) + '</pre>';
+      container.style.display = 'block';
+      btn.textContent = 'Hide full';
+      btn.disabled = false;
+    })
+    .catch(function () {
+      container.innerHTML = '<div style="color:var(--danger);font-size:0.8rem">File not available on disk</div>';
+      container.style.display = 'block';
+      btn.textContent = 'Not available';
+      btn.disabled = false;
+    });
+}
+window.fetchLogFile = fetchLogFile;
 
-  function connectSSE() {
+function connectSSE() {
   setConnStatus('connecting');
-  setTimeout(function() {
+  setTimeout(function () {
     var url = '/log/stream';
     var es = new EventSource(url);
-    es.onmessage = function(ev) {
+    es.onmessage = function (ev) {
       msgBuffer.push(ev.data);
       if (!flushTimer) flushTimer = setTimeout(flushBuffer, 100);
     };
-    es.onerror = function() {
+    es.onerror = function () {
       es.close();
       setConnStatus('disconnected');
       flushTimer = null;
       msgBuffer = [];
       setTimeout(connectSSE, 3000);
     };
-    es.onopen = function() {
+    es.onopen = function () {
       setConnStatus('connected');
     };
   }, 300);
@@ -133,7 +144,9 @@ function flushBuffer() {
     try {
       var entry = JSON.parse(batch[i]);
       addRequestEntry(entry);
-    } catch(e) { /* skip malformed entries, continue processing batch */ }
+    } catch {
+      /* skip malformed entries, continue processing batch */
+    }
   }
   setConnStatus('connected');
 }
@@ -144,21 +157,40 @@ function renderEntryHtml(entry) {
   var stream = entry.stream !== false;
   var hasError = entry.errors && entry.errors.length > 0;
   var isDone = entry.finalResponse && entry.finalResponse.finishReason === 'stop';
-  var status = hasError ? 'error' : (isDone ? 'done' : 'streaming');
+  var status = hasError ? 'error' : isDone ? 'done' : 'streaming';
   var statusBadge = status === 'error' ? 'badge-danger' : status === 'done' ? 'badge-success' : 'badge-accent';
   var rawText = entry.rawFullContent || '';
   var processedText = entry.processedApiOutput || '';
-  var entryId = entry.id || entry.request_id || ('req-' + Date.now());
+  var entryId = entry.id || entry.request_id || 'req-' + Date.now();
 
   /* Header row */
-  var html = '<div class="req-header">'
-    + '<span class="req-ts">' + fmtTime(entry.timestamp || Date.now()) + '</span>'
-    + '<span class="badge badge-neutral">' + escHtml(model) + '</span>'
-    + '<span class="badge ' + (stream ? 'badge-accent' : 'badge-neutral') + '">' + (stream ? 'SSE' : 'SYNC') + '</span>'
-    + '<span class="badge ' + statusBadge + '">' + status + '</span>'
-    + (entry.tokens ? '<span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-secondary)">' + fmtTokens(entry.tokens) + '</span>' : '')
-    + (entry.accountEmail ? '<span class="badge badge-neutral" style="background:var(--accent-soft);color:var(--accent);border:1px solid rgba(224,139,110,0.3)">' + escHtml(entry.accountEmail.split('@')[0]) + '</span>' : '')
-    + '</div>';
+  var html =
+    '<div class="req-header">' +
+    '<span class="req-ts">' +
+    fmtTime(entry.timestamp || Date.now()) +
+    '</span>' +
+    '<span class="badge badge-neutral">' +
+    escHtml(model) +
+    '</span>' +
+    '<span class="badge ' +
+    (stream ? 'badge-accent' : 'badge-neutral') +
+    '">' +
+    (stream ? 'SSE' : 'SYNC') +
+    '</span>' +
+    '<span class="badge ' +
+    statusBadge +
+    '">' +
+    status +
+    '</span>' +
+    (entry.tokens
+      ? '<span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-secondary)">' + fmtTokens(entry.tokens) + '</span>'
+      : '') +
+    (entry.accountEmail
+      ? '<span class="badge badge-neutral" style="background:var(--accent-soft);color:var(--accent);border:1px solid rgba(224,139,110,0.3)">' +
+        escHtml(entry.accountEmail.split('@')[0]) +
+        '</span>'
+      : '') +
+    '</div>';
 
   /* Error section */
   if (hasError) {
@@ -168,7 +200,14 @@ function renderEntryHtml(entry) {
       var isWarn = e.indexOf('LOOP') !== -1 || e.indexOf('Loop') !== -1 || e.indexOf('parallel') !== -1;
       var badgeClass = isWarn ? 'badge-warning' : 'badge-danger';
       var label = isWarn ? 'WARN' : 'ERROR';
-      html += '<div style="margin:4px 0;padding:6px 8px;background:var(--bg-elevated);border-radius:var(--radius-sm);font-family:var(--mono);font-size:0.75rem"><span class="badge ' + badgeClass + '" style="margin-right:6px">' + label + '</span>' + escHtml(e) + '</div>';
+      html +=
+        '<div style="margin:4px 0;padding:6px 8px;background:var(--bg-elevated);border-radius:var(--radius-sm);font-family:var(--mono);font-size:0.75rem"><span class="badge ' +
+        badgeClass +
+        '" style="margin-right:6px">' +
+        label +
+        '</span>' +
+        escHtml(e) +
+        '</div>';
     }
     html += '</div>';
   }
@@ -178,11 +217,22 @@ function renderEntryHtml(entry) {
 
   /* Input — folded by default */
   if (entry.clientRequest && entry.clientRequest.messages && entry.clientRequest.messages.length > 0) {
-    html += '<div class="foldable-section"><div class="foldable-header collapsed" onclick="toggleFold(this)"><span class="fold-toggle">▶</span> Input (' + entry.clientRequest.messages.length + ' msgs)</div><div class="foldable-body collapsed">';
+    html +=
+      '<div class="foldable-section"><div class="foldable-header collapsed" onclick="toggleFold(this)"><span class="fold-toggle">▶</span> Input (' +
+      entry.clientRequest.messages.length +
+      ' msgs)</div><div class="foldable-body collapsed">';
     for (var mi = 0; mi < entry.clientRequest.messages.length; mi++) {
       var m = entry.clientRequest.messages[mi];
-      var rc = m.role === 'system' ? 'badge-accent' : m.role === 'user' ? 'badge-neutral' : m.role === 'tool' ? 'badge-warning' : 'badge-success';
-      html += '<div style="margin:8px 0"><div class="msg-header collapsed" onclick="toggleFold(this)"><span class="fold-toggle">▶</span><span class="badge ' + rc + '">' + escHtml(m.role) + '</span></div><div class="msg-body collapsed"><div class="req-block" style="margin-top:4px"><pre>' + escHtml(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)) + '</pre></div></div></div>';
+      var rc =
+        m.role === 'system' ? 'badge-accent' : m.role === 'user' ? 'badge-neutral' : m.role === 'tool' ? 'badge-warning' : 'badge-success';
+      html +=
+        '<div style="margin:8px 0"><div class="msg-header collapsed" onclick="toggleFold(this)"><span class="fold-toggle">▶</span><span class="badge ' +
+        rc +
+        '">' +
+        escHtml(m.role) +
+        '</span></div><div class="msg-body collapsed"><div class="req-block" style="margin-top:4px"><pre>' +
+        escHtml(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)) +
+        '</pre></div></div></div>';
     }
     html += '</div></div>';
   }
@@ -191,32 +241,59 @@ function renderEntryHtml(entry) {
   if (rawText || processedText) {
     html += '<div class="req-output-grid">';
     if (rawText) {
-      html += '<div class="foldable-section"><div class="foldable-header collapsed" onclick="toggleOutputPair(this)"><span class="fold-toggle">▶</span> Raw Output</div><div class="foldable-body collapsed"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;overflow-x:auto;font-family:var(--mono);font-size:0.7rem;line-height:1.6;color:var(--text-primary)">' + escHtml(rawText) + '</pre></div></div>';
+      html +=
+        '<div class="foldable-section"><div class="foldable-header collapsed" onclick="toggleOutputPair(this)"><span class="fold-toggle">▶</span> Raw Output</div><div class="foldable-body collapsed"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;overflow-x:auto;font-family:var(--mono);font-size:0.7rem;line-height:1.6;color:var(--text-primary)">' +
+        escHtml(rawText) +
+        '</pre></div></div>';
     }
     if (processedText) {
-      html += '<div class="foldable-section"><div class="foldable-header collapsed" onclick="toggleOutputPair(this)"><span class="fold-toggle">▶</span> Processed Output</div><div class="foldable-body collapsed"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;overflow-x:auto;font-family:var(--mono);font-size:0.7rem;line-height:1.6;color:var(--text-primary)">' + escHtml(processedText) + '</pre></div></div>';
+      html +=
+        '<div class="foldable-section"><div class="foldable-header collapsed" onclick="toggleOutputPair(this)"><span class="fold-toggle">▶</span> Processed Output</div><div class="foldable-body collapsed"><pre style="margin:0;white-space:pre-wrap;word-break:break-all;overflow-x:auto;font-family:var(--mono);font-size:0.7rem;line-height:1.6;color:var(--text-primary)">' +
+        escHtml(processedText) +
+        '</pre></div></div>';
     }
     html += '</div>';
   }
 
   /* Tool Calls — folded by default */
   if (entry.parsedToolCalls && entry.parsedToolCalls.length > 0) {
-    html += '<div class="foldable-section"><div class="foldable-header collapsed" onclick="toggleFold(this)"><span class="fold-toggle">▶</span> Tool Calls (' + entry.parsedToolCalls.length + ')</div><div class="foldable-body collapsed">';
+    html +=
+      '<div class="foldable-section"><div class="foldable-header collapsed" onclick="toggleFold(this)"><span class="fold-toggle">▶</span> Tool Calls (' +
+      entry.parsedToolCalls.length +
+      ')</div><div class="foldable-body collapsed">';
     for (var ti = 0; ti < entry.parsedToolCalls.length; ti++) {
       var tc = entry.parsedToolCalls[ti];
-      var s = tc.blocked ? '<span class="badge badge-warning">BLOCKED</span>' : (tc.error ? '<span class="badge badge-danger">ERROR</span>' : '<span class="badge badge-success">SUCCESS</span>');
+      var s = tc.blocked
+        ? '<span class="badge badge-warning">BLOCKED</span>'
+        : tc.error
+          ? '<span class="badge badge-danger">ERROR</span>'
+          : '<span class="badge badge-success">SUCCESS</span>';
       var d = '';
       if (tc.blocked) d += 'Reason: ' + escHtml(tc.blockReason || 'N/A') + '<br>';
       if (tc.error) d += 'Error: ' + escHtml(tc.error) + '<br>';
-      if (tc.result !== undefined) d += 'Result: ' + escHtml(typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2)) + '<br>';
+      if (tc.result !== undefined)
+        d += 'Result: ' + escHtml(typeof tc.result === 'string' ? tc.result : JSON.stringify(tc.result, null, 2)) + '<br>';
       if (tc.executionTimeMs !== undefined) d += 'Exec time: ' + tc.executionTimeMs + 'ms';
       var prettyArgs = '';
-      if (tc.args) { try { prettyArgs = JSON.stringify(JSON.parse(tc.args), null, 2); } catch(err) { prettyArgs = tc.args; } }
-      html += '<div style="margin:8px 0;padding:8px;background:var(--bg-elevated);border-radius:var(--radius-sm)">'
-        + '<strong>' + escHtml(tc.name) + '</strong> ' + s + '<br>'
-        + (tc.args ? '<div style="margin-top:4px;font-family:var(--mono);font-size:0.8em;white-space:pre-wrap">' + escHtml(prettyArgs) + '</div>' : '')
-        + (d ? '<div style="margin-top:4px;font-family:var(--mono);font-size:0.8em;white-space:pre-wrap">' + d + '</div>' : '')
-        + '</div>';
+      if (tc.args) {
+        try {
+          prettyArgs = JSON.stringify(JSON.parse(tc.args), null, 2);
+        } catch {
+          prettyArgs = tc.args;
+        }
+      }
+      html +=
+        '<div style="margin:8px 0;padding:8px;background:var(--bg-elevated);border-radius:var(--radius-sm)">' +
+        '<strong>' +
+        escHtml(tc.name) +
+        '</strong> ' +
+        s +
+        '<br>' +
+        (tc.args
+          ? '<div style="margin-top:4px;font-family:var(--mono);font-size:0.8em;white-space:pre-wrap">' + escHtml(prettyArgs) + '</div>'
+          : '') +
+        (d ? '<div style="margin-top:4px;font-family:var(--mono);font-size:0.8em;white-space:pre-wrap">' + d + '</div>' : '') +
+        '</div>';
     }
     html += '</div></div>';
   }
@@ -336,7 +413,7 @@ function toggleOutputPair(header) {
 
 /* ── Poll for new entries ── */
 function pollLogs() {
-  apiFetch('/log/json').then(function(data) {
+  apiFetch('/log/json').then(function (data) {
     if (Array.isArray(data) && data.length > 0) {
       for (var i = data.length - 1; i >= 0; i--) {
         var entry = data[i];

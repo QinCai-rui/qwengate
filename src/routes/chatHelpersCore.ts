@@ -1,24 +1,7 @@
-
-import { validateSingleToolCall } from "../tools/guard.ts";
-import { logStore } from "../services/logStore.ts";
-import { TOOL_CALL_KEYWORDS, TOOL_RESULT_KEYWORDS } from "../utils/tagNames.ts";
-import { QWEN_THINK_TAG_PATTERN as THINK_TAG_PATTERN } from "../utils/thinkTagStripper.ts";
-
-function safeTruncate(val: any, maxLen = 200): any {
-  if (typeof val === "string") {
-    if (val.length > maxLen) return val.substring(0, maxLen) + "...";
-    return val;
-  }
-  if (Array.isArray(val)) return val.map((v) => safeTruncate(v, maxLen));
-  if (val && typeof val === "object") {
-    const obj: any = {};
-    for (const [k, v] of Object.entries(val)) {
-      obj[k] = safeTruncate(v, maxLen);
-    }
-    return obj;
-  }
-  return val;
-}
+import { logStore } from '../services/logStore.ts';
+import { validateSingleToolCall } from '../tools/guard.ts';
+import { TOOL_CALL_KEYWORDS, TOOL_RESULT_KEYWORDS } from '../utils/tagNames.ts';
+import { QWEN_THINK_TAG_PATTERN as THINK_TAG_PATTERN } from '../utils/thinkTagStripper.ts';
 
 // ── String / diff utilities ───────────────────────────────────────
 
@@ -30,10 +13,10 @@ export function commonPrefixLen(a: string, b: string): number {
 }
 
 export function getNewContent(text: string, lastEmittedText: string): string {
-  if (!text) return "";
+  if (!text) return '';
   const commonLen = commonPrefixLen(text, lastEmittedText);
   if (commonLen < text.length) return text.substring(commonLen);
-  return "";
+  return '';
 }
 
 export function commonSuffixLen(a: string, b: string): number {
@@ -43,12 +26,9 @@ export function commonSuffixLen(a: string, b: string): number {
   return i;
 }
 
-export function detectCumulativeChunk(
-  newText: string,
-  lastText: string,
-): { cumulative: boolean; delta: string } {
+export function detectCumulativeChunk(newText: string, lastText: string): { cumulative: boolean; delta: string } {
   if (!lastText || !newText) return { cumulative: false, delta: newText };
-  if (newText === lastText) return { cumulative: false, delta: "" };
+  if (newText === lastText) return { cumulative: false, delta: '' };
 
   // Fast path: exact prefix match
   if (newText.startsWith(lastText) && newText.length > lastText.length) {
@@ -86,17 +66,13 @@ export function detectCumulativeChunk(
   return { cumulative: false, delta: newText };
 }
 
-export function getSnapshotDelta(
-  newSnapshot: string,
-  lastSnapshot: string,
-): string {
-  if (!newSnapshot) return "";
+export function getSnapshotDelta(newSnapshot: string, lastSnapshot: string): string {
+  if (!newSnapshot) return '';
   if (!lastSnapshot) return newSnapshot;
-  if (newSnapshot === lastSnapshot) return "";
+  if (newSnapshot === lastSnapshot) return '';
 
   // Fast path: monotonic growth (the common case)
-  if (newSnapshot.length > lastSnapshot.length && newSnapshot.startsWith(lastSnapshot))
-    return newSnapshot.substring(lastSnapshot.length);
+  if (newSnapshot.length > lastSnapshot.length && newSnapshot.startsWith(lastSnapshot)) return newSnapshot.substring(lastSnapshot.length);
 
   // When cleaning removes characters (e.g. partial <tool_call completing to
   // <tool_call> which then gets stripped by cleanThinkTags), newSnapshot can
@@ -108,13 +84,13 @@ export function getSnapshotDelta(
   }
   if (prefixLen === newSnapshot.length && prefixLen > 0) {
     // newSnapshot is entirely a prefix of lastSnapshot — nothing genuinely new
-    return "";
+    return '';
   }
 
   // Fallback: fingerprint-based cumulative chunk detection for overlapping content
   const detection = detectCumulativeChunk(newSnapshot, lastSnapshot);
   if (detection.cumulative) return detection.delta;
-  return "";
+  return '';
 }
 
 /** Matches tool result tag fragments (requires closing > to avoid false stripping of /toolbox /toolkit etc). */
@@ -142,7 +118,7 @@ const [TOOL_TAG_RE, TOOL_TAIL_RE] = (() => {
   for (const kw of keywords) {
     for (let i = MIN_TOOL_PREFIX_LEN; i <= kw.length; i++) {
       const p = kw.slice(0, i);
-      tagPrefixes.push(p);     // fun, funct, ..., /fun, /funct, ...
+      tagPrefixes.push(p); // fun, funct, ..., /fun, /funct, ...
       tagPrefixes.push('/' + p);
     }
     const tail = kw.slice(MIN_TOOL_PREFIX_LEN); // "ction" for "function"
@@ -151,17 +127,15 @@ const [TOOL_TAG_RE, TOOL_TAIL_RE] = (() => {
 
   tagPrefixes.sort((a, b) => b.length - a.length);
   const tagRe = new RegExp(`<(?:${tagPrefixes.join('|')})[^>]*(?:>|$)`, 'gi');
-  const tailRe = tailPrefixes.length > 0
-    ? new RegExp(`^(?:${tailPrefixes.join('|')})(?:[=][^\n>]*[=>]?|>)\\n?`, 'gm')
-    : /(?!)/;
+  const tailRe = tailPrefixes.length > 0 ? new RegExp(`^(?:${tailPrefixes.join('|')})(?:[=][^\n>]*[=>]?|>)\\n?`, 'gm') : /(?!)/;
   return [tagRe, tailRe];
 })();
 
 export function cleanThinkTags(t: string): string {
   // Fast path: skip all regex work when there's no tag-like content or tail fragment
-  if (!t.includes('<') && !TOOL_TAIL_RE.test(t)) return t;
-  let s = t.replace(THINK_TAG_PATTERN, "");
-  s = s.replace(TOOL_RESULT_TAG_PATTERN, "");
+  if (!t.includes('<') && !t.includes('=')) return t;
+  let s = t.replace(THINK_TAG_PATTERN, '');
+  s = s.replace(TOOL_RESULT_TAG_PATTERN, '');
   // Strip tool call XML tags (complete + partial at chunk boundaries)
   s = s.replace(TOOL_TAG_RE, '');
   // Strip continuation tails after partial tag removal
@@ -169,7 +143,7 @@ export function cleanThinkTags(t: string): string {
   return s;
 }
 
-export { truncateToolResult, compressToolResult } from "./compressToolResult.ts";
+export { compressToolResult, truncateToolResult } from './compressToolResult.ts';
 
 // ── Tool and streaming utilities ──────────────────────────────────
 
@@ -185,12 +159,14 @@ export class ToolSpamGuard {
   }
 
   private canonicalize(args: any): any {
-    if (typeof args !== "object" || args === null) return args;
+    if (typeof args !== 'object' || args === null) return args;
     if (Array.isArray(args)) return args.map((a) => this.canonicalize(a));
-    return Object.keys(args).sort().reduce((acc: any, key) => {
-      acc[key] = this.canonicalize(args[key]);
-      return acc;
-    }, {});
+    return Object.keys(args)
+      .sort()
+      .reduce((acc: any, key) => {
+        acc[key] = this.canonicalize(args[key]);
+        return acc;
+      }, {});
   }
 
   check(tool: string, args: any): { ok: true } | { ok: false; correctionPrompt: string } {
@@ -216,38 +192,41 @@ export const pendingCorrections = new Map<string, string[]>();
 
 // Prevent unbounded growth: trim oldest entries every 5 minutes
 const MAX_PENDING_CORRECTIONS = 500;
-setInterval(() => {
-  if (pendingCorrections.size > MAX_PENDING_CORRECTIONS) {
-    const toDelete = pendingCorrections.size - MAX_PENDING_CORRECTIONS;
-    let i = 0;
-    for (const key of pendingCorrections.keys()) {
-      if (i >= toDelete) break;
-      pendingCorrections.delete(key);
-      i++;
+setInterval(
+  () => {
+    if (pendingCorrections.size > MAX_PENDING_CORRECTIONS) {
+      const toDelete = pendingCorrections.size - MAX_PENDING_CORRECTIONS;
+      let i = 0;
+      for (const key of pendingCorrections.keys()) {
+        if (i >= toDelete) break;
+        pendingCorrections.delete(key);
+        i++;
+      }
     }
-  }
-}, 5 * 60 * 1000).unref();
+  },
+  5 * 60 * 1000,
+).unref();
 
 export function parseQwenErrorPayload(
   raw: string,
-): { message: string; status: import("hono/utils/http-status").ContentfulStatusCode } | null {
+): { message: string; status: import('hono/utils/http-status').ContentfulStatusCode } | null {
   let text = raw.trim();
   if (!text) return null;
   // Strip SSE data: prefix if present — used when checking full buffer content
-  if (text.startsWith("data: ")) text = text.slice(6).trim();
+  if (text.startsWith('data: ')) text = text.slice(6).trim();
   // Skip SSE control lines and [DONE]
-  if (text === "[DONE]" || text.startsWith(":")) return null;
+  if (text === '[DONE]' || text.startsWith(':')) return null;
   try {
     const payload = JSON.parse(text);
     if (payload && payload.success === false) {
-      const code = payload.data?.code || payload.code || "UpstreamError";
-      const details = payload.data?.details || payload.message || "Qwen returned an error";
-      const wait = payload.data?.num !== undefined ? ` Wait about ${payload.data.num} hour(s) before trying again.` : "";
-      const status = code === "RateLimited" ? 429 : code === "Not_Found" ? 404 : 502;
+      const code = payload.data?.code || payload.code || 'UpstreamError';
+      const details = payload.data?.details || payload.message || 'Qwen returned an error';
+      const wait = payload.data?.num !== undefined ? ` Wait about ${payload.data.num} hour(s) before trying again.` : '';
+      const status = code === 'RateLimited' ? 429 : code === 'Not_Found' ? 404 : 502;
       return { message: `Qwen upstream error: ${code}: ${details}.${wait}`, status };
     }
     if (payload && payload.error) {
-      const msg = typeof payload.error === "string" ? payload.error : payload.error.message || JSON.stringify(payload.error);
+      const msg = typeof payload.error === 'string' ? payload.error : payload.error.message || JSON.stringify(payload.error);
       return { message: `Qwen upstream error: ${msg}`, status: 502 };
     }
   } catch {
@@ -269,34 +248,42 @@ export function extractDeltaContent(
   currentThoughtIndex: number,
   reasoningBuffer: string,
 ): DeltaContentResult {
-  let vStr = "";
+  let vStr = '';
   let foundStr = false;
   let isThinkingChunk = false;
   let newThoughtIndex = currentThoughtIndex;
 
-  if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta && (targetResponseId === null || chunk.response_id === targetResponseId)) {
+  if (
+    chunk.choices &&
+    chunk.choices[0] &&
+    chunk.choices[0].delta &&
+    (targetResponseId === null || chunk.response_id === targetResponseId)
+  ) {
     const delta = chunk.choices[0].delta;
-    if (delta.phase === "thinking_summary") {
+    if (delta.phase === 'thinking_summary') {
       isThinkingChunk = true;
       if (delta.extra && delta.extra.summary_thought && delta.extra.summary_thought.content) {
         const thoughts = delta.extra.summary_thought.content;
-        const rawNew = thoughts.slice(currentThoughtIndex).join("\n");
+        const rawNew = thoughts.slice(currentThoughtIndex).join('\n');
         if (rawNew) {
           const commonLen = commonPrefixLen(rawNew, reasoningBuffer);
           vStr = rawNew.substring(commonLen);
-          if (vStr) { newThoughtIndex = thoughts.length; foundStr = true; }
+          if (vStr) {
+            newThoughtIndex = thoughts.length;
+            foundStr = true;
+          }
         }
       }
-    } else if (delta.phase === "think") {
+    } else if (delta.phase === 'think') {
       isThinkingChunk = true;
       if (delta.content !== undefined) {
-        vStr = delta.content || "";
+        vStr = delta.content || '';
         if (vStr) foundStr = true;
       }
-    } else if (delta.phase === "answer") {
+    } else if (delta.phase === 'answer') {
       isThinkingChunk = false;
       if (delta.content !== undefined) {
-        vStr = delta.content || "";
+        vStr = delta.content || '';
         if (vStr) foundStr = true;
       }
     } else if (delta.reasoning_content !== undefined && delta.reasoning_content) {
@@ -323,16 +310,12 @@ export interface ToolCallProcessingOptions {
   maxToolCalls: number;
 }
 
-export function processToolCallsThroughGuard(
-  toolCalls: any[],
-  toolCallsOut: any[],
-  options: ToolCallProcessingOptions,
-): void {
+export function processToolCallsThroughGuard(toolCalls: any[], toolCallsOut: any[], options: ToolCallProcessingOptions): void {
   const { label, logParsed = false, logId, toolSpamGuard, correctionPrompts, maxToolCalls } = options;
   const effectiveMax = maxToolCalls ?? 8;
 
   if (toolCalls.length > effectiveMax) {
-    console.warn(`  [🛑 TOOL LIMIT${label ? " " + label : ""}] Truncating ${toolCalls.length} tool calls to first ${effectiveMax}`);
+    console.warn(`  [🛑 TOOL LIMIT${label ? ' ' + label : ''}] Truncating ${toolCalls.length} tool calls to first ${effectiveMax}`);
     toolCalls = toolCalls.slice(0, effectiveMax);
   }
 
@@ -344,18 +327,20 @@ export function processToolCallsThroughGuard(
     }
     const spamCheck = toolSpamGuard.check(tc.name, tc.arguments);
     if (!spamCheck.ok) {
-      console.warn(`  [🛑 TOOL SPAM${label ? " " + label : ""}] ${tc.name}: repeated call blocked`);
+      console.warn(`  [🛑 TOOL SPAM${label ? ' ' + label : ''}] ${tc.name}: repeated call blocked`);
       correctionPrompts.push(spamCheck.correctionPrompt);
       continue;
     }
     if (toolCallsOut.length >= maxToolCalls) {
-      console.warn(`  [🛑 TOOL LIMIT${label ? " " + label : ""}] Hit ${maxToolCalls} tool calls per turn, dropping excess`);
-      correctionPrompts.push(`[TOOL CALL LIMIT] Reached maximum of ${maxToolCalls} tool calls per turn. Analyze existing results and respond to the user.`);
+      console.warn(`  [🛑 TOOL LIMIT${label ? ' ' + label : ''}] Hit ${maxToolCalls} tool calls per turn, dropping excess`);
+      correctionPrompts.push(
+        `[TOOL CALL LIMIT] Reached maximum of ${maxToolCalls} tool calls per turn. Analyze existing results and respond to the user.`,
+      );
       break;
     }
     toolCallsOut.push({
       id: tc.id,
-      type: "function",
+      type: 'function',
       function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
     });
     if (logParsed) {
@@ -389,7 +374,7 @@ export function checkAmplificationGuard(
       console.error(
         `[Chat][AMPLIFICATION GUARD] Triggered! ratio=${ratio}x rawIn=${state.rawInputBytes}B emittedOut=${state.emittedOutputBytes}B account=${resolvedEmail} model=${model}`,
       );
-      logStore.recordAmplificationEvent(logId, ratio, lastRawContent || lastVStrRaw || "");
+      logStore.recordAmplificationEvent(logId, ratio, lastRawContent || lastVStrRaw || '');
     }
   }
   return state.triggered;

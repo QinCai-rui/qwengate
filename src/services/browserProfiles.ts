@@ -11,7 +11,10 @@ import { projectPath } from '../utils/paths.ts';
 import { logStore } from './logStore.ts';
 
 export function getProfileDir(email: string): string {
-  const safe = email.toLowerCase().trim().replace(/[^a-z0-9]/g, '_');
+  const safe = email
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]/g, '_');
   const dir = projectPath('.qwen', 'browser-profiles', safe);
   mkdirSync(dir, { recursive: true });
   return dir;
@@ -25,7 +28,7 @@ export interface BrowserProfileOptions {
 
 import { validateQwenUrl } from './playwright.ts';
 
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function getBrowserArgs(): string[] {
   return [
@@ -66,7 +69,9 @@ async function checkExistingToken(context: any): Promise<boolean> {
 
 async function fillLoginForm(page: any, email: string, password: string): Promise<void> {
   try {
-    await page.waitForSelector('input[type="email"], input[placeholder*="Email"], input[name="email"], input[name="login"]', { timeout: 5000 });
+    await page.waitForSelector('input[type="email"], input[placeholder*="Email"], input[name="email"], input[name="login"]', {
+      timeout: 5000,
+    });
     const emailInput = page.locator('input[type="email"], input[placeholder*="Email"], input[name="email"], input[name="login"]').first();
     await emailInput.click();
     await sleep(100 + Math.random() * 200);
@@ -81,7 +86,11 @@ async function fillLoginForm(page: any, email: string, password: string): Promis
 
     await sleep(200 + Math.random() * 300);
     try {
-      const submitBtn = page.locator('button[type="submit"], button:has-text("Sign in"), button:has-text("Login"), button:has-text("Log in"), button:has-text("Continue")').first();
+      const submitBtn = page
+        .locator(
+          'button[type="submit"], button:has-text("Sign in"), button:has-text("Login"), button:has-text("Log in"), button:has-text("Continue")',
+        )
+        .first();
       await submitBtn.click({ timeout: 3000 });
     } catch {
       logStore.log('warn', 'browser', 'submit button click failed for fillLoginForm');
@@ -101,9 +110,7 @@ async function detectCaptcha(page: any): Promise<boolean> {
       document.querySelector('.captcha-container') ||
       document.querySelector('[data-sitekey]') ||
       document.querySelector('.g-recaptcha') ||
-      Array.from(document.querySelectorAll('iframe')).some(f =>
-        /challenge|verify|captcha|recaptcha/i.test(f.src || '')
-      )
+      Array.from(document.querySelectorAll('iframe')).some((f) => /challenge|verify|captcha|recaptcha/i.test(f.src || ''))
     );
   });
 }
@@ -116,10 +123,18 @@ async function tryCheckToken(context: any, email: string): Promise<LoginResult |
     const { saveCookies } = await import('./auth.ts');
     const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
     await saveCookies(email, tokenCookie.value, refreshCookie?.value);
-    try { await context.close(); } catch { logStore.log('warn', 'browser', 'context.close failed in tryCheckToken success'); }
+    try {
+      await context.close();
+    } catch {
+      logStore.log('warn', 'browser', 'context.close failed in tryCheckToken success');
+    }
     return 'success';
   } catch {
-    try { await context.close(); } catch { logStore.log('warn', 'browser', 'context.close failed in tryCheckToken error'); }
+    try {
+      await context.close();
+    } catch {
+      logStore.log('warn', 'browser', 'context.close failed in tryCheckToken error');
+    }
     return 'closed';
   }
 }
@@ -130,10 +145,16 @@ async function tryCheckCaptcha(page: any, context: any, attempt: number, headles
     const hasCaptcha = await detectCaptcha(page);
     if (!hasCaptcha) return null;
     if (headless) {
-      try { await context.close(); } catch { logStore.log('warn', 'browser', 'context.close failed in tryCheckCaptcha'); }
+      try {
+        await context.close();
+      } catch {
+        logStore.log('warn', 'browser', 'context.close failed in tryCheckCaptcha');
+      }
       return 'captcha';
     }
-  } catch { logStore.log('warn', 'browser', 'captcha detection failed in tryCheckCaptcha'); }
+  } catch {
+    logStore.log('warn', 'browser', 'captcha detection failed in tryCheckCaptcha');
+  }
   return null;
 }
 
@@ -167,7 +188,7 @@ export async function openBrowserProfile(email: string, password?: string, optio
       return 'success';
     }
 
-    page = context.pages()[0] || await context.newPage();
+    page = context.pages()[0] || (await context.newPage());
 
     logStore.log('info', 'browser', `Navigating to auth page for ${email}...`);
     validateQwenUrl('https://chat.qwen.ai/auth');
@@ -186,11 +207,21 @@ export async function openBrowserProfile(email: string, password?: string, optio
     }
 
     logStore.log('error', 'browser', `Headless timeout — no login detected for ${email}, closing browser`);
-    try { await context.close(); } catch { logStore.log('warn', 'browser', `context.close failed after timeout for ${email}`); }
+    try {
+      await context.close();
+    } catch {
+      logStore.log('warn', 'browser', `context.close failed after timeout for ${email}`);
+    }
     return 'error';
   } catch (err: any) {
     logStore.log('error', 'browser', `Error for ${email}: ${err.message}`);
-    if (context) { try { await context.close(); } catch { logStore.log('warn', 'browser', `context.close failed in outer catch for ${email}`); } }
+    if (context) {
+      try {
+        await context.close();
+      } catch {
+        logStore.log('warn', 'browser', `context.close failed in outer catch for ${email}`);
+      }
+    }
     return 'error';
   }
 }
@@ -223,7 +254,7 @@ export async function refreshViaProfile(email: string): Promise<boolean> {
       ],
     });
 
-    const page = context.pages()[0] || await context.newPage();
+    const page = context.pages()[0] || (await context.newPage());
     validateQwenUrl('https://chat.qwen.ai');
     await page.goto('https://chat.qwen.ai', { waitUntil: 'domcontentloaded', timeout: 15000 });
 
@@ -235,19 +266,31 @@ export async function refreshViaProfile(email: string): Promise<boolean> {
         const { saveCookies } = await import('./auth.ts');
         const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
         await saveCookies(email, tokenCookie.value, refreshCookie?.value);
-        try { await context.close(); } catch { logStore.log('warn', 'browser', `context.close failed after token save for ${email}`); }
+        try {
+          await context.close();
+        } catch {
+          logStore.log('warn', 'browser', `context.close failed after token save for ${email}`);
+        }
         return true;
       }
     }
 
     logStore.log('error', 'browser', `No valid token found after profile navigation for ${email}`);
-    try { await context.close(); } catch { logStore.log('warn', 'browser', `context.close failed after navigation for ${email}`); }
+    try {
+      await context.close();
+    } catch {
+      logStore.log('warn', 'browser', `context.close failed after navigation for ${email}`);
+    }
     return false;
   } catch (err: any) {
     logStore.log('error', 'browser', `Profile refresh error for ${email}: ${err.message}`);
-    if (context) { try { await context.close(); } catch { logStore.log('warn', 'browser', `context.close failed in outer catch for ${email}`); } }
+    if (context) {
+      try {
+        await context.close();
+      } catch {
+        logStore.log('warn', 'browser', `context.close failed in outer catch for ${email}`);
+      }
+    }
     return false;
   }
 }
-
-

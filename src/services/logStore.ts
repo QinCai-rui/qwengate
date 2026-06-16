@@ -5,21 +5,22 @@
  *
  * System-level logging has been extracted to SystemLogger (systemLogger.ts).
  */
-import { mkdirSync, readdirSync, unlinkSync } from "fs";
-import { writeFile } from "fs/promises";
-import { join } from "path";
+import { mkdirSync, readdirSync, unlinkSync } from 'fs';
+import { writeFile } from 'fs/promises';
+import { join } from 'path';
+import { config } from './configService.ts';
 import {
+  getAllModelHealth as _getAllModelHealth,
+  getModelHealth as _getModelHealth,
   recordModelError as _recordModelError,
   recordModelSuccess as _recordModelSuccess,
-  getModelHealth as _getModelHealth,
   resetModelHealth as _resetModelHealth,
-  getAllModelHealth as _getAllModelHealth,
-} from "./modelHealth.ts";
-import { config } from "./configService.ts";
-import { monitorStore } from "./monitorStore.ts";
-import { SystemLogger, __registerLogStore } from "./systemLogger.ts";
-export { logStore, SystemLogger } from "./systemLogger.ts";
-export type { LogLevel, SystemLogEntry, SystemLogFilter } from "./systemLogger.ts";
+} from './modelHealth.ts';
+import { monitorStore } from './monitorStore.ts';
+import { __registerLogStore, SystemLogger } from './systemLogger.ts';
+
+export type { LogLevel, SystemLogEntry, SystemLogFilter } from './systemLogger.ts';
+export { logStore, SystemLogger } from './systemLogger.ts';
 export interface LogEntry {
   id: string;
   timestamp: string;
@@ -27,7 +28,7 @@ export interface LogEntry {
   turnId?: string;
   stream: boolean;
   accountEmail: string;
-  level: import("./systemLogger.ts").LogLevel;
+  level: import('./systemLogger.ts').LogLevel;
   request_id: string;
   latency_ms: number | null;
   tokens: { prompt: number; completion: number; total: number } | null;
@@ -88,7 +89,7 @@ export interface LogEntry {
   amplificationRatio?: number;
   amplificationTriggeredInput?: string;
 }
-const MAX_ENTRIES = parseInt(config.get("MAX_LOGS", "50"), 10);
+const MAX_ENTRIES = parseInt(config.get('MAX_LOGS', '50'), 10);
 const MAX_CHUNKS_PER_ENTRY = 100;
 const MAX_FIELD_LENGTH = 10240;
 export class RequestLogStore extends SystemLogger {
@@ -121,30 +122,18 @@ export class RequestLogStore extends SystemLogger {
     // No-op — input is included in the single JSON log file at completion
   }
 
-  createEntry(
-    id: string,
-    model: string,
-    stream: boolean,
-    requestId?: string,
-    accountEmail?: string,
-  ): LogEntry {
+  createEntry(id: string, model: string, stream: boolean, requestId?: string, accountEmail?: string): LogEntry {
     return this.createLogEntry(id, model, stream, requestId, accountEmail);
   }
-  createLogEntry(
-    id: string,
-    model: string,
-    stream: boolean,
-    requestId?: string,
-    accountEmail?: string,
-  ): LogEntry {
+  createLogEntry(id: string, model: string, stream: boolean, requestId?: string, accountEmail?: string): LogEntry {
     const entry: LogEntry = {
       id,
       timestamp: new Date().toISOString(),
       model,
       stream,
-      accountEmail: accountEmail || "",
+      accountEmail: accountEmail || '',
       // Structured log fields for external aggregators
-      level: "info",
+      level: 'info',
       request_id: requestId ?? id,
       latency_ms: null,
       tokens: null,
@@ -154,23 +143,23 @@ export class RequestLogStore extends SystemLogger {
         hasTools: false,
         toolNames: [],
         tool_choice: null,
-        lastMessage: "",
+        lastMessage: '',
         messages: [],
       },
       promptToQwen: {
         systemPromptLength: 0,
         totalLength: 0,
-        preview: "",
+        preview: '',
       },
       qwenRawChunks: [],
-      rawFullContent: "",
+      rawFullContent: '',
       parsedToolCalls: [],
-      remainingText: "",
-      processedApiOutput: "",
+      remainingText: '',
+      processedApiOutput: '',
       finalResponse: {
-        finishReason: "stop",
+        finishReason: 'stop',
         toolCallCount: 0,
-        contentPreview: "",
+        contentPreview: '',
       },
       errors: [],
     };
@@ -198,9 +187,7 @@ export class RequestLogStore extends SystemLogger {
       if (entry.rawFullContent.length < MAX_FIELD_LENGTH) {
         entry.rawFullContent += chunk;
         if (entry.rawFullContent.length > MAX_FIELD_LENGTH) {
-          entry.rawFullContent =
-            entry.rawFullContent.substring(0, MAX_FIELD_LENGTH) +
-            "... [truncated]";
+          entry.rawFullContent = entry.rawFullContent.substring(0, MAX_FIELD_LENGTH) + '... [truncated]';
         }
       }
     });
@@ -210,24 +197,17 @@ export class RequestLogStore extends SystemLogger {
       if (entry.processedApiOutput.length < MAX_FIELD_LENGTH) {
         entry.processedApiOutput += content;
         if (entry.processedApiOutput.length > MAX_FIELD_LENGTH) {
-          entry.processedApiOutput =
-            entry.processedApiOutput.substring(0, MAX_FIELD_LENGTH) +
-            "... [truncated]";
+          entry.processedApiOutput = entry.processedApiOutput.substring(0, MAX_FIELD_LENGTH) + '... [truncated]';
         }
       }
     });
   }
-  recordAmplificationEvent(
-    logId: string,
-    ratio: number,
-    triggeringInput: string,
-  ): void {
+  recordAmplificationEvent(logId: string, ratio: number, triggeringInput: string): void {
     this.updateEntry(logId, (entry) => {
       entry.amplificationRatio = ratio;
       entry.amplificationTriggeredInput =
         triggeringInput.length > 2000
-          ? triggeringInput.substring(0, 2000) +
-            `... [truncated ${triggeringInput.length - 2000} more chars]`
+          ? triggeringInput.substring(0, 2000) + `... [truncated ${triggeringInput.length - 2000} more chars]`
           : triggeringInput;
     });
   }
@@ -246,7 +226,7 @@ export class RequestLogStore extends SystemLogger {
   getAll(): LogEntry[] {
     return this.entries;
   }
-  setNetworkTiming(id: string, timing: LogEntry["networkTiming"]): void {
+  setNetworkTiming(id: string, timing: LogEntry['networkTiming']): void {
     this.updateEntry(id, (entry) => {
       entry.networkTiming = timing;
     });
@@ -277,10 +257,7 @@ export class RequestLogStore extends SystemLogger {
   resetModelHealth(model: string): void {
     _resetModelHealth(model);
   }
-  getAllModelHealth(): Record<
-    string,
-    { successCount: number; errorCount: number; lastActivity: string }
-  > {
+  getAllModelHealth(): Record<string, { successCount: number; errorCount: number; lastActivity: string }> {
     return _getAllModelHealth();
   }
   private toolCallValidationFailures = 0;
@@ -335,15 +312,14 @@ export class RequestLogStore extends SystemLogger {
         }
       });
     }
-    if (config.get("SAVE_REQUEST_LOGS") === "true") {
+    if (config.get('SAVE_REQUEST_LOGS') === 'true') {
       this.saveRequestLog(id);
     }
 
     // Record to persistent monitor store (survives restarts)
     const entry = this.entryMap.get(id);
     if (entry && entry.accountEmail) {
-      const hasErrors = (entry.errors && entry.errors.length > 0)
-        || entry.finalResponse?.finishReason === 'error';
+      const hasErrors = (entry.errors && entry.errors.length > 0) || entry.finalResponse?.finishReason === 'error';
       monitorStore.record({
         accountEmail: entry.accountEmail,
         model: entry.model || 'unknown',
@@ -361,17 +337,21 @@ export class RequestLogStore extends SystemLogger {
     if (!entry) return;
     const d = new Date(entry.timestamp);
     const y = d.getFullYear();
-    const M = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    const h = String(d.getHours()).padStart(2, "0");
-    const min = String(d.getMinutes()).padStart(2, "0");
-    const s = String(d.getSeconds()).padStart(2, "0");
+    const M = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const h = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    const s = String(d.getSeconds()).padStart(2, '0');
     const dateStr = `${y}-${M}-${day}`;
     const timeStr = `${h}-${min}-${s}`;
     try {
       const toolCalls = (entry.parsedToolCalls || []).map((tc) => {
         let args: unknown = tc.args;
-        try { args = JSON.parse(tc.args); } catch { /* keep string */ }
+        try {
+          args = JSON.parse(tc.args);
+        } catch {
+          /* keep string */
+        }
         return { name: tc.name, arguments: args };
       });
       const payload = {
@@ -382,9 +362,9 @@ export class RequestLogStore extends SystemLogger {
         finish_reason: entry.finalResponse?.finishReason || null,
         stream: entry.stream,
         latency_ms: entry.latency_ms,
-        thinking_content: entry.reasoningContent || "",
-        raw_output: entry.rawFullContent || "",
-        proccessed_output: entry.processedApiOutput || "",
+        thinking_content: entry.reasoningContent || '',
+        raw_output: entry.rawFullContent || '',
+        proccessed_output: entry.processedApiOutput || '',
         tool_call_count: toolCalls.length,
         tool_calls: toolCalls,
         errors: entry.errors || [],
@@ -402,10 +382,12 @@ export class RequestLogStore extends SystemLogger {
             const toRemove = files.slice(0, files.length - 999);
             for (const f of toRemove) unlinkSync(join(this.requestLogDir, f));
           }
-        } catch { /* cleanup is best-effort */ }
+        } catch {
+          /* cleanup is best-effort */
+        }
       }
-      writeFile(filePath, JSON.stringify(payload, null, 2)).catch(err =>
-        console.error('[LogStore] Failed to write request log:', err.message)
+      writeFile(filePath, JSON.stringify(payload, null, 2)).catch((err) =>
+        console.error('[LogStore] Failed to write request log:', err.message),
       );
     } catch {
       /* disk write best-effort */
@@ -415,4 +397,3 @@ export class RequestLogStore extends SystemLogger {
 
 const logStoreInstance = new RequestLogStore();
 __registerLogStore(logStoreInstance);
-

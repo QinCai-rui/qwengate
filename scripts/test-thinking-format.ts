@@ -40,80 +40,99 @@ const GATEWAY_URL = `http://localhost:${PORT}/v1/chat/completions`;
 // ─── Values to test ──────────────────────────────────────────────────────────
 const CORE_VALUES = [
   // Tier 1: Known values
-  'summary',        // baseline — known to work
-  'qwen',           // vLLM legacy
+  'summary', // baseline — known to work
+  'qwen', // vLLM legacy
   'qwen-chat-template', // vLLM legacy
   // Tier 2: Common verbosity/format patterns
-  'full',           // opposite of summary
-  'detailed',       // common verbosity term
-  'verbose',        // common verbosity term
-  'none',           // disable thinking output
-  'minimal',        // less than summary
-  'compact',        // condensed format
-  'raw',            // unprocessed thinking
-  'complete',       // full reasoning chain
-  'brief',          // shorter than summary
-  'short',          // concise format
-  'extended',       // longer than summary
-  'structured',     // organized format
-  'simple',         // simplified output
+  'full', // opposite of summary
+  'detailed', // common verbosity term
+  'verbose', // common verbosity term
+  'none', // disable thinking output
+  'minimal', // less than summary
+  'compact', // condensed format
+  'raw', // unprocessed thinking
+  'complete', // full reasoning chain
+  'brief', // shorter than summary
+  'short', // concise format
+  'extended', // longer than summary
+  'structured', // organized format
+  'simple', // simplified output
   // Tier 3: Formatting styles
-  'markdown',       // formatted thinking
-  'plain',          // plain text
-  'tree',           // tree-of-thought style
-  'chain',          // chain-of-thought style
-  'steps',          // step-by-step
-  'outline',        // outline format
-  'bullet',         // bullet points
-  'paragraph',      // prose format
+  'markdown', // formatted thinking
+  'plain', // plain text
+  'tree', // tree-of-thought style
+  'chain', // chain-of-thought style
+  'steps', // step-by-step
+  'outline', // outline format
+  'bullet', // bullet points
+  'paragraph', // prose format
   // Tier 4: Display modes
-  'collapsed',      // hidden/folded
-  'expanded',       // fully shown
-  'hidden',         // not displayed
-  'visible',        // always shown
-  'inline',         // inline with response
-  'separate',       // separate section
+  'collapsed', // hidden/folded
+  'expanded', // fully shown
+  'hidden', // not displayed
+  'visible', // always shown
+  'inline', // inline with response
+  'separate', // separate section
   // Tier 5: Other patterns
-  'tagged',         // XML/HTML tagged
-  'annotated',      // with annotations
-  'key_points',     // key takeaways only
-  'highlight',      // highlights only
-  'thinking',       // literal name match
-  'reasoning',      // synonym
-  'analysis',       // analysis format
-  'reflection',     // self-reflection style
-  'debug',          // debug-level output
-  'trace',          // execution trace
-  'log',            // log-style output
-  'json',           // JSON structured
-  'xml',            // XML structured
-  'text',           // plain text
-  'formatted',      // rich formatted
-  'clean',          // cleaned up
-  'filtered',       // filtered content
-  'original',       // original unmodified
-  'translated',     // translated thinking
-  'streaming',      // stream-friendly
+  'tagged', // XML/HTML tagged
+  'annotated', // with annotations
+  'key_points', // key takeaways only
+  'highlight', // highlights only
+  'thinking', // literal name match
+  'reasoning', // synonym
+  'analysis', // analysis format
+  'reflection', // self-reflection style
+  'debug', // debug-level output
+  'trace', // execution trace
+  'log', // log-style output
+  'json', // JSON structured
+  'xml', // XML structured
+  'text', // plain text
+  'formatted', // rich formatted
+  'clean', // cleaned up
+  'filtered', // filtered content
+  'original', // original unmodified
+  'translated', // translated thinking
+  'streaming', // stream-friendly
 ];
 
 const LONG_TAIL = [
-  'tag', 'tags', 'stream',
-  'true', 'false',
-  'concise', 'extensive', 'thorough', 'comprehensive',
-  'partial', 'abbreviated', 'truncated', 'full_thinking',
-  'chain_of_thought', 'cot',
-  'step_by_step', 'internal', 'external',
-  'html', 'latex', 'yaml', 'toml', 'csv',
-  'tags_only', 'thinking_only', 'no_thinking', 'auto',
-  'on', 'off', 'enabled', 'disabled',
-  'foo', 'bar',
+  'tag',
+  'tags',
+  'stream',
+  'true',
+  'false',
+  'concise',
+  'extensive',
+  'thorough',
+  'comprehensive',
+  'partial',
+  'abbreviated',
+  'truncated',
+  'full_thinking',
+  'chain_of_thought',
+  'cot',
+  'step_by_step',
+  'internal',
+  'external',
+  'html',
+  'latex',
+  'yaml',
+  'toml',
+  'csv',
+  'tags_only',
+  'thinking_only',
+  'no_thinking',
+  'auto',
+  'on',
+  'off',
+  'enabled',
+  'disabled',
+  'foo',
+  'bar',
 ];
 
-const VALUES_TO_TEST = SINGLE
-  ? [SINGLE]
-  : INCLUDE_LONG_TAIL
-    ? [...CORE_VALUES, ...LONG_TAIL]
-    : CORE_VALUES;
+const VALUES_TO_TEST = SINGLE ? [SINGLE] : INCLUDE_LONG_TAIL ? [...CORE_VALUES, ...LONG_TAIL] : CORE_VALUES;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 interface TestResult {
@@ -136,9 +155,7 @@ async function testValue(value: string): Promise<TestResult> {
   const payload: Record<string, any> = {
     model: MODEL,
     stream: true,
-    messages: [
-      { role: 'user', content: 'What is 2+2? Think step by step, then give the final answer.' },
-    ],
+    messages: [{ role: 'user', content: 'What is 2+2? Think step by step, then give the final answer.' }],
     _thinking_format: value,
   };
 
@@ -177,7 +194,9 @@ async function testValue(value: string): Promise<TestResult> {
               if (delta) fullContent += delta;
               // Capture usage from final chunk
               if (parsed.usage) usage = parsed.usage;
-            } catch { /* not JSON */ }
+            } catch {
+              /* not JSON */
+            }
           }
         }
       }
@@ -196,7 +215,7 @@ async function testValue(value: string): Promise<TestResult> {
       value,
       status: 0,
       ok: false,
-      error: err.name === 'AbortError' ? 'TIMEOUT (90s)' : (err.message || String(err)),
+      error: err.name === 'AbortError' ? 'TIMEOUT (90s)' : err.message || String(err),
       durationMs: Date.now() - startMs,
     };
   }
@@ -266,27 +285,23 @@ async function main() {
 
   const startAll = Date.now();
 
-  const results = await runWithConcurrency(
-    VALUES_TO_TEST,
-    CONCURRENCY,
-    async (value, index) => {
-      process.stdout.write(`[${index + 1}/${VALUES_TO_TEST.length}] "${value}" ... `);
-      const result = await testValue(value);
+  const results = await runWithConcurrency(VALUES_TO_TEST, CONCURRENCY, async (value, index) => {
+    process.stdout.write(`[${index + 1}/${VALUES_TO_TEST.length}] "${value}" ... `);
+    const result = await testValue(value);
 
-      if (result.ok) {
-        const reasoning = result.usage?.completion_tokens_details?.reasoning_tokens;
-        const completion = result.usage?.completion_tokens;
-        const duration = result.durationMs ? ` ${(result.durationMs / 1000).toFixed(1)}s` : '';
-        const hasThinking = reasoning && reasoning > 0 ? `🧠 reasoning:${reasoning}` : '⬜ no reasoning';
-        console.log(`✅ 200  ${hasThinking}  completion:${completion ?? '?'}${duration}`);
-      } else {
-        const duration = result.durationMs ? ` ${(result.durationMs / 1000).toFixed(1)}s` : '';
-        console.log(`❌ ${result.status || 'ERR'}  ${result.error}${duration}`);
-      }
+    if (result.ok) {
+      const reasoning = result.usage?.completion_tokens_details?.reasoning_tokens;
+      const completion = result.usage?.completion_tokens;
+      const duration = result.durationMs ? ` ${(result.durationMs / 1000).toFixed(1)}s` : '';
+      const hasThinking = reasoning && reasoning > 0 ? `🧠 reasoning:${reasoning}` : '⬜ no reasoning';
+      console.log(`✅ 200  ${hasThinking}  completion:${completion ?? '?'}${duration}`);
+    } else {
+      const duration = result.durationMs ? ` ${(result.durationMs / 1000).toFixed(1)}s` : '';
+      console.log(`❌ ${result.status || 'ERR'}  ${result.error}${duration}`);
+    }
 
-      return result;
-    },
-  );
+    return result;
+  });
 
   const totalDuration = ((Date.now() - startAll) / 1000).toFixed(1);
 
@@ -295,9 +310,9 @@ async function main() {
   console.log(`RESULTS SUMMARY  (total time: ${totalDuration}s)`);
   console.log('='.repeat(80));
 
-  const accepted = results.filter(r => r.ok);
-  const rejected = results.filter(r => !r.ok);
-  const withReasoning = accepted.filter(r => (r.usage?.completion_tokens_details?.reasoning_tokens ?? 0) > 0);
+  const accepted = results.filter((r) => r.ok);
+  const rejected = results.filter((r) => !r.ok);
+  const withReasoning = accepted.filter((r) => (r.usage?.completion_tokens_details?.reasoning_tokens ?? 0) > 0);
 
   console.log(`\n✅ ACCEPTED (${accepted.length}):`);
   for (const r of accepted) {
@@ -305,7 +320,9 @@ async function main() {
     const completion = r.usage?.completion_tokens ?? '?';
     const thinking = reasoning > 0 ? ` 🧠 reasoning:${reasoning}` : '';
     const duration = r.durationMs ? ` ${(r.durationMs / 1000).toFixed(1)}s` : '';
-    const contentPreview = r.assistantContent ? ` → "${r.assistantContent.slice(0, 80)}${r.assistantContent.length > 80 ? '...' : ''}"` : ' → (empty)';
+    const contentPreview = r.assistantContent
+      ? ` → "${r.assistantContent.slice(0, 80)}${r.assistantContent.length > 80 ? '...' : ''}"`
+      : ' → (empty)';
     console.log(`   "${r.value}" [${r.status}]  completion:${completion}${thinking}${duration}${contentPreview}`);
   }
 
@@ -329,12 +346,14 @@ async function main() {
   const outPath = `network-captures/thinking-format-results-${Date.now()}.json`;
   const { writeFileSync, mkdirSync } = await import('fs');
   const { dirname } = await import('path');
-  try { mkdirSync(dirname(outPath), { recursive: true }); } catch {}
+  try {
+    mkdirSync(dirname(outPath), { recursive: true });
+  } catch {}
   writeFileSync(outPath, JSON.stringify(results, null, 2));
   console.log(`\n📁 Full results saved to: ${outPath}`);
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error('Fatal:', err);
   process.exit(1);
 });

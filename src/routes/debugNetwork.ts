@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { getRecentNetworkEntries, getNetworkEntry, subscribeNetwork } from '../services/networkDebug.ts';
+import { getNetworkEntry, getRecentNetworkEntries, subscribeNetwork } from '../services/networkDebug.ts';
 
 export const debugNetworkApp = new Hono();
 
@@ -27,14 +27,20 @@ debugNetworkApp.get('/stream', (c) => {
       const unsub = subscribeNetwork((entry) => {
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'update', entry })}\n\n`));
-        } catch { /* stream closed */ }
+        } catch {
+          /* stream closed */
+        }
       });
 
       const signal = c.req.raw?.signal;
       if (signal) {
         signal.addEventListener('abort', () => {
           unsub();
-          try { controller.close(); } catch { /* already closed */ }
+          try {
+            controller.close();
+          } catch {
+            /* already closed */
+          }
         });
       }
     },
@@ -44,7 +50,7 @@ debugNetworkApp.get('/stream', (c) => {
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
+      Connection: 'keep-alive',
     },
   });
 });

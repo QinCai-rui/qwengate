@@ -8,8 +8,8 @@
  */
 
 import { availableParallelism, cpus } from 'node:os';
+import { isBun } from './utils/env.ts';
 
-const isBun = typeof Bun !== 'undefined';
 if (!isBun) {
   console.error('[cluster] Cluster mode requires Bun runtime. Install Bun: https://bun.sh');
   process.exit(1);
@@ -76,7 +76,7 @@ const monitor = setInterval(async () => {
 }, 5_000);
 
 // Don't keep the monitor alive if that's all that's running
-if (typeof Bun !== 'undefined') {
+if (isBun) {
   // Bun doesn't have unref on timers the same way, but the process stays alive due to workers
 }
 
@@ -89,7 +89,11 @@ function shutdown() {
 
   for (const worker of workers) {
     if (worker?.process) {
-      try { worker.process.kill(); } catch { /* already dead */ }
+      try {
+        worker.process.kill();
+      } catch {
+        /* already dead */
+      }
     }
   }
 

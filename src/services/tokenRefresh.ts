@@ -4,8 +4,9 @@
  * Handles refresh token exchange and ensuring accounts stay fresh.
  */
 
-import { createAuthFetchTimeout, AUTH_TOKEN_MAX_AGE_MS, AUTH_REFRESH_BEFORE_MS, saveCookies, loginFresh, type AccountEntry } from "./auth.ts";
+import { type AccountEntry, AUTH_REFRESH_BEFORE_MS, AUTH_TOKEN_MAX_AGE_MS, loginFresh, saveCookies } from './auth.ts';
 import { logStore } from './logStore.ts';
+import { createFetchTimeout } from './qwen.ts';
 
 export function needsRefresh(acct: AccountEntry): boolean {
   if (!acct.state) return true;
@@ -17,14 +18,14 @@ const QWEN_CHAT_URL = 'https://chat.qwen.ai';
 export async function tryRefreshToken(acct: AccountEntry): Promise<boolean> {
   if (!acct.state?.refreshToken) return false;
 
-  const { controller, cleanup } = createAuthFetchTimeout();
+  const { controller, cleanup } = createFetchTimeout();
   try {
     const response = await fetch(`${QWEN_CHAT_URL}/api/v2/auths/refresh`, {
       method: 'POST',
       headers: {
-        'accept': 'application/json, text/plain, */*',
+        accept: 'application/json, text/plain, */*',
         'content-type': 'application/json',
-        'source': 'web',
+        source: 'web',
         'x-request-id': crypto.randomUUID(),
       },
       body: JSON.stringify({ refresh_token: acct.state.refreshToken }),
