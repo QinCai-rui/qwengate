@@ -1,7 +1,5 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
 
 import {
   incrementInFlight,
@@ -100,7 +98,7 @@ describe('throttleAccount and isAvailable', () => {
   beforeEach(() => {
     accounts.push({
       email: testEmail,
-      password: 'test-pass',
+      password: '', // empty so saveAccountsToFile skips it (filters on .password)
       state: { token: 'tok', expiresAt: Date.now() + 3600000, refreshToken: null },
       lastUsed: 0,
       throttledUntil: 0,
@@ -115,17 +113,6 @@ describe('throttleAccount and isAvailable', () => {
   afterEach(() => {
     accounts.length = 0;
     rebuildEmailIndex();
-    // throttleAccount persists to .qwen/accounts.json — clean up test data
-    const accountsPath = join(process.cwd(), '.qwen', 'accounts.json');
-    try {
-      if (existsSync(accountsPath)) {
-        const raw = JSON.parse(readFileSync(accountsPath, 'utf-8'));
-        if (Array.isArray(raw)) {
-          const cleaned = raw.filter((a: any) => a.email !== testEmail);
-          writeFileSync(accountsPath, JSON.stringify(cleaned, null, 2), 'utf-8');
-        }
-      }
-    } catch { /* best-effort */ }
   });
 
   test('account is available when not throttled and has state', () => {
