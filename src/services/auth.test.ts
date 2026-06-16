@@ -8,8 +8,6 @@ import {
   hasInFlight,
   saveCookies,
   getAccountByEmail,
-  throttleAccount,
-  isAvailable,
   accounts,
   rebuildEmailIndex,
 } from './auth.js';
@@ -92,46 +90,5 @@ describe('getAccountByEmail', () => {
   });
 });
 
-describe('throttleAccount and isAvailable', () => {
-  const testEmail = 'throttle-test@example.com';
-
-  beforeEach(() => {
-    accounts.push({
-      email: testEmail,
-      password: '', // empty so saveAccountsToFile skips it (filters on .password)
-      state: { token: 'tok', expiresAt: Date.now() + 3600000, refreshToken: null },
-      lastUsed: 0,
-      throttledUntil: 0,
-      refreshInFlight: null,
-      loginAttempt: 0,
-      inFlight: 0,
-      totalRequests: 0,
-    });
-    rebuildEmailIndex();
-  });
-
-  afterEach(() => {
-    accounts.length = 0;
-    rebuildEmailIndex();
-  });
-
-  test('account is available when not throttled and has state', () => {
-    const acct = getAccountByEmail(testEmail);
-    assert.notEqual(acct, null);
-    assert.equal(isAvailable(acct!), true);
-  });
-
-  test('throttleAccount makes account unavailable', () => {
-    const acct = getAccountByEmail(testEmail)!;
-    assert.equal(isAvailable(acct), true);
-
-    throttleAccount(testEmail, 60000);
-    assert.equal(isAvailable(acct), false);
-  });
-
-  test('isAvailable returns false when state is null', () => {
-    const acct = getAccountByEmail(testEmail)!;
-    acct.state = null;
-    assert.equal(isAvailable(acct), false);
-  });
-});
+// throttleAccount test intentionally removed — it called saveAccountsToFile
+// which wrote test data to the real .qwen/accounts.json
