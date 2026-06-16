@@ -126,16 +126,19 @@ test('save - writes to config.json', () => {
 
 test('getAll - returns all keys', () => {
   const path = tmpFile('getall');
-  writeFileSync(path, JSON.stringify({ PORT: '99999', API_KEY: 'test-key' }), 'utf-8');
+  // Use keys unlikely to be set as CI env vars to avoid false failures
+  writeFileSync(path, JSON.stringify({ BROWSER: 'firefox', MAX_LOGS: '99' }), 'utf-8');
   const svc = new ConfigService(path);
 
   const all = svc.getAll();
   const keys = Object.keys(all);
   assert.ok(keys.length > 0, 'should return keys');
-  assert.ok(keys.includes('PORT'), 'should include PORT');
-  assert.ok(keys.includes('API_KEY'), 'should include API_KEY');
-  assert.equal(all.PORT, '99999');
-  assert.equal(all.API_KEY, 'test-key');
+  assert.ok(keys.includes('BROWSER'), 'should include BROWSER');
+  assert.ok(keys.includes('MAX_LOGS'), 'should include MAX_LOGS');
+  // get() and getAll() check process.env first — these assertions are valid
+  // only if BROWSER and MAX_LOGS aren't set in the test environment
+  assert.equal(all.BROWSER, 'firefox');
+  assert.equal(all.MAX_LOGS, '99');
 
   try { unlinkSync(path); } catch { /* cleanup */ }
 });
