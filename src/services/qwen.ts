@@ -4,7 +4,7 @@ import { decrementInFlight, pickAccount, throttleAccount } from './auth.ts';
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
 import { completeEntry, createNetworkEntry, errorEntry, recordResponse, recordStreamChunk } from './networkDebug.ts';
-import { getQwenHeaders } from './playwright.ts';
+import { forceRefreshBxHeaders, getQwenHeaders } from './playwright.ts';
 import { logQwenRequest, logQwenResponse } from './qwenLogger.ts';
 
 export { configureAccount, deleteAllChats, fetchQwenModels } from './qwenModels.ts';
@@ -106,6 +106,21 @@ export interface QwenStreamResult {
 
 const QWEN_FETCH_TIMEOUT_MS = config.getInt('QWEN_FETCH_TIMEOUT_MS', 30000);
 
+// Per-account request jitter to avoid looking like automated bursts
+const lastRequestTime = new Map<string, number>();
+async function applyRequestJitter(accountEmail?: string): Promise<void> {
+  if (!accountEmail) return;
+  const now = Date.now();
+  const last = lastRequestTime.get(accountEmail) || 0;
+  const elapsed = now - last;
+  // If the last request was less than 2 seconds ago, add a human-like delay
+  if (elapsed < 2000) {
+    const jitter = 100 + Math.random() * 400; // 100-500ms random delay
+    await new Promise((r) => setTimeout(r, jitter));
+  }
+  lastRequestTime.set(accountEmail, Date.now());
+}
+
 // Cache Intl.DateTimeFormat — avoids re-creating per request (expensive)
 const cachedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
@@ -196,6 +211,18 @@ export async function createQwenStream(
   const streamAbortController = new AbortController();
 
   function buildRequestHeaders(reqHeaders: Record<string, string>, cId?: string): Record<string, string> {
+    // Fallback bx-umidtoken if browser context hasn't captured it yet —
+    // use a hash of account email + session data so it's consistent per session
+    const bxUmidtoken =
+      reqHeaders['bx-umidtoken'] ||
+      crypto
+        .createHash('sha256')
+        .update(reqHeaders['cookie'] || `anon-${Date.now()}`)
+        .digest('hex')
+        .slice(0, 64);
+    const bxUa =
+      reqHeaders['bx-ua'] ||
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
     return {
       accept: 'application/json',
       'accept-language': 'pt-BR,pt;q=0.9',
@@ -210,8 +237,8 @@ export async function createQwenStream(
       'user-agent': reqHeaders['user-agent'],
       'x-accel-buffering': 'no',
       'x-request-id': crypto.randomUUID(),
-      'bx-ua': reqHeaders['bx-ua'],
-      'bx-umidtoken': reqHeaders['bx-umidtoken'],
+      'bx-ua': bxUa,
+      'bx-umidtoken': bxUmidtoken,
       'bx-v': reqHeaders['bx-v'],
     };
   }
@@ -226,6 +253,25 @@ export async function createQwenStream(
           const retryAfterMs = 2000 + Math.floor(Math.random() * 2000);
           errorEntry(debugEntryId, errorJson.data.details);
           throw new RetryableQwenStreamError(`Qwen: ${errorJson.data.details}`, retryAfterMs);
+        }
+        // Qwen anti-bot CAPTCHA — force header refresh and switch accounts
+        if (errorJson?.ret?.[0] === 'FAIL_SYS_USER_VALIDATE') {
+          const details = errorJson.ret[1] || 'CAPTCHA required';
+          logStore.log('warn', 'qwen', `CAPTCHA detected for ${currentAccountEmail || 'unknown'}: ${details}`);
+          if (currentAccountEmail) {
+            // Force bx header refresh in the browser context
+            forceRefreshBxHeaders(currentAccountEmail).catch(() => {});
+            // Throttle the account briefly so we don't retry with the same flagged session
+            throttleAccount(currentAccountEmail, 5 * 60 * 1000);
+            // Try to switch to a different account
+            const nextAccount = await pickAccount();
+            if (nextAccount && nextAccount.email !== currentAccountEmail) {
+              currentAccountEmail = nextAccount.email;
+              decrementInFlight(nextAccount.email);
+            }
+          }
+          errorEntry(debugEntryId, `CAPTCHA: ${details}`);
+          throw new RetryableQwenStreamError(`Qwen CAPTCHA — switched accounts. ${details}`, 3000);
         }
         if (errorJson?.success === false) {
           const code = errorJson.data?.code || errorJson.code || 'UpstreamError';
@@ -283,6 +329,8 @@ export async function createQwenStream(
   const makeRequest = async (): Promise<{ response: Response; headers: Record<string, string>; qwenLogFile?: string }> => {
     const { headers: reqHeaders } = await getQwenHeaders(currentAccountEmail);
     const requestHeaders = buildRequestHeaders(reqHeaders, chatId);
+    // Human-like jitter between requests from the same account
+    await applyRequestJitter(currentAccountEmail);
     const debugEntry = createNetworkEntry({
       url,
       method: 'POST',

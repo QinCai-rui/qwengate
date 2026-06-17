@@ -450,6 +450,22 @@ async function captureBxHeaders(accCtx: AccountContext): Promise<void> {
     console.warn(`[AccountContext] bx-header capture fetch failed: ${err.message}`);
   }
 }
+/**
+ * Force-refresh bx headers (bx-umidtoken, bx-ua) for an account.
+ * Called when Qwen returns CAPTCHA/FAIL_SYS_USER_VALIDATE to get fresh
+ * anti-bot fingerprint tokens from the browser context.
+ */
+export async function forceRefreshBxHeaders(email: string): Promise<void> {
+  if (process.env.TEST_MOCK_PLAYWRIGHT) return;
+  const accCtx = accountContexts.get(email);
+  if (!accCtx) return;
+  // Clear existing bx headers so captureBxHeaders extracts fresh ones
+  delete accCtx.headers['bx-umidtoken'];
+  delete accCtx.headers['bx-ua'];
+  await captureBxHeaders(accCtx);
+  logStore.log('info', 'playwright', `bx headers refreshed for ${email.split('@')[0]}`);
+}
+
 export async function getQwenHeaders(
   email?: string,
 ): Promise<{ headers: Record<string, string>; chatSessionId: string; parentMessageId: string | null }> {
