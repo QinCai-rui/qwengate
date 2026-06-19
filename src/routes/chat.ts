@@ -4,6 +4,7 @@ import { pickAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
+import { RetryableQwenStreamError } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import { OpenAIRequest } from '../types/openai.ts';
@@ -87,12 +88,14 @@ async function parseRequestBody(c: Context) {
 async function setupSession(messages: any[], body: OpenAIRequest, availableTokens: number, toolCalling: boolean, logId: string) {
   const { qwenMessages: processedMessages } = buildQwenMessages(messages, body, availableTokens, toolCalling);
 
+  let lastFailedEmail: string | undefined;
+
   const isThinkingModel = !body.model.includes('no-thinking');
   const MAX_ACCOUNT_RETRIES = 5;
   let lastError: any;
 
   for (let attempt = 0; attempt < MAX_ACCOUNT_RETRIES; attempt++) {
-    const selectedAccount = await pickAccount();
+    const selectedAccount = await pickAccount(lastFailedEmail);
     // If no accounts available AND none are throttled, there are simply no accounts configured.
     // Fall through to acquireSessionWithCorrections with undefined email (mock Playwright path).
     const accountEmail = selectedAccount?.email;
@@ -105,6 +108,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
     try {
       sessionResult = await acquireSessionWithCorrections(accountEmail, processedMessages);
     } catch (err) {
+      lastFailedEmail = accountEmail;
       lastError = err;
       continue; // Try next account
     }
@@ -133,8 +137,15 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       // Release the acquired session to prevent pool exhaustion + inFlight leak
       sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
 
-      // If rate limited, try next account silently (don't send error to client yet)
-      if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
+      console.log(`[Chat] Request failed on ${resolvedEmail}: ${err.message || err} (attempt ${attempt + 1}/${MAX_ACCOUNT_RETRIES})`);
+
+      // If rate limited or retryable, try next account silently
+      if (
+        err.upstreamStatus === 429 ||
+        /RateLimited|daily usage limit|CAPTCHA|FAIL_SYS_USER_VALIDATE/i.test(err.message || '') ||
+        err instanceof RetryableQwenStreamError
+      ) {
+        lastFailedEmail = resolvedEmail;
         lastError = err;
         continue;
       }
@@ -156,6 +167,8 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
         preview: finalPrompt.length > 1000 ? finalPrompt.substring(0, 1000) + '...' : finalPrompt,
       };
     });
+
+    console.log(`[Chat] Request routed to ${resolvedEmail} — stream ready (attempt ${attempt + 1})`);
 
     return {
       sessionMessages,

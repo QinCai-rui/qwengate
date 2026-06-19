@@ -408,12 +408,15 @@ export function isAvailable(acct: AccountEntry): boolean {
   if (acct.throttledUntil > Date.now()) return false;
   return true;
 }
-export async function pickAccount(): Promise<AccountEntry | null> {
+export async function pickAccount(excludeEmail?: string): Promise<AccountEntry | null> {
   // No lock needed — all operations are synchronous and fast.
   // Worst case for concurrent access: slightly imbalanced inFlight count,
   // which is acceptable for load-balancing purposes.
   try {
-    const available = accounts.filter(isAvailable);
+    let available = accounts.filter(isAvailable);
+    if (excludeEmail) {
+      available = available.filter((a) => a.email !== excludeEmail);
+    }
     if (available.length === 0) {
       // All accounts are throttled or unauthenticated — return null instead
       // of falling back to a throttled account (which would guaranteed fail).
@@ -421,7 +424,9 @@ export async function pickAccount(): Promise<AccountEntry | null> {
       if (accounts.length === 0) {
         return null;
       }
-      logStore.log('warn', 'auth', `All ${accounts.length} accounts throttled — returning null`);
+      const throttled = accounts.filter((a) => a.throttledUntil > Date.now()).length;
+      const noState = accounts.filter((a) => !a.state).length;
+      logStore.log('warn', 'auth', `All ${accounts.length} accounts exhausted — ${throttled} throttled, ${noState} unauthenticated`);
       return null;
     }
     const pool = available.filter((a) => a.inFlight === 0);
@@ -431,11 +436,18 @@ export async function pickAccount(): Promise<AccountEntry | null> {
     for (let i = 1; i < candidates.length; i++) {
       const a = candidates[i];
       const b = candidates[bestIdx];
-      if (a.inFlight < b.inFlight || (a.inFlight === b.inFlight && (a.lastUsed || 0) < (b.lastUsed || 0))) {
+      if (
+        a.inFlight < b.inFlight ||
+        (a.inFlight === b.inFlight && a.totalRequests < b.totalRequests) ||
+        (a.inFlight === b.inFlight && a.totalRequests === b.totalRequests && (a.lastUsed || 0) < (b.lastUsed || 0))
+      ) {
         bestIdx = i;
       }
     }
     const picked = candidates[bestIdx];
+    console.log(
+      `[Account] Picked ${picked.email} — inFlight=${picked.inFlight} totalReqs=${picked.totalRequests} lastUsed=${picked.lastUsed ? Date.now() - picked.lastUsed + 'ms ago' : 'never'}${excludeEmail ? ` (excluded: ${excludeEmail})` : ''}`,
+    );
     picked.lastUsed = Date.now();
     picked.inFlight++;
     // Safety valve: reset if counter drifts unreasonably high

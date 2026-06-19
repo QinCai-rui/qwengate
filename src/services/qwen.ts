@@ -277,8 +277,8 @@ export async function createQwenStream(
             // Use the full duration from Qwen (e.g. 7 hours) — do NOT cap at 2h.
             // Capping caused accounts to become "available" while Qwen still rejected them.
             throttleAccount(currentAccountEmail, throttleMs);
-            const nextAccount = await pickAccount();
-            if (nextAccount && nextAccount.email !== currentAccountEmail) {
+            const nextAccount = await pickAccount(currentAccountEmail);
+            if (nextAccount) {
               currentAccountEmail = nextAccount.email;
               // pickAccount incremented inFlight for the new account, but we're about to throw
               // so decrement it — the caller will retry with a fresh pickAccount
@@ -304,8 +304,9 @@ export async function createQwenStream(
           if (currentAccountEmail) {
             forceRefreshBxHeaders(currentAccountEmail).catch(() => {});
             throttleAccount(currentAccountEmail, 5 * 60 * 1000);
-            const nextAccount = await pickAccount();
-            if (nextAccount && nextAccount.email !== currentAccountEmail) {
+            console.warn(`[Qwen] BOT DETECTION: ${currentAccountEmail} hit FAIL_SYS_USER_VALIDATE — throttled 5min, switching account`);
+            const nextAccount = await pickAccount(currentAccountEmail);
+            if (nextAccount) {
               currentAccountEmail = nextAccount.email;
               decrementInFlight(nextAccount.email);
             }
@@ -369,6 +370,9 @@ export async function createQwenStream(
       try {
         const parsed = JSON.parse(firstText);
         if (parsed.__httpError) {
+          console.log(
+            `[Qwen] CDP HTTP error for ${currentAccountEmail}: status=${parsed.status} body=${(parsed.body || '').substring(0, 300)}`,
+          );
           // Create a mock Response so handleErrorResponse can process it
           const mockResponse = new Response(parsed.body, {
             status: parsed.status,
@@ -377,6 +381,13 @@ export async function createQwenStream(
           });
           await handleErrorResponse(mockResponse, debugEntry.id);
           // handleErrorResponse always throws, so we never reach here
+        }
+        // Check for FAIL_SYS_USER_VALIDATE in the first chunk body directly
+        if (
+          parsed.ret?.[0] === 'FAIL_SYS_USER_VALIDATE' ||
+          (typeof parsed.data?.url === 'string' && parsed.data.url.includes('_____tmd_____'))
+        ) {
+          console.warn(`[Qwen] BOT DETECTION for ${currentAccountEmail}: FAIL_SYS_USER_VALIDATE — throttling account 5min`);
         }
       } catch (parseErr) {
         // If it's a known error type from handleErrorResponse, rethrow it
@@ -429,7 +440,7 @@ export async function createQwenStream(
         },
       });
 
-      console.log(`[Qwen] CDP stream ready: ${Date.now() - _cdpStartTime}ms total setup time`);
+      console.log(`[Qwen] CDP stream ready: ${Date.now() - _cdpStartTime}ms total setup time for ${currentAccountEmail}`);
       return { response: new Response(mergedStream), headers: {}, qwenLogFile: undefined };
     }
 
