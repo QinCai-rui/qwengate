@@ -48,6 +48,7 @@ ${sidebarHtml('accounts')}
               <tr>
                 <th>Email</th>
                 <th>Auth Status</th>
+                <th>CDP Status</th>
                 <th>In Flight</th>
                 <th>Total Reqs</th>
                 <th>Throttle</th>

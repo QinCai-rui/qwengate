@@ -192,6 +192,10 @@ body {
   background: var(--bg-elevated);
   color: var(--text-secondary);
 }
+.badge-info {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+}
 
 /* Main Content */
 .main-content {

@@ -323,10 +323,11 @@ export async function initAccountContext(email: string, profileCookies: string):
 
   if (!defaultAccountEmail) defaultAccountEmail = email;
 
-  // 5. Enable Network domain for this session (required for Network.setCookie)
+  // 5. Enable Network + Page + Runtime domains for this session
   await sendToAccount(state, 'Network.enable', {});
   await sendToAccount(state, 'Page.enable', {});
-  console.log(`[CDP]   Network + Page enabled for ${email}`);
+  await sendToAccount(state, 'Runtime.enable', {});
+  console.log(`[CDP]   Network + Page + Runtime enabled for ${email}`);
 
   // 5b. Inject stealth scripts BEFORE page load to evade headless detection
   const stealthScript = `
@@ -574,7 +575,7 @@ export async function browserFetchForAccount(
         id: storeId,
         sessionId: state.sessionId,
         method: 'Runtime.evaluate',
-        params: { expression: storeExpression, returnByValue: true, timeout: 10_000 },
+        params: { expression: storeExpression, returnByValue: true },
       }),
     );
     await new Promise<void>((resolve, reject) => {
@@ -784,7 +785,7 @@ export async function browserStreamFetchIncrementalForAccount(
         id: storeId,
         sessionId: state.sessionId,
         method: 'Runtime.evaluate',
-        params: { expression: storeExpression, returnByValue: true, timeout: 10_000 },
+        params: { expression: storeExpression, returnByValue: true },
       }),
     );
     await new Promise<void>((resolve, reject) => {
@@ -874,15 +875,31 @@ export async function browserStreamFetchIncrementalForAccount(
   // Fire-and-forget: no awaitPromise — CDP returns immediately.
   // The IIFE runs in the browser and streams data via the binding.
   // If the IIFE throws, it's unhandled — but the binding __QSB_ERROR__ is called.
+  // Track in queue to catch fire-and-forget errors (no V8 timeout — watchdog handles lifecycle).
+  state.queue.set(evaluateId, {
+    resolve: (result) => {
+      if (result?.exceptionDetails) {
+        console.error(`[CDP:${email}] Fire-and-forget exception:`, JSON.stringify(result.exceptionDetails).slice(0, 500));
+      }
+    },
+    reject: (err) => {
+      console.error(`[CDP:${email}] Fire-and-forget error:`, err.message);
+    },
+    settled: false,
+  });
+  // Auto-cleanup after 30s
+  setTimeout(() => {
+    const entry = state.queue.get(evaluateId);
+    if (entry && !entry.settled) state.queue.delete(evaluateId);
+  }, 30_000);
   browserWs!.send(
     JSON.stringify({
       id: evaluateId,
       sessionId: state.sessionId,
       method: 'Runtime.evaluate',
-      params: { expression: fetchExpression, returnByValue: false, awaitPromise: false, timeout: 10_000 },
+      params: { expression: fetchExpression, returnByValue: false, awaitPromise: false },
     }),
   );
-  // Fire-and-forget — don't track in queue (the binding handles lifecycle)
 
   // Node.js-side watchdog: if no data arrives within the timeout, force-close.
   // This catches baxia hangs, network failures, or any case where the browser-side
@@ -983,6 +1000,33 @@ export function hasAccountContext(email: string): boolean {
 /** Get all initialized account emails. */
 export function getAccountEmails(): string[] {
   return Array.from(accountStates.keys());
+}
+
+export interface CdpAccountStatus {
+  email: string;
+  connected: boolean;
+  baxiaReady: boolean;
+  fetchWrapped: boolean;
+  sessionId: string;
+  queueSize: number;
+  activeBindings: number;
+}
+
+/** Get CDP status for all connected accounts. */
+export function getCdpStatuses(): CdpAccountStatus[] {
+  const results: CdpAccountStatus[] = [];
+  for (const [email, state] of accountStates) {
+    results.push({
+      email,
+      connected: !!state.sessionId,
+      baxiaReady: true, // if context is initialized, baxia was confirmed
+      fetchWrapped: true,
+      sessionId: state.sessionId.slice(0, 8) + '...',
+      queueSize: state.queue.size,
+      activeBindings: state.streamBindings.size,
+    });
+  }
+  return results;
 }
 
 /**

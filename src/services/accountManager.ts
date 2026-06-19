@@ -9,6 +9,7 @@ import os from 'os';
 import path from 'path';
 import type { AccountEntry } from '../types/auth.ts';
 import { projectPath } from '../utils/paths.ts';
+import { getCdpStatuses } from './cdpClient.ts';
 import { config } from './configService.ts';
 import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
@@ -503,8 +504,19 @@ export function getAccountStats(): Array<{
   lastUsedAgoMs: number;
   inFlight: number;
   totalRequests: number;
+  cdp: {
+    email: string;
+    connected: boolean;
+    baxiaReady: boolean;
+    fetchWrapped: boolean;
+    sessionId: string;
+    queueSize: number;
+    activeBindings: number;
+  } | null;
 }> {
   const now = Date.now();
+  const cdpStatuses = getCdpStatuses();
+  const cdpByEmail = new Map(cdpStatuses.map((c) => [c.email, c]));
   return accounts.map((a) => ({
     email: a.email,
     authenticated: a.state !== null,
@@ -515,6 +527,7 @@ export function getAccountStats(): Array<{
     lastUsedAgoMs: a.lastUsed ? now - a.lastUsed : -1,
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
+    cdp: cdpByEmail.get(a.email) ?? null,
   }));
 }
 export function getAccountCount(): number {
