@@ -558,7 +558,41 @@ export async function browserFetchForAccount(
   options: { method?: string; body?: string; timeout?: number } = {},
 ): Promise<CdpResponse> {
   const { method = 'GET', body, timeout = 30000 } = options;
-  const bodyClause = body ? `body: ${JSON.stringify(body)},` : '';
+
+  // For large bodies, store in browser global first (same fix as streaming path)
+  const BODY_THRESHOLD = 10_000;
+  const bodyGlobalName = `__cdp_fetch_body_${Date.now()}`;
+  const useTwoPhase = body && body.length > BODY_THRESHOLD;
+
+  if (useTwoPhase) {
+    const storeId = ++state.callIdCounter;
+    const storeExpression = `window[${JSON.stringify(bodyGlobalName)}] = ${JSON.stringify(body)}; 'ok'`;
+    browserWs!.send(
+      JSON.stringify({
+        id: storeId,
+        sessionId: state.sessionId,
+        method: 'Runtime.evaluate',
+        params: { expression: storeExpression, returnByValue: true, timeout: 10_000 },
+      }),
+    );
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Body storage timeout')), 15_000);
+      state.queue.set(storeId, {
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+        settled: false,
+      });
+    });
+  }
+
+  const bodyRef = useTwoPhase ? `window[${JSON.stringify(bodyGlobalName)}]` : JSON.stringify(body);
+  const bodyClause = useTwoPhase ? `body: ${bodyRef},` : body ? `body: ${bodyRef},` : '';
   const expression = `(async () => {
     try {
       const requestId = crypto.randomUUID();
@@ -578,8 +612,10 @@ export async function browserFetchForAccount(
       });
       const headers = {};
       resp.headers.forEach((v, k) => { headers[k] = v; });
+      if (window[${JSON.stringify(bodyGlobalName)}]) delete window[${JSON.stringify(bodyGlobalName)}];
       return { ok: resp.ok, status: resp.status, statusText: resp.statusText, body: await resp.text(), headers };
     } catch(e) {
+      if (window[${JSON.stringify(bodyGlobalName)}]) delete window[${JSON.stringify(bodyGlobalName)}];
       return { ok: false, status: 0, statusText: e.message || 'NetworkError', body: '', headers: {} };
     }
   })()`;
@@ -666,6 +702,21 @@ export async function browserStreamFetchIncrementalForAccount(
         /* already closed */
       }
       removeBindingForAccount(state, bindingName);
+      // Clean up browser global for large bodies
+      if (useTwoPhase) {
+        try {
+          browserWs!.send(
+            JSON.stringify({
+              id: ++state.callIdCounter,
+              sessionId: state.sessionId,
+              method: 'Runtime.evaluate',
+              params: { expression: `delete window[${JSON.stringify(bodyGlobalName)}]; 'ok'`, returnByValue: true, timeout: 5000 },
+            }),
+          );
+        } catch {
+          /* best effort */
+        }
+      }
       return;
     }
     if (payload === '__QSB_ERROR__') {
@@ -677,6 +728,21 @@ export async function browserStreamFetchIncrementalForAccount(
         /* already closed */
       }
       removeBindingForAccount(state, bindingName);
+      // Clean up browser global for large bodies
+      if (useTwoPhase) {
+        try {
+          browserWs!.send(
+            JSON.stringify({
+              id: ++state.callIdCounter,
+              sessionId: state.sessionId,
+              method: 'Runtime.evaluate',
+              params: { expression: `delete window[${JSON.stringify(bodyGlobalName)}]; 'ok'`, returnByValue: true, timeout: 5000 },
+            }),
+          );
+        } catch {
+          /* best effort */
+        }
+      }
       return;
     }
     if (!firstChunkTime) {
@@ -695,9 +761,51 @@ export async function browserStreamFetchIncrementalForAccount(
     }
   });
 
+  // --- LARGE BODY HANDLING ---
+  // For large request bodies (e.g. Qwen Code with 100KB+ system prompt + tools),
+  // embedding the body directly in the Runtime.evaluate expression causes Chrome
+  // to hang — the V8 parser stalls on 260KB+ string literals. Instead, we store
+  // the body in a browser global FIRST via a simple assignment, then reference it
+  // in a tiny fetch expression. This splits the CDP message into two: a simple
+  // string storage (no parsing overhead) and a small fetch call.
+  const BODY_THRESHOLD = 10_000; // 10KB — above this, use two-phase approach
+  const bodyGlobalName = `__cdp_body_${state.callIdCounter + 1}`;
+  const useTwoPhase = body.length > BODY_THRESHOLD;
+
+  if (useTwoPhase) {
+    console.log(`[CDP] Large body (${(body.length / 1024).toFixed(0)}KB) — using two-phase storage for email=${email}`);
+    // Phase 1: Store body in browser global (simple assignment, no baxia involvement)
+    const storeId = ++state.callIdCounter;
+    const storeExpression = `window[${JSON.stringify(bodyGlobalName)}] = ${JSON.stringify(body)}; 'ok'`;
+    browserWs!.send(
+      JSON.stringify({
+        id: storeId,
+        sessionId: state.sessionId,
+        method: 'Runtime.evaluate',
+        params: { expression: storeExpression, returnByValue: true, timeout: 10_000 },
+      }),
+    );
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Body storage timeout')), 15_000);
+      state.queue.set(storeId, {
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+        settled: false,
+      });
+    });
+    console.log(`[CDP] Body stored in browser global: ${Date.now() - startTime}ms`);
+  }
+
   // Launch fetch in the account's page (fire-and-forget) using window.fetch()
   // so baxia's wrapper intercepts and injects bx-umidtoken/bx-ua headers.
   const evaluateId = ++state.callIdCounter;
+  const bodyRef = useTwoPhase ? `window[${JSON.stringify(bodyGlobalName)}]` : JSON.stringify(body);
   const fetchExpression = `(async () => {
     const bridge = window[${JSON.stringify(bindingName)}];
     try {
@@ -715,7 +823,7 @@ export async function browserStreamFetchIncrementalForAccount(
           'version': '0.2.66',
           'Referer': ${JSON.stringify(referer)},
         },
-        body: ${JSON.stringify(body)},
+        body: ${bodyRef},
       });
       console.log('[CDP-BROWSER] fetch completed: status=' + resp.status + ' ok=' + resp.ok);
 
@@ -772,6 +880,21 @@ export async function browserStreamFetchIncrementalForAccount(
         streamClosed = true;
         streamController?.error(new Error('CDP fetch evaluate failed'));
         removeBindingForAccount(state, bindingName);
+      }
+      // Clean up browser global
+      if (useTwoPhase) {
+        try {
+          browserWs!.send(
+            JSON.stringify({
+              id: ++state.callIdCounter,
+              sessionId: state.sessionId,
+              method: 'Runtime.evaluate',
+              params: { expression: `delete window[${JSON.stringify(bodyGlobalName)}]; 'ok'`, returnByValue: true, timeout: 5000 },
+            }),
+          );
+        } catch {
+          /* best effort */
+        }
       }
     },
     settled: false,
