@@ -802,14 +802,22 @@ export async function browserStreamFetchIncrementalForAccount(
     console.log(`[CDP] Body stored in browser global: ${Date.now() - startTime}ms`);
   }
 
-  // Launch fetch in the account's page (fire-and-forget) using window.fetch()
+  // Launch fetch in the account's page using window.fetch()
   // so baxia's wrapper intercepts and injects bx-umidtoken/bx-ua headers.
+  //
+  // KEY: We do NOT use awaitPromise:true on Runtime.evaluate.
+  // With awaitPromise:true, CDP blocks until the IIFE resolves. If window.fetch()
+  // hangs (baxia stalling on large bodies), the entire CDP evaluate hangs forever
+  // and our timeout doesn't fire reliably. Instead, we start the fetch as
+  // fire-and-forget — the IIFE runs in the browser's microtask queue and streams
+  // data via the binding. CDP returns immediately.
   const evaluateId = ++state.callIdCounter;
   const bodyRef = useTwoPhase ? `window[${JSON.stringify(bodyGlobalName)}]` : JSON.stringify(body);
   const fetchExpression = `(async () => {
     const bridge = window[${JSON.stringify(bindingName)}];
     try {
       const requestId = crypto.randomUUID();
+      console.log('[CDP-BROWSER] starting fetch, bodyLen=' + (${bodyRef}).length);
       const resp = await window.fetch(${JSON.stringify(url)}, {
         method: 'POST',
         credentials: 'include',
@@ -836,7 +844,7 @@ export async function browserStreamFetchIncrementalForAccount(
         for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
         bridge(btoa(binary));
         bridge('__QSB_DONE__');
-        return { ok: false, status: resp.status };
+        return;
       }
 
       const reader = resp.body.getReader();
@@ -855,50 +863,61 @@ export async function browserStreamFetchIncrementalForAccount(
         }
       }
       bridge('__QSB_DONE__');
-      return { ok: true, status: resp.status };
     } catch(e) {
       console.error('[CDP-BROWSER] fetch error:', e.message, e.name, e.constructor?.name);
       bridge('__QSB_ERROR__');
-      return { ok: false, error: e.message };
     }
   })()`;
 
-  // Register the eval completion so errors don't leak
+  // Fire-and-forget: no awaitPromise — CDP returns immediately.
+  // The IIFE runs in the browser and streams data via the binding.
+  // If the IIFE throws, it's unhandled — but the binding __QSB_ERROR__ is called.
   browserWs!.send(
     JSON.stringify({
       id: evaluateId,
       sessionId: state.sessionId,
       method: 'Runtime.evaluate',
-      params: { expression: fetchExpression, returnByValue: true, awaitPromise: true, timeout },
+      params: { expression: fetchExpression, returnByValue: false, awaitPromise: false, timeout: 10_000 },
     }),
   );
-  state.queue.set(evaluateId, {
-    resolve: () => {},
-    reject: () => {
-      console.error(`[CDP] evaluate REJECTED: ${Date.now() - startTime}ms, email=${email}`);
-      if (!streamClosed) {
-        streamClosed = true;
-        streamController?.error(new Error('CDP fetch evaluate failed'));
-        removeBindingForAccount(state, bindingName);
+  // Fire-and-forget — don't track in queue (the binding handles lifecycle)
+
+  // Node.js-side watchdog: if no data arrives within the timeout, force-close.
+  // This catches baxia hangs, network failures, or any case where the browser-side
+  // code never calls __QSB_DONE__ or __QSB_ERROR__.
+  // For large bodies, Qwen API may take longer to respond — use generous timeout.
+  const isLargeBody = body.length > 50_000;
+  const watchdogMs = isLargeBody ? 180_000 : 90_000; // 3min for large, 90s for normal
+  const watchdog = setTimeout(() => {
+    if (!streamClosed) {
+      console.error(`[CDP] WATCHDOG: no data for ${watchdogMs / 1000}s, email=${email} bodyLen=${body.length} — forcing close`);
+      streamClosed = true;
+      try {
+        streamController?.error(new Error(`Stream watchdog: no data for ${watchdogMs / 1000}s`));
+      } catch {
+        /* already closed */
       }
-      // Clean up browser global
-      if (useTwoPhase) {
-        try {
-          browserWs!.send(
-            JSON.stringify({
-              id: ++state.callIdCounter,
-              sessionId: state.sessionId,
-              method: 'Runtime.evaluate',
-              params: { expression: `delete window[${JSON.stringify(bodyGlobalName)}]; 'ok'`, returnByValue: true, timeout: 5000 },
-            }),
-          );
-        } catch {
-          /* best effort */
-        }
-      }
-    },
-    settled: false,
-  });
+      removeBindingForAccount(state, bindingName);
+    }
+  }, watchdogMs);
+
+  // Clear watchdog when stream ends naturally (via __QSB_DONE__ or __QSB_ERROR__)
+  const origClose = streamController?.close.bind(streamController);
+  const origError = streamController?.error.bind(streamController);
+  if (streamController) {
+    streamController.close = (...args: any[]) => {
+      clearTimeout(watchdog);
+      return origClose(...args);
+    };
+    as;
+    any;
+    streamController.error = (...args: any[]) => {
+      clearTimeout(watchdog);
+      return origError(...args);
+    };
+    as;
+    any;
+  }
 
   return { ok: true, status: -1, statusText: '', headers: {}, stream: nodeStream };
 }
