@@ -188,6 +188,7 @@ function populateLogEntry(logEntry: any, body: OpenAIRequest, messages: any[]): 
 
 export async function chatCompletions(c: Context) {
   const logId = crypto.randomUUID();
+  const _requestStartTime = Date.now();
   try {
     const parsed = await parseRequestBody(c);
     const { body, isStream, toolCalling, cleanOutput, messages, contextCheck } = parsed;
@@ -258,6 +259,7 @@ export async function chatCompletions(c: Context) {
       cleanOutput,
     });
   } catch (err: any) {
+    console.error(`[Chat] <<< Request failed after ${Date.now() - _requestStartTime}ms: ${err?.message || err}`);
     console.error('Error in chatCompletions:', err);
     logStore.addError(logId, err.message || String(err));
     logStore.updateEntry(logId, (entry) => {

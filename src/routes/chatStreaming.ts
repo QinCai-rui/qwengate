@@ -46,6 +46,8 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
   c.header('Connection', 'close');
 
   return honoStream(c, async (streamWriter: any) => {
+    const _streamStartTime = Date.now();
+    console.log(`[Stream] >>> Streaming started for ${logId}, model=${body.model}, tools=${body.tools?.length || 0}`);
     let streamReleased = false;
     let heartbeatInterval: any;
     let streamReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -130,6 +132,7 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       );
 
       streamReleased = true;
+      console.log(`[Stream] <<< Streaming completed for ${logId} in ${Date.now() - _streamStartTime}ms`);
     } finally {
       if (!streamReleased) {
         // Always write [DONE] so the SSE stream terminates cleanly, even on error

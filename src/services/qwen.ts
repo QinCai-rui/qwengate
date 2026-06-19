@@ -172,8 +172,10 @@ async function applyRequestJitter(accountEmail?: string): Promise<void> {
 }
 
 const qwenCircuitBreaker = new CircuitBreaker('qwen-api', {
-  failureThreshold: 5,
-  resetTimeoutMs: 30_000,
+  // In CDP mode, first requests per context can take longer (baxia warmup).
+  // With 8 accounts, we need a higher threshold to avoid premature circuit open.
+  failureThreshold: process.env.CHROME_CDP_ENDPOINT ? 15 : 5,
+  resetTimeoutMs: process.env.CHROME_CDP_ENDPOINT ? 15_000 : 30_000,
   halfOpenMaxAttempts: 1,
 });
 
@@ -244,6 +246,9 @@ export async function createQwenStream(
     baseDelayMs: Math.max(0, config.getInt('RETRY_BASE_DELAY_MS', 1000)),
     maxDelayMs: Math.max(0, config.getInt('RETRY_MAX_DELAY_MS', 30000)),
     backoffMultiplier: Math.max(0.1, config.getFloat('RETRY_BACKOFF_MULTIPLIER', 2)),
+    // CDP mode: no per-attempt timeout — the stream has its own idle timeout.
+    // Non-CDP mode: 30s default timeout for direct fetch.
+    attemptTimeoutMs: process.env.CHROME_CDP_ENDPOINT ? 0 : 30_000,
   };
 
   const retriesEnabled = config.getBool('RETRY_ENABLED', true);
@@ -349,6 +354,7 @@ export async function createQwenStream(
         accountEmail: currentAccountEmail,
       });
       lastDebugEntryId = debugEntry.id;
+      const _cdpStartTime = Date.now();
       const stream = await performBrowserStream(currentAccountEmail || '', url, bodyStr, streamAbortController.signal);
 
       // Read first chunk to check for __httpError (sent by performBrowserStream when status is non-2xx)
@@ -357,7 +363,9 @@ export async function createQwenStream(
       if (firstChunk.done) throw new Error('Browser stream returned empty response');
 
       const firstText = new TextDecoder().decode(firstChunk.value);
-      console.log(`[Qwen] CDP first chunk (${firstText.length} bytes): ${firstText.substring(0, 200)}`);
+      console.log(
+        `[Qwen] CDP first chunk (${firstText.length} bytes) after ${Date.now() - _cdpStartTime}ms: ${firstText.substring(0, 200)}`,
+      );
       try {
         const parsed = JSON.parse(firstText);
         if (parsed.__httpError) {
@@ -421,6 +429,7 @@ export async function createQwenStream(
         },
       });
 
+      console.log(`[Qwen] CDP stream ready: ${Date.now() - _cdpStartTime}ms total setup time`);
       return { response: new Response(mergedStream), headers: {}, qwenLogFile: undefined };
     }
 

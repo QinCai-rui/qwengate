@@ -214,14 +214,24 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
   try {
     const { getProfileDir } = await import('./playwright.ts');
     const profileDir = getProfileDir(email);
-    if (!existsSync(profileDir)) {
-      logStore.log('warn', 'auth', `No profile dir for ${email}`);
-      return null;
-    }
-
-    // Look up password from accounts array
     const acct = accounts.find((a) => a.email.toLowerCase().trim() === email.toLowerCase().trim());
     const password = acct?.password;
+
+    if (!existsSync(profileDir)) {
+      logStore.log('warn', 'auth', `No profile dir for ${email} — creating via browser login...`);
+      if (password) {
+        const { openBrowserProfile } = await import('./browserProfiles.ts');
+        const result = await openBrowserProfile(email, password, { headless: true });
+        if (result === 'success') {
+          logStore.log('info', 'auth', `✓ Profile created for ${email} via browser login`);
+          // Re-check — profile dir should now exist and auth state saved
+          if (acct?.state) return acct.state;
+        } else {
+          logStore.log('warn', 'auth', `Profile creation failed for ${email}: ${result}`);
+        }
+      }
+      return null;
+    }
 
     logStore.log('info', 'auth', `Loading token from profile for ${email}...`);
     const { launchPersistentContext } = await import('cloakbrowser');

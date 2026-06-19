@@ -1,21 +1,28 @@
 /**
- * Lightweight CDP client that connects to an existing Chrome instance
- * and routes API calls through the browser's real network stack.
+ * Per-account CDP client: routes API calls through a single Chrome browser
+ * with isolated browser contexts per Qwen account.
  *
- * This gives us:
- *   - Real Chrome TLS/HTTP2 fingerprint (undetectable by WAF)
- *   - Automatic sec-ch-ua headers
- *   - Automatic baxia bx-* headers (baxia wraps window.fetch)
- *   - All session cookies via credentials: 'include'
+ * Architecture:
+ *   - ONE Chrome process on port 26404 (browser-level WS)
+ *   - N browser contexts, one per account, each with its own page
+ *   - Each page has independent baxia, cookies, and window.fetch
+ *   - CDP messages routed by sessionId (Target.attachToTarget flatten: true)
+ *   - Multiple concurrent requests supported (different accounts = different pages)
  *
- * Usage: set CHROME_CDP_ENDPOINT=http://127.0.0.1:9222
- *        Call initCdpClient() on startup, then browserFetch() etc.
+ * Usage:
+ *   1. startBrowser() → Chrome on port 26404
+ *   2. initBrowserConnection() → connect browser-level WS
+ *   3. initAccountContext(email, profileCookies) → create context + navigate
+ *   4. browserFetchForAccount(email, url, opts) → non-streaming
+ *   5. browserStreamFetchIncrementalForAccount(email, url, body) → streaming
  *
  * IMPORTANT: baxia wraps window.fetch (not XMLHttpRequest).
  * All API calls MUST use fetch() from the page context.
  */
 
-const CDP_ENDPOINT = process.env.CHROME_CDP_ENDPOINT || 'http://127.0.0.1:26404';
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 interface CdpPage {
   id: string;
@@ -23,6 +30,7 @@ interface CdpPage {
   url: string;
   title: string;
 }
+
 export interface CdpResponse {
   ok: boolean;
   status: number;
@@ -31,84 +39,125 @@ export interface CdpResponse {
   headers: Record<string, string>;
 }
 
-let qwenPageWsUrl: string | null = null;
-let cdpWs: WebSocket | null = null;
-let cdpConnected = false;
-let cdpQueue = new Map<number, { resolve: (value: any) => void; reject: (reason: any) => void; settled: boolean }>();
-let callIdCounter = 0;
-/** Captured bx headers from SPA network events */
-let cachedBxHeaders: Record<string, string> = {};
-
-/**
- * Streaming bridge: maps binding names to their chunk handlers.
- * When the browser calls `window[bindingName](chunk)`, CDP fires a
- * `Runtime.bindingCalled` event which we route here.
- */
-const streamBindings = new Map<string, (chunk: string) => void>();
-
-async function findQwenPage(): Promise<CdpPage> {
-  const resp = await fetch(`${CDP_ENDPOINT}/json`);
-  const targets: any[] = await resp.json();
-  let qwenPage = targets.find((t: any) => t.type === 'page' && (t.title?.includes('Qwen') || t.url?.includes('chat.qwen.ai')));
-
-  // If no Qwen page exists (auto-launched headless Chrome starts with about:blank),
-  // return the first page — initCdpClient() will navigate it to chat.qwen.ai
-  if (!qwenPage) {
-    qwenPage = targets.find((t: any) => t.type === 'page');
-    if (qwenPage) {
-      console.log('[cdp] No Qwen page found, will navigate', qwenPage.url, '-> chat.qwen.ai');
-    }
-  }
-
-  if (!qwenPage) throw new Error('No page found in browser. Launch Chrome with a page open.');
-  return { id: qwenPage.id, webSocketDebuggerUrl: qwenPage.webSocketDebuggerUrl, url: qwenPage.url, title: qwenPage.title };
+interface PendingCall {
+  resolve: (value: any) => void;
+  reject: (reason: any) => void;
+  settled: boolean;
 }
 
-/** Ensure a persistent CDP WebSocket connection exists. */
-async function connectCdp(): Promise<void> {
-  if (cdpConnected && cdpWs) return;
-  if (!qwenPageWsUrl) {
-    const page = await findQwenPage();
-    qwenPageWsUrl = page.webSocketDebuggerUrl;
-  }
+export interface AccountCdpState {
+  email: string;
+  contextId: string;
+  targetId: string;
+  sessionId: string;
+  queue: Map<number, PendingCall>;
+  callIdCounter: number;
+  streamBindings: Map<string, (chunk: string) => void>;
+  cachedBxHeaders: Record<string, string>;
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+const CDP_PORT = 26404;
+const CDP_HOST = '127.0.0.1';
+const BASE_URL = process.env.CHROME_CDP_ENDPOINT || `http://${CDP_HOST}:${CDP_PORT}`;
+
+// Browser-level WebSocket
+let browserWs: WebSocket | null = null;
+let browserConnected = false;
+let browserCallId = 0;
+const browserQueue = new Map<number, PendingCall>();
+
+// Per-account state
+const accountStates = new Map<string, AccountCdpState>();
+const sessionToEmail = new Map<string, string>(); // sessionId → email
+
+// Default account for backward-compatible functions
+let defaultAccountEmail: string | null = null;
+
+// ---------------------------------------------------------------------------
+// Browser-level WebSocket connection
+// ---------------------------------------------------------------------------
+
+async function getBrowserWsUrl(): Promise<string> {
+  const resp = await fetch(`${BASE_URL}/json/version`, { signal: AbortSignal.timeout(5000) });
+  const data = await resp.json();
+  return data.webSocketDebuggerUrl;
+}
+
+async function connectBrowserWs(): Promise<void> {
+  if (browserConnected && browserWs) return;
+
+  const wsUrl = await getBrowserWsUrl();
+  console.log(`[CDP] Connecting to browser WS: ${wsUrl}`);
+
   return new Promise<void>((resolve, reject) => {
-    const ws = new WebSocket(qwenPageWsUrl!);
+    const ws = new WebSocket(wsUrl);
     const timeout = setTimeout(() => {
       ws.close();
-      reject(new Error('CDP connect timeout'));
+      reject(new Error('CDP browser WS connect timeout'));
     }, 10000);
 
     ws.onopen = () => {
       clearTimeout(timeout);
-      cdpWs = ws;
-      cdpConnected = true;
+      browserWs = ws;
+      browserConnected = true;
+      console.log('[CDP] Browser WS connected');
       resolve();
     };
 
     ws.onmessage = (event: MessageEvent) => {
       try {
         const msg = JSON.parse(event.data as string);
-        // Capture bx headers from SPA network requests
-        if (msg.method === 'Network.requestWillBeSent' && msg.params?.request?.url?.includes('/api/v2/')) {
-          const headers = msg.params.request.headers || {};
-          if (headers['bx-umidtoken']) cachedBxHeaders['bx-umidtoken'] = headers['bx-umidtoken'];
-          if (headers['bx-ua']) cachedBxHeaders['bx-ua'] = headers['bx-ua'];
-          if (headers['bx-v']) cachedBxHeaders['bx-v'] = headers['bx-v'];
-        }
-        // Route streaming bridge chunks from Runtime.addBinding
-        if (msg.method === 'Runtime.bindingCalled' && msg.params?.name) {
-          const handler = streamBindings.get(msg.params.name);
-          if (handler) handler(msg.params.payload);
+
+        // ── Messages with sessionId → route to account ──
+        if (msg.sessionId) {
+          const email = sessionToEmail.get(msg.sessionId);
+          const state = email ? accountStates.get(email) : null;
+
+          // Runtime.bindingCalled → stream chunk handler
+          if (msg.method === 'Runtime.bindingCalled' && msg.params?.name && state) {
+            const handler = state.streamBindings.get(msg.params.name);
+            if (handler) handler(msg.params.payload);
+            return;
+          }
+
+          // Response to a command (has id)
+          if (msg.id && state) {
+            const pending = state.queue.get(msg.id);
+            if (pending && !pending.settled) {
+              pending.settled = true;
+              state.queue.delete(msg.id);
+              if (msg.error) pending.reject(new Error(`CDP: ${msg.error.message}`));
+              else if (msg.result?.exceptionDetails) pending.reject(new Error(`CDP exception: ${msg.result.exceptionDetails.text}`));
+              else pending.resolve(msg.result?.result?.value ?? msg.result ?? true);
+            }
+            return;
+          }
+
+          // Other events with sessionId — capture bx headers
+          if (msg.method === 'Network.requestWillBeSent' && state && msg.params?.request?.url?.includes('/api/v2/')) {
+            const headers = msg.params.request.headers || {};
+            if (headers['bx-umidtoken']) state.cachedBxHeaders['bx-umidtoken'] = headers['bx-umidtoken'];
+            if (headers['bx-ua']) state.cachedBxHeaders['bx-ua'] = headers['bx-ua'];
+            if (headers['bx-v']) state.cachedBxHeaders['bx-v'] = headers['bx-v'];
+          }
           return;
         }
-        if (!msg.id) return; // event, not response
-        const pending = cdpQueue.get(msg.id);
-        if (!pending || pending.settled) return;
-        pending.settled = true;
-        cdpQueue.delete(msg.id);
-        if (msg.error) pending.reject(new Error(`CDP: ${msg.error.message}`));
-        else if (msg.result?.exceptionDetails) pending.reject(new Error(`CDP exception: ${msg.result.exceptionDetails.text}`));
-        else pending.resolve(msg.result?.result?.value ?? msg.result ?? true);
+
+        // ── Browser-level messages (no sessionId) ──
+        if (!msg.id) return; // browser-level event, ignore
+
+        const pending = browserQueue.get(msg.id);
+        if (pending && !pending.settled) {
+          pending.settled = true;
+          browserQueue.delete(msg.id);
+          if (msg.error) pending.reject(new Error(`CDP: ${msg.error.message}`));
+          else if (msg.result?.exceptionDetails) pending.reject(new Error(`CDP exception: ${msg.result.exceptionDetails.text}`));
+          else pending.resolve(msg.result?.result?.value ?? msg.result ?? true);
+        }
       } catch {
         /* non-JSON event */
       }
@@ -116,55 +165,290 @@ async function connectCdp(): Promise<void> {
 
     ws.onerror = () => {
       clearTimeout(timeout);
-      cdpConnected = false;
-      reject(new Error('CDP WS error'));
+      browserConnected = false;
+      reject(new Error('CDP browser WS error'));
     };
+
     ws.onclose = () => {
       clearTimeout(timeout);
-      cdpConnected = false;
-      cdpWs = null;
-      for (const [id, pending] of cdpQueue) {
+      browserConnected = false;
+      browserWs = null;
+      // Reject all pending browser-level calls
+      for (const [id, pending] of browserQueue) {
         if (!pending.settled) {
           pending.settled = true;
-          pending.reject(new Error('CDP WS disconnected'));
+          pending.reject(new Error('CDP browser WS disconnected'));
         }
-        cdpQueue.delete(id);
+        browserQueue.delete(id);
+      }
+      // Reject all per-account pending calls
+      for (const [, state] of accountStates) {
+        for (const [id, pending] of state.queue) {
+          if (!pending.settled) {
+            pending.settled = true;
+            pending.reject(new Error('CDP browser WS disconnected'));
+          }
+          state.queue.delete(id);
+        }
       }
     };
   });
 }
 
-/** Execute a JS expression in the browser page and return the result. */
-function evaluate<T>(expression: string, awaitPromise = false): Promise<T> {
+// ---------------------------------------------------------------------------
+// Browser-level evaluate (for Target.createBrowserContext etc.)
+// ---------------------------------------------------------------------------
+
+function browserEvaluate<T>(method: string, params: Record<string, any> = {}, timeoutMs = 15000): Promise<T> {
   return new Promise<T>(async (resolve, reject) => {
     try {
-      await connectCdp();
+      await connectBrowserWs();
     } catch (e: any) {
       return reject(new Error(`CDP connect: ${e.message}`));
     }
-    const id = ++callIdCounter;
+    const id = ++browserCallId;
     const timeout = setTimeout(() => {
-      const pending = cdpQueue.get(id);
+      const pending = browserQueue.get(id);
       if (pending && !pending.settled) {
         pending.settled = true;
-        cdpQueue.delete(id);
-        reject(new Error('CDP evaluate timed out'));
+        browserQueue.delete(id);
+        reject(new Error(`CDP ${method} timed out`));
       }
-    }, 30000);
+    }, timeoutMs);
 
-    cdpQueue.set(id, { resolve, reject, settled: false });
-    cdpWs!.send(
-      JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, returnByValue: true, awaitPromise, timeout: 25000 } }),
+    browserQueue.set(id, {
+      resolve: (v) => {
+        clearTimeout(timeout);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timeout);
+        reject(e);
+      },
+      settled: false,
+    });
+    browserWs!.send(JSON.stringify({ id, method, params }));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Account-level evaluate
+// ---------------------------------------------------------------------------
+
+function evaluateInAccount<T>(email: string, expression: string, awaitPromise = false, timeoutMs = 30000): Promise<T> {
+  const state = accountStates.get(email);
+  if (!state) return Promise.reject(new Error(`No CDP context for account ${email}`));
+
+  return new Promise<T>((resolve, reject) => {
+    const id = ++state.callIdCounter;
+    const timeout = setTimeout(() => {
+      const pending = state.queue.get(id);
+      if (pending && !pending.settled) {
+        pending.settled = true;
+        state.queue.delete(id);
+        reject(new Error(`CDP evaluate timed out for ${email}`));
+      }
+    }, timeoutMs);
+
+    state.queue.set(id, {
+      resolve: (v) => {
+        clearTimeout(timeout);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timeout);
+        reject(e);
+      },
+      settled: false,
+    });
+
+    browserWs!.send(
+      JSON.stringify({
+        id,
+        sessionId: state.sessionId,
+        method: 'Runtime.evaluate',
+        params: { expression, returnByValue: true, awaitPromise, timeout: timeoutMs - 5000 },
+      }),
     );
   });
 }
 
+// ---------------------------------------------------------------------------
+// Account context lifecycle
+// ---------------------------------------------------------------------------
+
 /**
- * Make a non-streaming API call through the browser.
- * Uses fetch() (not XHR) because baxia wraps fetch to inject bx-umidtoken/bx-ua headers.
- * Includes all headers the SPA sends to avoid WAF detection.
+ * Create an isolated browser context for an account, inject cookies,
+ * navigate to chat.qwen.ai, and wait for baxia to initialize.
  */
-export async function browserFetch(url: string, options: { method?: string; body?: string; timeout?: number } = {}): Promise<CdpResponse> {
+export async function initAccountContext(email: string, profileCookies: string): Promise<void> {
+  await connectBrowserWs();
+
+  console.log(`[CDP] Creating context for ${email}...`);
+
+  // 1. Create browser context
+  const ctxResult = await browserEvaluate<{ browserContextId: string }>('Target.createBrowserContext', {});
+  const contextId = ctxResult.browserContextId;
+  console.log(`[CDP]   contextId=${contextId}`);
+
+  // 2. Create target (page) in that context
+  const tgtResult = await browserEvaluate<{ targetId: string }>('Target.createTarget', {
+    url: 'about:blank',
+    browserContextId: contextId,
+  });
+  const targetId = tgtResult.targetId;
+  console.log(`[CDP]   targetId=${targetId}`);
+
+  // 3. Attach to target with flatten: true → get sessionId
+  const attachResult = await browserEvaluate<{ sessionId: string }>('Target.attachToTarget', {
+    targetId,
+    flatten: true,
+  });
+  const sessionId = attachResult.sessionId;
+  console.log(`[CDP]   sessionId=${sessionId}`);
+
+  // 4. Create account state
+  const state: AccountCdpState = {
+    email,
+    contextId,
+    targetId,
+    sessionId,
+    queue: new Map(),
+    callIdCounter: 0,
+    streamBindings: new Map(),
+    cachedBxHeaders: {},
+  };
+  accountStates.set(email, state);
+  sessionToEmail.set(sessionId, email);
+
+  if (!defaultAccountEmail) defaultAccountEmail = email;
+
+  // 5. Enable Network domain for this session (required for Network.setCookie)
+  await sendToAccount(state, 'Network.enable', {});
+  console.log(`[CDP]   Network enabled for ${email}`);
+
+  // 6. Inject cookies from profileCookies
+  if (profileCookies) {
+    const pairs = profileCookies.split(';');
+    let injected = 0;
+    for (const pair of pairs) {
+      const eq = pair.indexOf('=');
+      if (eq <= 0) continue;
+      const name = pair.slice(0, eq).trim();
+      const val = pair.slice(eq + 1).trim();
+      if (!name || !val) continue;
+      injected++;
+      await sendToAccount(state, 'Network.setCookie', {
+        name,
+        value: val,
+        domain: '.qwen.ai',
+        path: '/',
+        httpOnly: true,
+        secure: true,
+        sameSite: 'Lax',
+      });
+    }
+    console.log(`[CDP]   Injected ${injected} cookies for ${email}`);
+  }
+
+  // 7. Navigate to chat.qwen.ai to load SPA + baxia
+  await sendToAccount(state, 'Page.navigate', { url: 'https://chat.qwen.ai/' });
+  console.log(`[CDP]   Navigating ${email} to chat.qwen.ai...`);
+
+  // 8. Wait for SPA to load + baxia to initialize
+  await Bun.sleep(5000);
+
+  // 9. Verify baxia
+  try {
+    const status = await evaluateInAccount<{ hasBaxia: boolean; fetchIsWrapped: boolean }>(
+      email,
+      '({hasBaxia:!!window.__baxia__,fetchIsWrapped:!fetch.toString().includes("native")})',
+      false,
+    );
+    console.log(`[CDP]   baxia for ${email}: ${status.hasBaxia} | fetch wrapped: ${status.fetchIsWrapped}`);
+  } catch (err: any) {
+    console.warn(`[CDP]   baxia check failed for ${email}: ${err.message}`);
+  }
+
+  // 10. Enable Network tracking to capture bx headers
+  // Network.enable already called above, trigger a fire-and-forget fetch
+  triggerBxHeaderCaptureForAccount(state);
+  await Bun.sleep(1500);
+
+  console.log(`[CDP] Account context ready: ${email} (sessionId=${sessionId})`);
+}
+
+/**
+ * Send a CDP command to a specific account's session.
+ */
+async function sendToAccount(state: AccountCdpState, method: string, params: Record<string, any>): Promise<any> {
+  await connectBrowserWs();
+  const id = ++state.callIdCounter;
+
+  return new Promise<any>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      const pending = state.queue.get(id);
+      if (pending && !pending.settled) {
+        pending.settled = true;
+        state.queue.delete(id);
+        reject(new Error(`CDP ${method} timed out for ${state.email}`));
+      }
+    }, 15000);
+
+    state.queue.set(id, {
+      resolve: (v) => {
+        clearTimeout(timeout);
+        resolve(v);
+      },
+      reject: (e) => {
+        clearTimeout(timeout);
+        reject(e);
+      },
+      settled: false,
+    });
+
+    browserWs!.send(
+      JSON.stringify({
+        id,
+        sessionId: state.sessionId,
+        method,
+        params,
+      }),
+    );
+  });
+}
+
+function triggerBxHeaderCaptureForAccount(state: AccountCdpState): void {
+  const id = ++state.callIdCounter;
+  browserWs!.send(
+    JSON.stringify({
+      id,
+      sessionId: state.sessionId,
+      method: 'Runtime.evaluate',
+      params: {
+        expression: `fetch("https://chat.qwen.ai/api/v2/models", {credentials:"include",headers:{"Accept":"application/json","source":"web"}}).catch(()=>{})`,
+        returnByValue: true,
+        awaitPromise: false,
+        timeout: 5000,
+      },
+    }),
+  );
+  state.queue.set(id, { resolve: () => {}, reject: () => {}, settled: false });
+}
+
+// ---------------------------------------------------------------------------
+// Non-streaming fetch
+// ---------------------------------------------------------------------------
+
+/**
+ * Make a non-streaming API call through a specific account's browser page.
+ * Uses window.fetch() so baxia injects bx-umidtoken/bx-ua headers.
+ */
+export async function browserFetchForAccount(
+  email: string,
+  url: string,
+  options: { method?: string; body?: string; timeout?: number } = {},
+): Promise<CdpResponse> {
   const { method = 'GET', body, timeout = 30000 } = options;
   const bodyClause = body ? `body: ${JSON.stringify(body)},` : '';
   const expression = `(async () => {
@@ -191,74 +475,50 @@ export async function browserFetch(url: string, options: { method?: string; body
       return { ok: false, status: 0, statusText: e.message || 'NetworkError', body: '', headers: {} };
     }
   })()`;
-  return evaluate<CdpResponse>(expression, true);
+  return evaluateInAccount<CdpResponse>(email, expression, true, timeout);
 }
 
-/**
- * Make a streaming API call through the browser.
- * Collects the full SSE body via fetch().text() and returns it.
- * Uses the same SPA headers as browserFetch.
- */
-export async function browserStreamFetch(url: string, body: string, options?: { referer?: string }): Promise<CdpResponse> {
-  const referer = options?.referer || 'https://chat.qwen.ai/';
-  const expression = `(async () => {
-    try {
-      const requestId = crypto.randomUUID();
-      const resp = await fetch(${JSON.stringify(url)}, {
-        method: 'POST',
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'text/event-stream',
-          'source': 'web',
-          'x-request-id': requestId,
-          'x-accel-buffering': 'no',
-          'timezone': new Date().toString(),
-          'version': '0.2.66',
-          'Referer': ${JSON.stringify(referer)},
-        },
-        body: ${JSON.stringify(body)},
-      });
-      const headers = {};
-      resp.headers.forEach((v, k) => { headers[k] = v; });
-      return { ok: resp.ok, status: resp.status, statusText: resp.statusText, body: await resp.text(), headers };
-    } catch(e) {
-      return { ok: false, status: 0, statusText: e.message || 'NetworkError', body: '', headers: {} };
-    }
-  })()`;
-  return evaluate<CdpResponse>(expression, true);
-}
+// ---------------------------------------------------------------------------
+// Streaming fetch (incremental)
+// ---------------------------------------------------------------------------
 
 /**
- * Incrementally stream an API response through the browser.
- * Uses Runtime.addBinding + XHR onprogress to pipe chunks back in real time,
- * identical to the Playwright exposeFunction approach but over raw CDP.
+ * Incrementally stream an API response through a specific account's browser page.
+ * Uses Runtime.addBinding + window.fetch() + ReadableStream.getReader() to pipe
+ * SSE chunks back in real time.
  *
  * Returns { ok, status, headers, stream } where stream delivers SSE text incrementally.
  */
-export async function browserStreamFetchIncremental(
+export async function browserStreamFetchIncrementalForAccount(
+  email: string,
   url: string,
   body: string,
   options?: { referer?: string; timeout?: number },
 ): Promise<{ ok: boolean; status: number; statusText: string; headers: Record<string, string>; stream: ReadableStream<Uint8Array> }> {
+  const state = accountStates.get(email);
+  if (!state) throw new Error(`No CDP context for account ${email}`);
+
   const referer = options?.referer || 'https://chat.qwen.ai/';
   const timeout = options?.timeout || 60_000;
-  const bindingName = `__cdp_sb_${++callIdCounter}_${Date.now()}`;
+  const bindingName = `__cdp_sb_${++state.callIdCounter}_${Date.now()}`;
+  const startTime = Date.now();
+  console.log(`[CDP] streamFetch start: email=${email} url=${url.slice(0, 80)} binding=${bindingName} bodyLen=${body.length}`);
 
-  await connectCdp();
+  await connectBrowserWs();
 
   // Register binding: browser calls window[bindingName](b64chunk)
-  const addBindingId = ++callIdCounter;
-  cdpWs!.send(
+  const addBindingId = ++state.callIdCounter;
+  browserWs!.send(
     JSON.stringify({
       id: addBindingId,
+      sessionId: state.sessionId,
       method: 'Runtime.addBinding',
       params: { name: bindingName },
     }),
   );
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Runtime.addBinding timeout')), 5000);
-    cdpQueue.set(addBindingId, {
+    state.queue.set(addBindingId, {
       resolve: () => {
         clearTimeout(timer);
         resolve();
@@ -280,35 +540,42 @@ export async function browserStreamFetchIncremental(
     },
     cancel() {
       streamClosed = true;
-      removeBinding(bindingName);
+      removeBindingForAccount(state, bindingName);
     },
   });
 
-  // Wire the binding to the stream controller.
-  // All controller operations are guarded by `streamClosed` AND try-catch
-  // to handle races where cancel() fires while a binding callback is in-flight.
-  streamBindings.set(bindingName, (payload: string) => {
+  // Wire the binding to the stream controller
+  let firstChunkTime = 0;
+  let chunkCount = 0;
+  state.streamBindings.set(bindingName, (payload: string) => {
     if (streamClosed) return;
     if (payload === '__QSB_DONE__') {
+      console.log(`[CDP] stream DONE: ${Date.now() - startTime}ms total, ${chunkCount} chunks, email=${email}`);
       streamClosed = true;
       try {
         streamController?.close();
       } catch {
-        /* already closed by cancel */
+        /* already closed */
       }
-      removeBinding(bindingName);
+      removeBindingForAccount(state, bindingName);
       return;
     }
     if (payload === '__QSB_ERROR__') {
+      console.error(`[CDP] stream ERROR: ${Date.now() - startTime}ms, ${chunkCount} chunks, email=${email}`);
       streamClosed = true;
       try {
         streamController?.error(new Error('Browser stream fetch failed'));
       } catch {
         /* already closed */
       }
-      removeBinding(bindingName);
+      removeBindingForAccount(state, bindingName);
       return;
     }
+    if (!firstChunkTime) {
+      firstChunkTime = Date.now();
+      console.log(`[CDP] first chunk: ${firstChunkTime - startTime}ms, email=${email}`);
+    }
+    chunkCount++;
     try {
       const binary = atob(payload);
       const len = binary.length;
@@ -320,10 +587,9 @@ export async function browserStreamFetchIncremental(
     }
   });
 
-  // Launch fetch in the browser (fire-and-forget) using window.fetch()
-  // so baxia's fetch wrapper intercepts it and injects bx-umidtoken/bx-ua headers.
-  // XHR is NOT wrapped by baxia — only fetch is. (see cdpClient.ts header comment)
-  const evaluateId = ++callIdCounter;
+  // Launch fetch in the account's page (fire-and-forget) using window.fetch()
+  // so baxia's wrapper intercepts and injects bx-umidtoken/bx-ua headers.
+  const evaluateId = ++state.callIdCounter;
   const fetchExpression = `(async () => {
     const bridge = window[${JSON.stringify(bindingName)}];
     try {
@@ -343,10 +609,11 @@ export async function browserStreamFetchIncremental(
         },
         body: ${JSON.stringify(body)},
       });
+      console.log('[CDP-BROWSER] fetch completed: status=' + resp.status + ' ok=' + resp.ok);
 
-      // Check HTTP status before streaming
       if (!resp.ok || resp.status < 200 || resp.status >= 300) {
         const errText = await resp.text().catch(() => '');
+        console.error('[CDP-BROWSER] HTTP error:', resp.status, resp.statusText, errText.slice(0, 300));
         const errPayload = JSON.stringify({ __httpError: true, status: resp.status, body: errText });
         const uint8 = new TextEncoder().encode(errPayload);
         let binary = '';
@@ -356,7 +623,6 @@ export async function browserStreamFetchIncremental(
         return { ok: false, status: resp.status };
       }
 
-      // Stream response body incrementally via ReadableStream reader
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       while (true) {
@@ -375,162 +641,142 @@ export async function browserStreamFetchIncremental(
       bridge('__QSB_DONE__');
       return { ok: true, status: resp.status };
     } catch(e) {
+      console.error('[CDP-BROWSER] fetch error:', e.message, e.name, e.constructor?.name);
       bridge('__QSB_ERROR__');
       return { ok: false, error: e.message };
     }
   })()`;
 
   // Register the eval completion so errors don't leak
-  cdpWs!.send(
+  browserWs!.send(
     JSON.stringify({
       id: evaluateId,
+      sessionId: state.sessionId,
       method: 'Runtime.evaluate',
       params: { expression: fetchExpression, returnByValue: true, awaitPromise: true, timeout },
     }),
   );
-  cdpQueue.set(evaluateId, {
+  state.queue.set(evaluateId, {
     resolve: () => {},
     reject: () => {
+      console.error(`[CDP] evaluate REJECTED: ${Date.now() - startTime}ms, email=${email}`);
       if (!streamClosed) {
         streamClosed = true;
         streamController?.error(new Error('CDP fetch evaluate failed'));
-        removeBinding(bindingName);
+        removeBindingForAccount(state, bindingName);
       }
     },
     settled: false,
   });
 
-  // Return immediately — the stream will deliver chunks as they arrive.
-  // The caller must read the first chunk to determine HTTP status.
   return { ok: true, status: -1, statusText: '', headers: {}, stream: nodeStream };
 }
 
-/** Remove a Runtime.addBinding registration. */
-function removeBinding(name: string): void {
-  streamBindings.delete(name);
-  if (!cdpWs || !cdpConnected) return;
-  const id = ++callIdCounter;
-  cdpWs.send(JSON.stringify({ id, method: 'Runtime.removeBinding', params: { name } }));
-  cdpQueue.set(id, { resolve: () => {}, reject: () => {}, settled: false });
-}
+// ---------------------------------------------------------------------------
+// Cleanup helpers
+// ---------------------------------------------------------------------------
 
-export async function checkBaxiaStatus(): Promise<{ hasBaxia: boolean; fetchIsWrapped: boolean }> {
-  return evaluate('({hasBaxia:!!window.__baxia__,fetchIsWrapped:!fetch.toString().includes("native")})', false);
-}
-
-/**
- * Initialize CDP connection: inject saved cookies, navigate to chat.qwen.ai.
- * Safe to call multiple times — only runs once via singleton guard.
- */
-let initInFlight: Promise<void> | null = null;
-export async function initCdpClient(): Promise<void> {
-  if (cdpConnected && cdpWs) return;
-  if (initInFlight) {
-    await initInFlight;
-    return;
-  }
-  initInFlight = (async () => {
-    const page = await findQwenPage();
-    qwenPageWsUrl = page.webSocketDebuggerUrl;
-
-    // Connect persistent WS
-    await connectCdp();
-    console.log('[cdp] Connected to browser');
-
-    // Inject cookies from accounts.json via Network.setCookie
-    try {
-      const { readFileSync } = await import('node:fs');
-      const { projectPath } = await import('../utils/paths.ts');
-      const raw = readFileSync(projectPath('.qwen', 'accounts.json'), 'utf-8');
-      const accounts: any[] = JSON.parse(raw);
-      const acct = accounts.find((a: any) => a?.profileCookies);
-      if (acct?.profileCookies) {
-        const pairs = acct.profileCookies.split(';');
-        let setCid = 0;
-        for (const pair of pairs) {
-          const eq = pair.indexOf('=');
-          if (eq <= 0) continue;
-          const name = pair.slice(0, eq).trim();
-          const val = pair.slice(eq + 1).trim();
-          if (!name || !val) continue;
-          setCid++;
-          cdpWs!.send(
-            JSON.stringify({
-              id: setCid,
-              method: 'Network.setCookie',
-              params: { name, value: val, domain: '.qwen.ai', path: '/', httpOnly: true, secure: true, sameSite: 'Lax' },
-            }),
-          );
-          cdpQueue.set(setCid, { resolve: () => {}, reject: () => {}, settled: false });
-        }
-        console.log('[cdp] Cookies injected');
-      }
-    } catch (err: any) {
-      console.warn('[cdp] Cookie injection:', err.message);
-    }
-
-    // Always navigate to chat.qwen.ai so baxia loads (including auto-launched headless Chrome)
-    const currentUrl = qwenPageWsUrl ? '' : '';
-    try {
-      let navId = 1000;
-      cdpWs!.send(
-        JSON.stringify({
-          id: navId,
-          method: 'Page.navigate',
-          params: { url: 'https://chat.qwen.ai/' },
-        }),
-      );
-      cdpQueue.set(navId, { resolve: () => {}, reject: () => {}, settled: false });
-      console.log('[cdp] Navigating to chat.qwen.ai...');
-      await new Promise((r) => setTimeout(r, 5000));
-    } catch (err: any) {
-      console.warn('[cdp] Navigation:', err.message);
-    }
-
-    // Verify baxia
-    try {
-      const status = await checkBaxiaStatus();
-      console.log('[cdp] baxia:', status.hasBaxia, '| fetch wrapped:', status.fetchIsWrapped);
-      if (!status.hasBaxia) console.warn('[cdp] baxia not detected');
-    } catch (err: any) {
-      console.warn('[cdp] baxia check failed:', err.message);
-    }
-
-    // Enable network tracking to capture bx headers from SPA requests
-    await enableNetworkTracking();
-    // Trigger a fire-and-forget fetch so baxia generates bx headers in network events
-    triggerBxHeaderCapture();
-    await new Promise((r) => setTimeout(r, 2000));
-  })().finally(() => {
-    initInFlight = null;
-  });
-}
-
-function enableNetworkTracking(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    cdpWs!.send(JSON.stringify({ id: ++callIdCounter, method: 'Network.enable', params: {} }));
-    cdpQueue.set(callIdCounter, { resolve: () => resolve(), reject: () => resolve(), settled: false });
-  });
-}
-
-/**
- * Fire-and-forget fetch from the SPA page to trigger baxia's
- * fetch wrapper. The bx headers are captured via Network.requestWillBeSent
- * events on the persistent CDP WebSocket.
- */
-function triggerBxHeaderCapture(): void {
-  const id = ++callIdCounter;
-  cdpWs!.send(
+function removeBindingForAccount(state: AccountCdpState, name: string): void {
+  state.streamBindings.delete(name);
+  if (!browserWs || !browserConnected) return;
+  const id = ++state.callIdCounter;
+  browserWs.send(
     JSON.stringify({
       id,
-      method: 'Runtime.evaluate',
-      params: {
-        expression: `fetch("https://chat.qwen.ai/api/v2/models", {credentials:"include",headers:{"Accept":"application/json","source":"web"}}).catch(()=>{})`,
-        returnByValue: true,
-        awaitPromise: false,
-        timeout: 5000,
-      },
+      sessionId: state.sessionId,
+      method: 'Runtime.removeBinding',
+      params: { name },
     }),
   );
-  cdpQueue.set(id, { resolve: () => {}, reject: () => {}, settled: false });
+  state.queue.set(id, { resolve: () => {}, reject: () => {}, settled: false });
+}
+
+// ---------------------------------------------------------------------------
+// Backward-compatible API (default account)
+// ---------------------------------------------------------------------------
+
+function getDefaultAccount(): string {
+  if (defaultAccountEmail) return defaultAccountEmail;
+  const first = accountStates.keys().next().value;
+  if (first) return first;
+  throw new Error('No CDP account contexts initialized');
+}
+
+/** Check baxia status for a specific account (or default). */
+export async function checkBaxiaForAccount(email?: string): Promise<{ hasBaxia: boolean; fetchIsWrapped: boolean }> {
+  const target = email || getDefaultAccount();
+  return evaluateInAccount<{ hasBaxia: boolean; fetchIsWrapped: boolean }>(
+    target,
+    '({hasBaxia:!!window.__baxia__,fetchIsWrapped:!fetch.toString().includes("native")})',
+    false,
+  );
+}
+
+/** Non-streaming fetch through the default account. */
+export async function browserFetch(url: string, options: { method?: string; body?: string; timeout?: number } = {}): Promise<CdpResponse> {
+  return browserFetchForAccount(getDefaultAccount(), url, options);
+}
+
+/** Streaming fetch through the default account. */
+export async function browserStreamFetchIncremental(
+  url: string,
+  body: string,
+  options?: { referer?: string; timeout?: number },
+): Promise<{ ok: boolean; status: number; statusText: string; headers: Record<string, string>; stream: ReadableStream<Uint8Array> }> {
+  return browserStreamFetchIncrementalForAccount(getDefaultAccount(), url, body, options);
+}
+
+/** Check if an account context exists. */
+export function hasAccountContext(email: string): boolean {
+  return accountStates.has(email);
+}
+
+/** Get all initialized account emails. */
+export function getAccountEmails(): string[] {
+  return Array.from(accountStates.keys());
+}
+
+/**
+ * Initialize the browser connection and all account contexts.
+ * Call once at startup after startBrowser().
+ */
+export async function initAllAccountContexts(accounts: Array<{ email: string; profileCookies?: string }>): Promise<void> {
+  await connectBrowserWs();
+  console.log(`[CDP] Initializing ${accounts.length} account contexts...`);
+
+  for (const acct of accounts) {
+    if (!acct.profileCookies) {
+      console.warn(`[CDP] Skipping ${acct.email} — no profileCookies`);
+      continue;
+    }
+    try {
+      await initAccountContext(acct.email, acct.profileCookies);
+    } catch (err: any) {
+      console.error(`[CDP] Failed to init context for ${acct.email}: ${err.message}`);
+    }
+  }
+
+  console.log(`[CDP] Account contexts ready: ${getAccountEmails().join(', ')}`);
+}
+
+/**
+ * Stop all account contexts and disconnect.
+ */
+export function stopAllAccounts(): void {
+  for (const [, state] of accountStates) {
+    state.streamBindings.clear();
+    state.queue.clear();
+  }
+  accountStates.clear();
+  sessionToEmail.clear();
+  defaultAccountEmail = null;
+  if (browserWs) {
+    try {
+      browserWs.close();
+    } catch {
+      /* already closed */
+    }
+    browserWs = null;
+    browserConnected = false;
+  }
 }

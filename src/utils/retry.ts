@@ -345,8 +345,10 @@ export async function withRetry<T>(fn: () => Promise<T>, config?: RetryConfig): 
       const jitter = delay * 0.2 * (Math.random() * 2 - 1);
       const actualDelay = Math.min(delay + jitter, cfg.maxDelayMs);
 
+      const errorName = error instanceof Error ? error.name : typeof error;
+      const errorMsg = error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200);
       console.warn(
-        `[Retry] attempt ${attempt + 1}/${cfg.maxRetries + 1} failed (${httpStatus || 'network'}, retryable), retrying in ${Math.round(actualDelay)}ms...`,
+        `[Retry] attempt ${attempt + 1}/${cfg.maxRetries + 1} failed (${httpStatus || errorName}: ${errorMsg}), retrying in ${Math.round(actualDelay)}ms...`,
       );
       await sleep(actualDelay);
 

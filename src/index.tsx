@@ -84,6 +84,12 @@ async function gracefulShutdown(_signal: string): Promise<void> {
     /* intentional */
   }
   try {
+    const { stopAllAccounts } = await import('./services/cdpClient.ts');
+    stopAllAccounts();
+  } catch {
+    /* intentional */
+  }
+  try {
     await closePlaywright();
   } catch (err: any) {
     console.error('[Shutdown] Playwright close error:', err.message);
@@ -101,7 +107,16 @@ async function gracefulShutdown(_signal: string): Promise<void> {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-app.use('*', cors({ origin: ['http://localhost:26405', 'http://127.0.0.1:26405'] }));
+app.use('*', cors({ origin: '*' }));
+
+// Debug: log all incoming requests
+app.use('*', async (c, next) => {
+  const method = c.req.method;
+  const path = c.req.path;
+  const ua = c.req.header('user-agent') || 'unknown';
+  console.log(`[HTTP] ${method} ${path} UA=${ua.slice(0, 80)}`);
+  await next();
+});
 
 // Health check — reports actual system status
 app.get('/health', (c) => {
@@ -347,35 +362,56 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
       logStore.log('info', 'boot', 'Dashboard live — starting background initialization...');
 
-      // ── Phase 1.5: Initialize CDP client before auth (connects to auto-launched Chrome) ──
-      if (process.env.CHROME_CDP_ENDPOINT) {
-        try {
-          const { initCdpClient } = await import('./services/cdpClient.ts');
-          await initCdpClient();
-          logStore.log('info', 'boot', 'CDP client initialized');
-        } catch (err: any) {
-          logStore.log('warn', 'boot', `CDP client init failed: ${err.message}`);
-        }
-      }
-
-      // ── Phase 2: Auth + post-boot tasks run in background ──
+      // ── Phase 2: Auth + CDP contexts + post-boot tasks ──
       (async () => {
         logStore.log('info', 'boot', '[1/5] Authenticating accounts...');
         try {
-          await initAuth(async (email) => {
-            await configureAccount(email);
-          });
-          logStore.log('info', 'boot', '[1/5] Accounts authenticated + configured');
+          await initAuth();
+          logStore.log('info', 'boot', '[1/5] Accounts authenticated');
         } catch (err: any) {
           logStore.log('warn', 'boot', `[1/5] initAuth failed: ${err.message}`);
         }
 
-        logStore.log('info', 'boot', '[2/5] Pre-warming headers...');
+        // ── Phase 2b: Initialize CDP contexts AFTER auth (fresh profileCookies) ──
+        if (process.env.CHROME_CDP_ENDPOINT) {
+          try {
+            const { initAllAccountContexts } = await import('./services/cdpClient.ts');
+            const { readFileSync } = await import('node:fs');
+            const { projectPath } = await import('./utils/paths.ts');
+            const raw = readFileSync(projectPath('.qwen', 'accounts.json'), 'utf-8');
+            const acctData: Array<{ email: string; profileCookies?: string }> = JSON.parse(raw);
+            await initAllAccountContexts(acctData);
+            logStore.log('info', 'boot', `[2/5] CDP contexts initialized for ${acctData.length} accounts`);
+          } catch (err: any) {
+            logStore.log('warn', 'boot', `CDP account contexts init failed: ${err.message}`);
+          }
+        }
+
+        // ── Phase 2c: Configure accounts AFTER CDP contexts are ready ──
+        logStore.log('info', 'boot', '[3/5] Configuring accounts...');
+        try {
+          const { getAccounts } = await import('./services/accountManager.ts');
+          const acctList = getAccounts().filter((a) => a.state?.token);
+          await Promise.allSettled(
+            acctList.map(async (acct) => {
+              try {
+                await configureAccount(acct.email);
+              } catch (err: any) {
+                logStore.log('warn', 'boot', `Configure failed for ${acct.email}: ${err.message}`);
+              }
+            }),
+          );
+          logStore.log('info', 'boot', `[3/5] Accounts configured`);
+        } catch (err: any) {
+          logStore.log('warn', 'boot', `[3/5] Configure failed: ${err.message}`);
+        }
+
+        logStore.log('info', 'boot', '[4/5] Pre-warming headers...');
         try {
           await getQwenHeaders();
-          logStore.log('info', 'boot', '[2/5] Headers ready');
+          logStore.log('info', 'boot', '[4/5] Headers ready');
         } catch (err: any) {
-          logStore.log('warn', 'boot', `[2/5] Header pre-warm failed: ${err.message}`);
+          logStore.log('warn', 'boot', `[4/5] Header pre-warm failed: ${err.message}`);
         }
 
         logStore.log('info', 'boot', 'All background initialization complete');
