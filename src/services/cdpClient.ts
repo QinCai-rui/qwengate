@@ -1,23 +1,21 @@
 /**
- * Per-account CDP client: routes API calls through a single Chrome browser
- * with isolated browser contexts per Qwen account.
+ * Per-account CDP client: Chrome browser contexts for baxia header capture,
+ * Node.js fetch for all API calls.
  *
  * Architecture:
  *   - ONE Chrome process on port 26404 (browser-level WS)
  *   - N browser contexts, one per account, each with its own page
- *   - Each page has independent baxia, cookies, and window.fetch
- *   - CDP messages routed by sessionId (Target.attachToTarget flatten: true)
- *   - Multiple concurrent requests supported (different accounts = different pages)
+ *   - Chrome CDP is used ONLY for: context creation, cookie injection,
+ *     stealth scripts, baxia loading, and header capture
+ *   - ALL API requests use Node.js fetch() with cached baxia headers
+ *   - No browser CDP evaluate for fetch — eliminates large body hangs
  *
  * Usage:
  *   1. startBrowser() → Chrome on port 26404
  *   2. initBrowserConnection() → connect browser-level WS
  *   3. initAccountContext(email, profileCookies) → create context + navigate
- *   4. browserFetchForAccount(email, url, opts) → non-streaming
- *   5. browserStreamFetchIncrementalForAccount(email, url, body) → streaming
- *
- * IMPORTANT: baxia wraps window.fetch (not XMLHttpRequest).
- * All API calls MUST use fetch() from the page context.
+ *   4. browserFetchForAccount(email, url, opts) → non-streaming (Node.js fetch)
+ *   5. browserStreamFetchIncrementalForAccount(email, url, body) → streaming (Node.js fetch)
  */
 
 // ---------------------------------------------------------------------------
@@ -572,12 +570,100 @@ export async function refreshBaxiaForAccount(email: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Non-streaming fetch
+// Helper: wait for baxia headers to be captured
+// ---------------------------------------------------------------------------
+
+async function triggerBxHeaderCaptureAndWait(state: AccountCdpState, maxWaitMs = 5000): Promise<void> {
+  triggerBxHeaderCaptureForAccount(state);
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    if (state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) return;
+    await Bun.sleep(200);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Non-streaming fetch via Node.js
 // ---------------------------------------------------------------------------
 
 /**
- * Make a non-streaming API call through a specific account's browser page.
- * Uses window.fetch() so baxia injects bx-umidtoken/bx-ua headers.
+ * Make a non-streaming API call using Node.js fetch with cached baxia headers.
+ * Completely bypasses browser CDP — no size limits, no baxia wrapper hangs.
+ */
+export async function nodeFetchForAccount(
+  email: string,
+  url: string,
+  body: string,
+  options?: { method?: string; timeout?: number },
+): Promise<CdpResponse> {
+  const state = accountStates.get(email);
+  if (!state) throw new Error(`No CDP context for account ${email}`);
+
+  const cachedHeaders = state.cachedBxHeaders;
+  if (!cachedHeaders || !cachedHeaders['bx-ua']) {
+    throw new Error('No cached baxia headers — need a successful small request first');
+  }
+
+  const requestId = crypto.randomUUID();
+  console.log(`[NodeFetch][${email}] Non-streaming request, body=${body.length} chars`);
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    source: 'web',
+    'x-request-id': requestId,
+    'x-accel-buffering': 'no',
+    timezone: new Date().toString(),
+    version: '0.2.66',
+    'bx-umidtoken': cachedHeaders['bx-umidtoken'],
+    'bx-ua': cachedHeaders['bx-ua'],
+    'bx-v': cachedHeaders['bx-v'],
+    'user-agent': cachedHeaders['user-agent'],
+    'sec-ch-ua': cachedHeaders['sec-ch-ua'],
+    'sec-ch-ua-mobile': cachedHeaders['sec-ch-ua-mobile'],
+    'sec-ch-ua-platform': cachedHeaders['sec-ch-ua-platform'],
+    origin: 'https://chat.qwen.ai',
+    referer: 'https://chat.qwen.ai/',
+  };
+
+  if (state.profileCookies) {
+    headers['cookie'] = state.profileCookies;
+  }
+
+  const controller = new AbortController();
+  const timeout = options?.timeout ?? 30_000;
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const resp = await fetch(url, {
+      method: (options?.method || 'POST') as any,
+      headers,
+      body,
+      signal: controller.signal,
+    });
+
+    clearTimeout(timer);
+    console.log(`[NodeFetch][${email}] Response: ${resp.status}`);
+
+    const text = await resp.text();
+    const respHeaders: Record<string, string> = {};
+    resp.headers.forEach((v, k) => {
+      respHeaders[k] = v;
+    });
+    return { ok: resp.ok, status: resp.status, statusText: resp.statusText, body: text, headers: respHeaders };
+  } catch (err) {
+    clearTimeout(timer);
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Non-streaming fetch (public API)
+// ---------------------------------------------------------------------------
+
+/**
+ * Make a non-streaming API call through a specific account.
+ * All requests use Node.js fetch with cached baxia headers — no browser CDP evaluate.
  */
 export async function browserFetchForAccount(
   email: string,
@@ -585,131 +671,31 @@ export async function browserFetchForAccount(
   options: { method?: string; body?: string; timeout?: number } = {},
 ): Promise<CdpResponse> {
   const state = accountStates.get(email)!;
+  const { method = 'GET', body = '', timeout = 30000 } = options;
 
-  const { method = 'GET', body, timeout = 30000 } = options;
-
-  // For large bodies with cached baxia headers, use Node.js fetch to bypass browser hang
-  const LARGE_BODY_THRESHOLD = 50_000; // 50KB
-  if (body && body.length > LARGE_BODY_THRESHOLD && state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
-    console.log(`[CDP][${email}] Large body non-streaming (${body.length} chars) — using Node.js fetch with cached baxia headers`);
-    const requestId = crypto.randomUUID();
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      source: 'web',
-      'x-request-id': requestId,
-      'x-accel-buffering': 'no',
-      timezone: new Date().toString(),
-      version: '0.2.66',
-      // Replay cached baxia headers
-      'bx-umidtoken': state.cachedBxHeaders['bx-umidtoken'],
-      'bx-ua': state.cachedBxHeaders['bx-ua'],
-      'bx-v': state.cachedBxHeaders['bx-v'],
-      'user-agent': state.cachedBxHeaders['user-agent'],
-      'sec-ch-ua': state.cachedBxHeaders['sec-ch-ua'],
-      'sec-ch-ua-mobile': state.cachedBxHeaders['sec-ch-ua-mobile'],
-      'sec-ch-ua-platform': state.cachedBxHeaders['sec-ch-ua-platform'],
-      origin: 'https://chat.qwen.ai',
-      referer: 'https://chat.qwen.ai/',
-    };
-    // Use profileCookies (CDP never captures the cookie header)
-    if (state.profileCookies) {
-      headers['cookie'] = state.profileCookies;
-    }
-    try {
-      const resp = await fetch(url, { method: method || 'POST', headers, body });
-      const text = await resp.text();
-      const respHeaders: Record<string, string> = {};
-      resp.headers.forEach((v, k) => {
-        respHeaders[k] = v;
-      });
-      return { ok: resp.ok, status: resp.status, statusText: resp.statusText, body: text, headers: respHeaders };
-    } catch (err) {
-      console.warn(`[CDP][${email}] Node.js fetch failed (${(err as Error).message}), falling back to browser fetch`);
-      // Fall through to browser fetch
-    }
+  // Always use Node.js fetch with cached baxia headers
+  // No browser CDP evaluate — eliminates size limits and baxia wrapper hangs
+  if (state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
+    return nodeFetchForAccount(email, url, body, { method, timeout });
   }
 
-  // For large bodies, store in browser global first (same fix as streaming path)
-  const BODY_THRESHOLD = 10_000;
-  const bodyGlobalName = `__cdp_fetch_body_${Date.now()}`;
-  const useTwoPhase = body && body.length > BODY_THRESHOLD;
+  // If no cached headers yet (shouldn't happen after init), try a small browser fetch to populate them
+  console.warn(`[CDP][${email}] No cached baxia headers, attempting browser fetch to populate...`);
+  await triggerBxHeaderCaptureAndWait(state);
 
-  if (useTwoPhase) {
-    const storeId = ++state.callIdCounter;
-    const storeExpression = `window[${JSON.stringify(bodyGlobalName)}] = ${JSON.stringify(body)}; 'ok'`;
-    browserWs!.send(
-      JSON.stringify({
-        id: storeId,
-        sessionId: state.sessionId,
-        method: 'Runtime.evaluate',
-        params: { expression: storeExpression, returnByValue: true },
-      }),
-    );
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Body storage timeout')), 15_000);
-      state.queue.set(storeId, {
-        resolve: () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
-        settled: false,
-      });
-    });
+  if (state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
+    return nodeFetchForAccount(email, url, body, { method, timeout });
   }
 
-  const bodyRef = useTwoPhase ? `window[${JSON.stringify(bodyGlobalName)}]` : JSON.stringify(body);
-  const bodyClause = useTwoPhase ? `body: ${bodyRef},` : body ? `body: ${bodyRef},` : '';
-  const expression = `(async () => {
-    try {
-      const requestId = crypto.randomUUID();
-      const resp = await fetch(${JSON.stringify(url)}, {
-        method: ${JSON.stringify(method)},
-        credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'source': 'web',
-          'x-request-id': requestId,
-          'x-accel-buffering': 'no',
-          'timezone': new Date().toString(),
-          'version': '0.2.66',
-        },
-        ${bodyClause}
-      });
-      const headers = {};
-      resp.headers.forEach((v, k) => { headers[k] = v; });
-      if (window[${JSON.stringify(bodyGlobalName)}]) delete window[${JSON.stringify(bodyGlobalName)}];
-      return { ok: resp.ok, status: resp.status, statusText: resp.statusText, body: await resp.text(), headers };
-    } catch(e) {
-      if (window[${JSON.stringify(bodyGlobalName)}]) delete window[${JSON.stringify(bodyGlobalName)}];
-      return { ok: false, status: 0, statusText: e.message || 'NetworkError', body: '', headers: {} };
-    }
-  })()`;
-  return evaluateInAccount<CdpResponse>(email, expression, true, timeout);
+  throw new Error(`No baxia headers for ${email} — cannot make request`);
 }
 
 // ---------------------------------------------------------------------------
-// Streaming fetch (incremental)
+// Streaming fetch via Node.js
 // ---------------------------------------------------------------------------
 
 /**
- * Incrementally stream an API response through a specific account's browser page.
- * Uses Runtime.addBinding + window.fetch() + ReadableStream.getReader() to pipe
- * SSE chunks back in real time.
- *
- * Returns { ok, status, headers, stream } where stream delivers SSE text incrementally.
- */
-// ---------------------------------------------------------------------------
-// Node.js fetch bypass for large bodies
-// ---------------------------------------------------------------------------
-
-/**
- * For large request bodies (>50KB), browser's window.fetch() hangs via CDP
+ * For streaming request bodies, browser's window.fetch() hangs via CDP
  * because baxia's fetch wrapper stalls on large POST body processing.
  * This function uses Node.js fetch() directly with cached baxia headers,
  * bypassing the browser entirely.
@@ -814,6 +800,10 @@ export async function nodeFetchStreamForAccount(
   }
 }
 
+/**
+ * Incrementally stream an API response through a specific account.
+ * All streaming uses Node.js fetch with cached baxia headers — no browser CDP evaluate.
+ */
 export async function browserStreamFetchIncrementalForAccount(
   email: string,
   url: string,
@@ -823,346 +813,20 @@ export async function browserStreamFetchIncrementalForAccount(
   const state = accountStates.get(email);
   if (!state) throw new Error(`No CDP context for account ${email}`);
 
-  // For large bodies with cached baxia headers, use Node.js fetch to bypass browser hang
-  const LARGE_BODY_THRESHOLD = 50_000; // 50KB
-  if (body.length > LARGE_BODY_THRESHOLD && state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
-    console.log(`[CDP][${email}] Large body (${body.length} chars) — using Node.js fetch with cached baxia headers`);
-    try {
-      return await nodeFetchStreamForAccount(email, url, body, options);
-    } catch (err) {
-      console.warn(`[CDP][${email}] Node.js fetch failed (${(err as Error).message}), falling back to browser fetch`);
-      // Fall through to browser fetch
-    }
+  // Always use Node.js fetch — no browser CDP evaluate, no size limits
+  if (state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
+    return nodeFetchStreamForAccount(email, url, body, options);
   }
 
-  const referer = options?.referer || 'https://chat.qwen.ai/';
-  const timeout = options?.timeout || 60_000;
-  const bindingName = `__cdp_sb_${++state.callIdCounter}_${Date.now()}`;
-  const startTime = Date.now();
-  console.log(`[CDP] streamFetch start: email=${email} url=${url.slice(0, 80)} binding=${bindingName} bodyLen=${body.length}`);
+  // If no cached headers yet, try to populate them
+  console.warn(`[CDP][${email}] No cached baxia headers for streaming, attempting to populate...`);
+  await triggerBxHeaderCaptureAndWait(state);
 
-  await connectBrowserWs();
-
-  // Register binding: browser calls window[bindingName](b64chunk)
-  const addBindingId = ++state.callIdCounter;
-  browserWs!.send(
-    JSON.stringify({
-      id: addBindingId,
-      sessionId: state.sessionId,
-      method: 'Runtime.addBinding',
-      params: { name: bindingName },
-    }),
-  );
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Runtime.addBinding timeout')), 5000);
-    state.queue.set(addBindingId, {
-      resolve: () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      reject: (e) => {
-        clearTimeout(timer);
-        reject(e);
-      },
-      settled: false,
-    });
-  });
-
-  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
-  let streamClosed = false;
-
-  const nodeStream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      streamController = controller;
-    },
-    cancel() {
-      streamClosed = true;
-      removeBindingForAccount(state, bindingName);
-    },
-  });
-
-  // Wire the binding to the stream controller
-  let firstChunkTime = 0;
-  let chunkCount = 0;
-  state.streamBindings.set(bindingName, (payload: string) => {
-    if (streamClosed) return;
-    if (payload === '__QSB_DONE__') {
-      console.log(`[CDP] stream DONE: ${Date.now() - startTime}ms total, ${chunkCount} chunks, email=${email}`);
-      streamClosed = true;
-      try {
-        streamController?.close();
-      } catch {
-        /* already closed */
-      }
-      removeBindingForAccount(state, bindingName);
-      // Clean up browser global for large bodies
-      if (useTwoPhase) {
-        try {
-          browserWs!.send(
-            JSON.stringify({
-              id: ++state.callIdCounter,
-              sessionId: state.sessionId,
-              method: 'Runtime.evaluate',
-              params: { expression: `delete window[${JSON.stringify(bodyGlobalName)}]; 'ok'`, returnByValue: true, timeout: 5000 },
-            }),
-          );
-        } catch {
-          /* best effort */
-        }
-      }
-      return;
-    }
-    if (payload === '__QSB_ERROR__') {
-      console.error(`[CDP] stream ERROR: ${Date.now() - startTime}ms, ${chunkCount} chunks, email=${email}`);
-      streamClosed = true;
-      try {
-        streamController?.error(new Error('Browser stream fetch failed'));
-      } catch {
-        /* already closed */
-      }
-      removeBindingForAccount(state, bindingName);
-      // Clean up browser global for large bodies
-      if (useTwoPhase) {
-        try {
-          browserWs!.send(
-            JSON.stringify({
-              id: ++state.callIdCounter,
-              sessionId: state.sessionId,
-              method: 'Runtime.evaluate',
-              params: { expression: `delete window[${JSON.stringify(bodyGlobalName)}]; 'ok'`, returnByValue: true, timeout: 5000 },
-            }),
-          );
-        } catch {
-          /* best effort */
-        }
-      }
-      return;
-    }
-    if (!firstChunkTime) {
-      firstChunkTime = Date.now();
-      console.log(`[CDP] first chunk: ${firstChunkTime - startTime}ms, email=${email}`);
-    }
-    chunkCount++;
-    try {
-      const binary = atob(payload);
-      const len = binary.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
-      if (!streamClosed) streamController?.enqueue(bytes);
-    } catch {
-      // Corrupted chunk or controller already closed — skip silently
-    }
-  });
-
-  // --- LARGE BODY HANDLING ---
-  // For large request bodies (e.g. Qwen Code with 100KB+ system prompt + tools),
-  // embedding the body directly in the Runtime.evaluate expression causes Chrome
-  // to hang — the V8 parser stalls on 260KB+ string literals. Instead, we store
-  // the body in a browser global FIRST via a simple assignment, then reference it
-  // in a tiny fetch expression. This splits the CDP message into two: a simple
-  // string storage (no parsing overhead) and a small fetch call.
-  const BODY_THRESHOLD = 10_000; // 10KB — above this, use two-phase approach
-  const bodyGlobalName = `__cdp_body_${state.callIdCounter + 1}`;
-  const useTwoPhase = body.length > BODY_THRESHOLD;
-
-  if (useTwoPhase) {
-    const storeStart = Date.now();
-    console.log(`[CDP] Storing ${body.length} chars in ${bodyGlobalName} for ${email}`);
-    console.log(`[CDP] Large body (${(body.length / 1024).toFixed(0)}KB) — using two-phase storage for email=${email}`);
-    // Phase 1: Store body in browser global (simple assignment, no baxia involvement)
-    const storeId = ++state.callIdCounter;
-    const storeExpression = `window[${JSON.stringify(bodyGlobalName)}] = ${JSON.stringify(body)}; 'ok'`;
-    browserWs!.send(
-      JSON.stringify({
-        id: storeId,
-        sessionId: state.sessionId,
-        method: 'Runtime.evaluate',
-        params: { expression: storeExpression, returnByValue: true },
-      }),
-    );
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Body storage timeout')), 15_000);
-      state.queue.set(storeId, {
-        resolve: () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
-        settled: false,
-      });
-    });
-    console.log(`[CDP] Body stored in ${Date.now() - storeStart}ms`);
+  if (state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
+    return nodeFetchStreamForAccount(email, url, body, options);
   }
 
-  // Launch fetch in the account's page using window.fetch()
-  // so baxia's wrapper intercepts and injects bx-umidtoken/bx-ua headers.
-  //
-  // KEY: We do NOT use awaitPromise:true on Runtime.evaluate.
-  // With awaitPromise:true, CDP blocks until the IIFE resolves. If window.fetch()
-  // hangs (baxia stalling on large bodies), the entire CDP evaluate hangs forever
-  // and our timeout doesn't fire reliably. Instead, we start the fetch as
-  // fire-and-forget — the IIFE runs in the browser's microtask queue and streams
-  // data via the binding. CDP returns immediately.
-  const evaluateId = ++state.callIdCounter;
-  const bodyRef = useTwoPhase ? `window[${JSON.stringify(bodyGlobalName)}]` : JSON.stringify(body);
-  const fetchExpression = `(async () => {
-  const t0 = Date.now();
-  const bridge = window[${JSON.stringify(bindingName)}];
-  console.log('[CDP-BROWSER] IIFE started, bridge=' + typeof bridge + ', bodyRef=' + typeof (${bodyRef}));
-  
-  try {
-    const body = ${bodyRef};
-    console.log('[CDP-BROWSER] body loaded: ' + (body ? body.length + ' chars' : 'null/undefined'));
-    
-    const requestId = crypto.randomUUID();
-    const startTime = new Date().toISOString();
-    
-    console.log('[CDP-BROWSER] calling window.fetch()...');
-    const fetchStart = Date.now();
-    
-    const resp = await window.fetch(${JSON.stringify(url)}, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'text/event-stream',
-        'source': 'web',
-        'x-request-id': requestId,
-        'x-accel-buffering': 'no',
-        'timezone': new Date().toString(),
-        'version': '0.2.66',
-        'Referer': ${JSON.stringify(referer)},
-      },
-      body: body,
-    });
-    
-    console.log('[CDP-BROWSER] fetch resolved in ' + (Date.now() - fetchStart) + 'ms, status=' + resp.status);
-    
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => '');
-      console.log('[CDP-BROWSER] HTTP error: ' + resp.status + ', body=' + errText.substring(0, 200));
-      bridge(btoa(JSON.stringify({ __httpError: true, status: resp.status, body: errText.substring(0, 2000) })));
-      bridge('__QSB_DONE__');
-      return;
-    }
-    
-    console.log('[CDP-BROWSER] getting reader...');
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let chunkCount = 0;
-    let totalBytes = 0;
-    
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value && value.length > 0) {
-        const text = decoder.decode(value, { stream: true });
-        if (text) {
-          const uint8 = new TextEncoder().encode(text);
-          let binary = '';
-          for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
-          bridge(btoa(binary));
-          chunkCount++;
-          totalBytes += text.length;
-          if (chunkCount <= 3 || chunkCount % 20 === 0) {
-            console.log('[CDP-BROWSER] chunk #' + chunkCount + ': ' + text.length + ' chars (total: ' + totalBytes + ')');
-          }
-        }
-      }
-    }
-    
-    console.log('[CDP-BROWSER] stream done: ' + chunkCount + ' chunks, ' + totalBytes + ' total bytes, in ' + (Date.now() - fetchStart) + 'ms');
-    bridge('__QSB_DONE__');
-  } catch (e) {
-    console.log('[CDP-BROWSER] ERROR in ' + (Date.now() - t0) + 'ms: ' + (e.message || e));
-    bridge('__QSB_ERROR__');
-  }
-})();`;
-
-  // Fire-and-forget: no awaitPromise — CDP returns immediately.
-  // The IIFE runs in the browser and streams data via the binding.
-  // If the IIFE throws, it's unhandled — but the binding __QSB_ERROR__ is called.
-  // Track in queue to catch fire-and-forget errors (no V8 timeout — watchdog handles lifecycle).
-  state.queue.set(evaluateId, {
-    resolve: (result) => {
-      if (result?.exceptionDetails) {
-        console.error(`[CDP:${email}] Fire-and-forget exception:`, JSON.stringify(result.exceptionDetails).slice(0, 500));
-      }
-    },
-    reject: (err) => {
-      console.error(`[CDP:${email}] Fire-and-forget error:`, err.message);
-    },
-    settled: false,
-  });
-  // Auto-cleanup after 30s
-  setTimeout(() => {
-    const entry = state.queue.get(evaluateId);
-    if (entry && !entry.settled) state.queue.delete(evaluateId);
-  }, 30_000);
-  browserWs!.send(
-    JSON.stringify({
-      id: evaluateId,
-      sessionId: state.sessionId,
-      method: 'Runtime.evaluate',
-      params: { expression: fetchExpression, returnByValue: false, awaitPromise: false },
-    }),
-  );
-
-  // Node.js-side watchdog: if no data arrives within the timeout, force-close.
-  // This catches baxia hangs, network failures, or any case where the browser-side
-  // code never calls __QSB_DONE__ or __QSB_ERROR__.
-  // For large bodies, Qwen API may take longer to respond — use generous timeout.
-  const isLargeBody = body.length > 50_000;
-  const watchdogMs = isLargeBody ? 180_000 : 90_000; // 3min for large, 90s for normal
-  const watchdog = setTimeout(() => {
-    if (!streamClosed) {
-      console.error(`[CDP] WATCHDOG: no data for ${watchdogMs / 1000}s, email=${email} bodyLen=${body.length} — forcing close`);
-      streamClosed = true;
-      try {
-        streamController?.error(new Error(`Stream watchdog: no data for ${watchdogMs / 1000}s`));
-      } catch {
-        /* already closed */
-      }
-      removeBindingForAccount(state, bindingName);
-    }
-  }, watchdogMs);
-
-  // Clear watchdog when stream ends naturally (via __QSB_DONE__ or __QSB_ERROR__)
-  const sc = streamController as any;
-  if (sc) {
-    const origClose = sc.close.bind(sc);
-    const origError = sc.error.bind(sc);
-    sc.close = (...args: any[]) => {
-      clearTimeout(watchdog);
-      return origClose(...args);
-    };
-    sc.error = (...args: any[]) => {
-      clearTimeout(watchdog);
-      return origError(...args);
-    };
-  }
-
-  return { ok: true, status: -1, statusText: '', headers: {}, stream: nodeStream };
-}
-
-// ---------------------------------------------------------------------------
-
-function removeBindingForAccount(state: AccountCdpState, name: string): void {
-  state.streamBindings.delete(name);
-  if (!browserWs || !browserConnected) return;
-  const id = ++state.callIdCounter;
-  browserWs.send(
-    JSON.stringify({
-      id,
-      sessionId: state.sessionId,
-      method: 'Runtime.removeBinding',
-      params: { name },
-    }),
-  );
-  state.queue.set(id, { resolve: () => {}, reject: () => {}, settled: false });
+  throw new Error(`No baxia headers for ${email} — cannot stream request`);
 }
 
 // ---------------------------------------------------------------------------
