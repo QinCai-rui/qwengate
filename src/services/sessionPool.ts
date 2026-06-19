@@ -2,8 +2,7 @@ import crypto from 'node:crypto';
 import { decrementInFlight, getAccountByEmail, getAllAccountEmails, incrementTotalRequests, pickAccount, throttleAccount } from './auth.ts';
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
-import { completeEntry, createNetworkEntry, errorEntry, recordResponse } from './networkDebug.ts';
-import { type BasicHeaders, getBasicHeaders } from './playwright.ts';
+import { type BasicHeaders, getBasicHeaders, performBrowserFetch } from './playwright.ts';
 import { QWEN_API_BASE } from './qwen.ts';
 
 interface PoolEntry {
@@ -195,57 +194,32 @@ export class SessionPool {
 
   async deleteSession(chatId: string, cachedHeaders?: { cookie: string; userAgent: string }, accountEmail?: string): Promise<void> {
     if (process.env.TEST_MOCK_PLAYWRIGHT) return;
-    if (config.get('DELETE_SESSION', 'true') === 'false') {
-      return;
+    if (config.get('DELETE_SESSION', 'true') === 'false') return;
+
+    // Ensure we have an email for browser context lookup
+    let email = accountEmail;
+    if (!email) {
+      try {
+        const headers = await getBasicHeaders();
+        email = headers.email;
+      } catch {
+        console.error('[SessionPool] Failed to get email for session deletion');
+        return;
+      }
     }
 
-    let cookie: string, userAgent: string;
     try {
-      const headers = cachedHeaders || (await getBasicHeaders(accountEmail));
-      cookie = headers.cookie;
-      userAgent = headers.userAgent;
-    } catch (err: any) {
-      console.error('[SessionPool] Failed to get headers for session deletion:', err);
-      return;
-    }
-    const requestId = crypto.randomUUID();
-    const debugEntry = createNetworkEntry({
-      url: `${QWEN_API_BASE}/api/v2/chats/${chatId}`,
-      method: 'DELETE',
-      headers: { cookie, 'user-agent': userAgent, 'x-request-id': requestId },
-      category: 'session-delete',
-      accountEmail: accountEmail,
-    });
-
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      const response = await fetch(`${QWEN_API_BASE}/api/v2/chats/${chatId}`, {
+      const result = await performBrowserFetch(email!, `${QWEN_API_BASE}/api/v2/chats/${chatId}`, {
         method: 'DELETE',
-        signal: controller.signal,
-        headers: {
-          accept: 'application/json, text/plain, */*',
-          'content-type': 'application/json',
-          cookie: cookie,
-          referer: `${QWEN_API_BASE}/`,
-          'user-agent': userAgent,
-          'x-request-id': requestId,
-          source: 'web',
-        },
+        timeout: 10000,
       });
-      clearTimeout(timeout);
-      recordResponse(debugEntry.id, response);
-      if (response.ok) {
-        completeEntry(debugEntry.id);
-      } else {
-        errorEntry(debugEntry.id, `Delete returned ${response.status}`);
+      if (!result.ok) {
+        console.warn(`[SessionPool] Delete returned ${result.status} for ${chatId.substring(0, 8)}...`);
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        errorEntry(debugEntry.id, 'Delete request aborted (timeout)');
         console.warn(`[SessionPool] Delete timeout for ${chatId.substring(0, 8)}...`);
       } else {
-        errorEntry(debugEntry.id, err.message);
         console.warn(`[SessionPool] Delete failed for ${chatId.substring(0, 8)}...: ${err.message}`);
       }
     }
@@ -264,62 +238,33 @@ export class SessionPool {
    * Create a session using pre-fetched headers (avoids duplicate getBasicHeaders call).
    */
   private async createSessionWithHeaders(email: string | undefined, headers: BasicHeaders): Promise<string> {
-    const { cookie, userAgent, bxUmidtoken, bxUa, bxV } = headers;
-    const requestId = crypto.randomUUID();
-
     const acct = email ? getAccountByEmail(email) : null;
-    const bearerToken = acct?.state?.token;
 
-    const fetchHeaders: Record<string, string> = {
-      accept: 'application/json, text/plain, */*',
-      'content-type': 'application/json',
-      cookie: cookie,
-      referer: 'https://chat.qwen.ai/',
-      'user-agent': userAgent,
-      'x-request-id': requestId,
-      source: 'web',
-      'bx-umidtoken': bxUmidtoken,
-      'bx-ua': bxUa,
-      'bx-v': bxV,
-    };
-    if (bearerToken) {
-      fetchHeaders['authorization'] = `Bearer ${bearerToken}`;
-    }
-
-    const debugEntry = createNetworkEntry({
-      url: `${QWEN_API_BASE}/api/v2/chats/new`,
-      method: 'POST',
-      headers: fetchHeaders,
-      body: {},
-      category: 'session-create',
-      accountEmail: email,
+    const sessionBody = JSON.stringify({
+      title: 'New Chat',
+      models: [acct?.state?.token ? 'qwen3.7-plus' : 'qwen3.5-flash'],
+      chat_mode: 'normal',
+      chat_type: 't2t',
+      timestamp: Date.now(),
+      project_id: '',
     });
 
-    let response: Response;
-    try {
-      response = await fetch(`${QWEN_API_BASE}/api/v2/chats/new`, {
-        method: 'POST',
-        headers: fetchHeaders,
-        body: JSON.stringify({}),
-        signal: AbortSignal.timeout(30000),
-      });
-      recordResponse(debugEntry.id, response);
-    } catch (err) {
-      errorEntry(debugEntry.id, err instanceof Error ? err.message : String(err));
-      throw err;
+    const result = await performBrowserFetch(email!, `${QWEN_API_BASE}/api/v2/chats/new`, {
+      method: 'POST',
+      body: sessionBody,
+      timeout: 30000,
+    });
+
+    if (!result.ok) {
+      throw new Error(`Chats/new returned ${result.status}`);
     }
 
-    if (!response.ok) {
-      errorEntry(debugEntry.id, `Chats/new returned ${response.status}`);
-      throw new Error(`Chats/new returned ${response.status}`);
-    }
-    const json = await response.json();
+    const json = JSON.parse(result.body);
     if (!json.data?.id) {
       const message = formatQwenEnvelopeError(json);
-      errorEntry(debugEntry.id, `Chats/new returned no id: ${message}`);
       throw new Error(`Chats/new returned no id: ${message}`);
     }
-    completeEntry(debugEntry.id);
+
     return json.data.id;
   }
 

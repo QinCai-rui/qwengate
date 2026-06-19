@@ -4,7 +4,7 @@ import { decrementInFlight, pickAccount, throttleAccount } from './auth.ts';
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
 import { completeEntry, createNetworkEntry, errorEntry, recordResponse, recordStreamChunk } from './networkDebug.ts';
-import { forceRefreshBxHeaders, getQwenHeaders } from './playwright.ts';
+import { forceRefreshBxHeaders, getQwenHeaders, performBrowserStream } from './playwright.ts';
 import { logQwenRequest, logQwenResponse } from './qwenLogger.ts';
 
 export { configureAccount, deleteAllChats, fetchQwenModels } from './qwenModels.ts';
@@ -22,9 +22,8 @@ export function buildFeatureConfig(enableThinking: boolean): Record<string, any>
     research_mode: 'normal',
     auto_thinking: false,
     thinking_mode: 'Thinking',
-    thinking_format: 'full',
-    thinking_budget: 65536,
-    auto_search: false,
+    thinking_format: 'summary',
+    auto_search: true,
   };
 }
 export const QWEN_CHATS_URL = `${QWEN_API_BASE}/api/v2/chats/`;
@@ -106,28 +105,70 @@ export interface QwenStreamResult {
 
 const QWEN_FETCH_TIMEOUT_MS = config.getInt('QWEN_FETCH_TIMEOUT_MS', 30000);
 
-// Per-account request jitter to avoid looking like automated bursts
+// Cached timezone for request headers
+const cachedTimezone = 'America/Sao_Paulo';
+
+export function createFetchTimeout(): { controller: AbortController; cleanup: () => void } {
+  const controller = new AbortController();
+  const timeout = QWEN_FETCH_TIMEOUT_MS;
+  if (timeout > 0) {
+    const timer = setTimeout(() => controller.abort(new Error('Request timed out')), timeout);
+    return { controller, cleanup: () => clearTimeout(timer) };
+  }
+  return { controller, cleanup: () => {} };
+}
+
+function buildRequestHeaders(reqHeaders: Record<string, string>, cId?: string): Record<string, string> {
+  const bxUmidtoken =
+    reqHeaders['bx-umidtoken'] ||
+    crypto
+      .createHash('sha256')
+      .update(reqHeaders['cookie'] || `anon-${Date.now()}`)
+      .digest('hex')
+      .slice(0, 64);
+  const bxUa =
+    reqHeaders['bx-ua'] ||
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
+  return {
+    accept: 'application/json, text/plain, */*',
+    'accept-language': 'pt-BR,pt;q=0.9,en;q=0.5',
+    'content-type': 'application/json',
+    source: 'web',
+    cookie: reqHeaders['cookie'],
+    origin: QWEN_API_BASE,
+    referer: cId ? `https://chat.qwen.ai/c/${cId}` : 'https://chat.qwen.ai/',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    // Client hints — critical for WAF bypass. Real Chrome sends these automatically,
+    // but Node.js fetch() doesn't. Adding them manually tells the WAF this is a
+    // real browser request.
+    'sec-ch-ua': '"Chromium";v="148", "Google Chrome";v="148", "Not?A_Brand";v="99"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
+    timezone: cachedTimezone,
+    'user-agent':
+      reqHeaders['user-agent'] ||
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+    'x-accel-buffering': 'no',
+    'x-request-id': crypto.randomUUID(),
+    'bx-ua': bxUa,
+    'bx-umidtoken': bxUmidtoken,
+    'bx-v': reqHeaders['bx-v'] || QWEN_BX_V,
+  };
+}
+
 const lastRequestTime = new Map<string, number>();
 async function applyRequestJitter(accountEmail?: string): Promise<void> {
   if (!accountEmail) return;
   const now = Date.now();
   const last = lastRequestTime.get(accountEmail) || 0;
   const elapsed = now - last;
-  // If the last request was less than 2 seconds ago, add a human-like delay
   if (elapsed < 2000) {
-    const jitter = 100 + Math.random() * 400; // 100-500ms random delay
+    const jitter = 100 + Math.random() * 400;
     await new Promise((r) => setTimeout(r, jitter));
   }
   lastRequestTime.set(accountEmail, Date.now());
-}
-
-// Cache Intl.DateTimeFormat — avoids re-creating per request (expensive)
-const cachedTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-export function createFetchTimeout(): { controller: AbortController; cleanup: () => void } {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), QWEN_FETCH_TIMEOUT_MS);
-  return { controller, cleanup: () => clearTimeout(timeout) };
 }
 
 const qwenCircuitBreaker = new CircuitBreaker('qwen-api', {
@@ -210,39 +251,6 @@ export async function createQwenStream(
   let lastDebugEntryId: string | null = null;
   const streamAbortController = new AbortController();
 
-  function buildRequestHeaders(reqHeaders: Record<string, string>, cId?: string): Record<string, string> {
-    // Fallback bx-umidtoken if browser context hasn't captured it yet —
-    // use a hash of account email + session data so it's consistent per session
-    const bxUmidtoken =
-      reqHeaders['bx-umidtoken'] ||
-      crypto
-        .createHash('sha256')
-        .update(reqHeaders['cookie'] || `anon-${Date.now()}`)
-        .digest('hex')
-        .slice(0, 64);
-    const bxUa =
-      reqHeaders['bx-ua'] ||
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
-    return {
-      accept: 'application/json',
-      'accept-language': 'pt-BR,pt;q=0.9',
-      'content-type': 'application/json',
-      cookie: reqHeaders['cookie'],
-      origin: QWEN_API_BASE,
-      referer: cId ? `https://chat.qwen.ai/c/${cId}` : 'https://chat.qwen.ai/',
-      'sec-fetch-dest': 'empty',
-      'sec-fetch-mode': 'cors',
-      'sec-fetch-site': 'same-origin',
-      timezone: cachedTimezone,
-      'user-agent': reqHeaders['user-agent'],
-      'x-accel-buffering': 'no',
-      'x-request-id': crypto.randomUUID(),
-      'bx-ua': bxUa,
-      'bx-umidtoken': bxUmidtoken,
-      'bx-v': reqHeaders['bx-v'],
-    };
-  }
-
   async function handleErrorResponse(response: Response, debugEntryId: string): Promise<never> {
     const errText = await response.text().catch(() => '');
     const contentType = response.headers.get('content-type') || '';
@@ -254,25 +262,7 @@ export async function createQwenStream(
           errorEntry(debugEntryId, errorJson.data.details);
           throw new RetryableQwenStreamError(`Qwen: ${errorJson.data.details}`, retryAfterMs);
         }
-        // Qwen anti-bot CAPTCHA — force header refresh and switch accounts
-        if (errorJson?.ret?.[0] === 'FAIL_SYS_USER_VALIDATE') {
-          const details = errorJson.ret[1] || 'CAPTCHA required';
-          logStore.log('warn', 'qwen', `CAPTCHA detected for ${currentAccountEmail || 'unknown'}: ${details}`);
-          if (currentAccountEmail) {
-            // Force bx header refresh in the browser context
-            forceRefreshBxHeaders(currentAccountEmail).catch(() => {});
-            // Throttle the account briefly so we don't retry with the same flagged session
-            throttleAccount(currentAccountEmail, 5 * 60 * 1000);
-            // Try to switch to a different account
-            const nextAccount = await pickAccount();
-            if (nextAccount && nextAccount.email !== currentAccountEmail) {
-              currentAccountEmail = nextAccount.email;
-              decrementInFlight(nextAccount.email);
-            }
-          }
-          errorEntry(debugEntryId, `CAPTCHA: ${details}`);
-          throw new RetryableQwenStreamError(`Qwen CAPTCHA — switched accounts. ${details}`, 3000);
-        }
+
         if (errorJson?.success === false) {
           const code = errorJson.data?.code || errorJson.code || 'UpstreamError';
           const details = errorJson.data?.details || errorJson.message || 'Qwen returned an error';
@@ -301,6 +291,23 @@ export async function createQwenStream(
           errorEntry(debugEntryId, `${code}: ${details}`);
           throw new QwenUpstreamError(`Qwen upstream error: ${code}: ${details}.${wait}`, code, status);
         }
+
+        // Qwen anti-bot CAPTCHA — force header refresh and switch accounts
+        if (errorJson?.ret?.[0] === 'FAIL_SYS_USER_VALIDATE') {
+          const details = errorJson.ret[1] || 'CAPTCHA required';
+          logStore.log('warn', 'qwen', `CAPTCHA detected for ${currentAccountEmail || 'unknown'}: ${details}`);
+          if (currentAccountEmail) {
+            forceRefreshBxHeaders(currentAccountEmail).catch(() => {});
+            throttleAccount(currentAccountEmail, 5 * 60 * 1000);
+            const nextAccount = await pickAccount();
+            if (nextAccount && nextAccount.email !== currentAccountEmail) {
+              currentAccountEmail = nextAccount.email;
+              decrementInFlight(nextAccount.email);
+            }
+          }
+          throw new RetryableQwenStreamError(`Qwen CAPTCHA — switched accounts. ${details}`, 3000);
+        }
+
         if (
           errorJson?.data?.details?.includes('is not exist') ||
           errorJson?.data?.details?.includes('not exist') ||
@@ -327,6 +334,96 @@ export async function createQwenStream(
 
   let makeRequestQwenLogFile: string | undefined;
   const makeRequest = async (): Promise<{ response: Response; headers: Record<string, string>; qwenLogFile?: string }> => {
+    // CDP mode: route through real Chrome's network stack
+    if (process.env.CHROME_CDP_ENDPOINT) {
+      const bodyStr = JSON.stringify(payload);
+      console.log(
+        `[Qwen] CDP request: url=${url} bodyLen=${bodyStr.length} model=${payload.model} chatId=${payload.chat_id} parentId=${payload.parent_id} msgs=${payload.messages.length} hasTools=${!!(payload as any).tools || !!payload.messages[0]?.feature_config?.local_mcp}`,
+      );
+      const debugEntry = createNetworkEntry({
+        url,
+        method: 'POST',
+        headers: {},
+        body: payload,
+        category: 'chat',
+        accountEmail: currentAccountEmail,
+      });
+      lastDebugEntryId = debugEntry.id;
+      const stream = await performBrowserStream(currentAccountEmail || '', url, bodyStr, streamAbortController.signal);
+
+      // Read first chunk to check for __httpError (sent by performBrowserStream when status is non-2xx)
+      const reader = stream.getReader();
+      const firstChunk = await reader.read();
+      if (firstChunk.done) throw new Error('Browser stream returned empty response');
+
+      const firstText = new TextDecoder().decode(firstChunk.value);
+      console.log(`[Qwen] CDP first chunk (${firstText.length} bytes): ${firstText.substring(0, 200)}`);
+      try {
+        const parsed = JSON.parse(firstText);
+        if (parsed.__httpError) {
+          // Create a mock Response so handleErrorResponse can process it
+          const mockResponse = new Response(parsed.body, {
+            status: parsed.status,
+            statusText: parsed.statusText || 'Error',
+            headers: { 'content-type': 'application/json' },
+          });
+          await handleErrorResponse(mockResponse, debugEntry.id);
+          // handleErrorResponse always throws, so we never reach here
+        }
+      } catch (parseErr) {
+        // If it's a known error type from handleErrorResponse, rethrow it
+        if (
+          parseErr instanceof RetryableQwenStreamError ||
+          parseErr instanceof QwenUpstreamError ||
+          parseErr instanceof UpstreamStatusError
+        ) {
+          throw parseErr;
+        }
+        // Otherwise it's a JSON parse error — meaning the first chunk is normal SSE data, not an error
+      }
+
+      // Normal path: re-enqueue first chunk + pipe remaining reader into a merged stream.
+      // Race-safe: Bun's runtime may close the controller BEFORE our cancel() handler runs,
+      // so we rely on try-catch around enqueue/close rather than just a boolean guard.
+      // The "Controller is already closed" error is a normal cancellation signal, not an error.
+      const mergedStream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(firstChunk.value);
+          (async () => {
+            try {
+              while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                // enqueue() can throw if Bun closed the controller before cancel() ran
+                try {
+                  controller.enqueue(value);
+                } catch {
+                  return; // Controller already closed — done
+                }
+              }
+            } catch {
+              // Stream cancelled — reader.read() threw, exit gracefully
+              return;
+            }
+            try {
+              controller.close();
+            } catch {
+              /* already closed */
+            }
+          })().catch(() => {}); // Prevent unhandled rejection from fire-and-forget async
+        },
+        cancel() {
+          try {
+            reader.cancel();
+          } catch {
+            /* already cancelled */
+          }
+        },
+      });
+
+      return { response: new Response(mergedStream), headers: {}, qwenLogFile: undefined };
+    }
+
     const { headers: reqHeaders } = await getQwenHeaders(currentAccountEmail);
     const requestHeaders = buildRequestHeaders(reqHeaders, chatId);
     // Human-like jitter between requests from the same account

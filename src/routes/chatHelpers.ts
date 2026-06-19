@@ -91,7 +91,7 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
             `\n\n[TRUNCATED: input exceeded ${charLimit} characters (model: ${body.model}, available tokens: ${availableTokens})]`
           : sanitized;
 
-      segments.push(`User: ${truncated}`);
+      segments.push(truncated);
     } else if (msg.role === 'assistant') {
       let assistantContent = contentStr || '';
       const reasoning = msg.reasoning_content;
@@ -120,7 +120,7 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
         }
       }
 
-      segments.push(`Assistant: ${assistantContent}`);
+      segments.push(assistantContent);
     } else if (msg.role === 'tool' || msg.role === 'function') {
       let toolName = msg.name;
       if (!toolName && msg.tool_call_id) {
@@ -171,11 +171,12 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
 
   // Single message with all history flattened (Qwen API only accepts 1 message)
   const prompt = segments.join('\n\n');
+  const fid = randomUUID();
   const qwenMessages: QwenMessage[] = [
     {
-      fid: randomUUID(),
+      fid,
       parentId: null,
-      childrenIds: [],
+      childrenIds: [randomUUID()],
       role: 'user',
       content: prompt || '\n',
       user_action: 'chat',

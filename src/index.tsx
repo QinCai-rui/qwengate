@@ -11,6 +11,7 @@ import { configRouter } from './routes/config.ts';
 import { registerDashboardRoutes } from './routes/dashboard/dashboardRoutes.ts';
 import { debugNetworkApp } from './routes/debugNetwork.ts';
 import { getAccountCount, getAccountStats, getAvailableCount, initAuth } from './services/auth.ts';
+import { startBrowser, stopBrowser } from './services/autoBrowser.ts';
 import { config } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
 import { BrowserType, closePlaywright, getBrowser, getQwenHeaders, initPlaywright } from './services/playwright.ts';
@@ -76,6 +77,11 @@ async function gracefulShutdown(_signal: string): Promise<void> {
     while (inFlightRequests > 0 && Date.now() - start < SHUTDOWN_TIMEOUT_MS) {
       await new Promise((r) => setTimeout(r, 100));
     }
+  }
+  try {
+    await stopBrowser();
+  } catch {
+    /* intentional */
   }
   try {
     await closePlaywright();
@@ -242,6 +248,25 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   \x1b[32m●\x1b[0m Dashboard: http://${host}:${port}/dashboard (Ctrl+Click)\x1b[0m
   `);
 
+  // Auto-launch headless Chrome with CDP if no CHROME_CDP_ENDPOINT is set
+  if (!process.env.CHROME_CDP_ENDPOINT) {
+    try {
+      const browserResult = await startBrowser();
+      if (browserResult.success) {
+        process.env.CHROME_CDP_ENDPOINT = browserResult.cdpEndpoint;
+        logStore.log(
+          'info',
+          'boot',
+          `Auto-browser: ${browserResult.alreadyRunning ? 'detected existing' : 'launched'} Chrome on ${browserResult.cdpEndpoint}`,
+        );
+      } else {
+        logStore.log('warn', 'boot', `Auto-browser failed: ${browserResult.error} — falling back to Playwright`);
+      }
+    } catch (err: any) {
+      logStore.log('warn', 'boot', `Auto-browser error: ${err.message} — falling back to Playwright`);
+    }
+  }
+
   initPlaywright(true, browserType)
     .then(async () => {
       // ── Phase 1: Start HTTP server FIRST so dashboard is live immediately ──
@@ -321,6 +346,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       }
 
       logStore.log('info', 'boot', 'Dashboard live — starting background initialization...');
+
+      // ── Phase 1.5: Initialize CDP client before auth (connects to auto-launched Chrome) ──
+      if (process.env.CHROME_CDP_ENDPOINT) {
+        try {
+          const { initCdpClient } = await import('./services/cdpClient.ts');
+          await initCdpClient();
+          logStore.log('info', 'boot', 'CDP client initialized');
+        } catch (err: any) {
+          logStore.log('warn', 'boot', `CDP client init failed: ${err.message}`);
+        }
+      }
 
       // ── Phase 2: Auth + post-boot tasks run in background ──
       (async () => {

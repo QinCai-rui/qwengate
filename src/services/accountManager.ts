@@ -64,6 +64,7 @@ interface PersistedAccountData {
   email: string;
   password: string;
   throttledUntil?: number;
+  profileCookies?: string;
 }
 export function parseAccountsFromEnv(): Array<{ email: string; password: string }> {
   const result: Array<{ email: string; password: string }> = [];
@@ -195,10 +196,11 @@ export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
       email: a.email,
       password: encryptPassword(a.password),
       ...(a.throttledUntil > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
+      ...(a.profileCookies ? { profileCookies: a.profileCookies } : {}),
     }));
   writeFileSync(ACCOUNTS_FILE, JSON.stringify(data, null, 2), 'utf-8');
 }
-export function loadAccountsFromFile(): Array<{ email: string; password: string; throttledUntil?: number }> {
+export function loadAccountsFromFile(): Array<{ email: string; password: string; throttledUntil?: number; profileCookies?: string }> {
   try {
     if (!existsSync(ACCOUNTS_FILE)) {
       return [];
@@ -210,6 +212,7 @@ export function loadAccountsFromFile(): Array<{ email: string; password: string;
         email: d.email,
         password: decryptPassword(d.password),
         throttledUntil: d.throttledUntil,
+        profileCookies: d.profileCookies,
       }));
   } catch (err: any) {
     logStore.log('error', 'auth', `Failed to load accounts file: ${err.message}`);

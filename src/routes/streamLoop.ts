@@ -130,6 +130,9 @@ export async function handlePostStreamCompletion(
   try {
     const upstreamError = parseQwenErrorPayload(buffer);
     if (upstreamError) {
+      try {
+        require('fs').writeFileSync('/tmp/qwen-error-buffer.json', buffer.slice(0, 10000));
+      } catch (e) {}
       const cleanErrorMessage = cleanTextOfXmlArtifacts(upstreamError.message).cleanedText || upstreamError.message;
       await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ content: cleanErrorMessage })]));
       await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({}, 'stop')]));

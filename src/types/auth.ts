@@ -20,4 +20,6 @@ export interface AccountEntry {
   loginAttempt: number;
   inFlight: number;
   totalRequests: number;
+  /** Full cookie string from browser profile (cna, ssxmod_itna, tfstk, isg, token, etc.) for WAF bypass */
+  profileCookies?: string;
 }

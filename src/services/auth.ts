@@ -77,8 +77,8 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
   const persisted = loadAccountsFromFile();
   const discovered = discoverSavedAccounts();
 
-  // Merge persisted accounts (which may include throttledUntil) with discovered accounts
-  const merged: Array<{ email: string; password: string; throttledUntil?: number }> = [...discovered];
+  // Merge persisted accounts (which may include throttledUntil and profileCookies) with discovered accounts
+  const merged: Array<{ email: string; password: string; throttledUntil?: number; profileCookies?: string }> = [...discovered];
   for (const p of persisted) {
     const existing = merged.find((a) => a.email.toLowerCase().trim() === p.email.toLowerCase().trim());
     if (existing) {
@@ -118,6 +118,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       loginAttempt: 0,
       inFlight: 0,
       totalRequests: 0,
+      profileCookies: a.profileCookies,
     });
   }
   rebuildEmailIndex();
@@ -282,6 +283,24 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
         }
       }
 
+      // Save ALL cookies as profileCookies regardless of JWT health.
+      // The baxia/WAF cookies (cna, ssxmod_itna, tfstk, isg) are independent
+      // of the auth token—they bypass the WAF, not authenticate.
+      try {
+        const cookieStr = cookies
+          .filter((c: Cookie) => c.name && c.value)
+          .map((c: Cookie) => `${c.name}=${c.value}`)
+          .join('; ');
+        if (cookieStr && acct) {
+          acct.profileCookies = cookieStr;
+          const { saveAccountsToFile } = await import('./accountManager.ts');
+          saveAccountsToFile(accounts);
+          logStore.log('info', 'auth', `Saved ${cookies.length} cookies as profile for ${email.split('@')[0]}`);
+        }
+      } catch (fileErr: any) {
+        logStore.log('debug', 'auth', `Profile cookie save failed: ${fileErr.message}`);
+      }
+
       if (authCookie?.value) {
         const payload = decodeJwt(authCookie.value);
         const expiresAt = payload?.exp ? payload.exp * 1000 : Date.now() + AUTH_TOKEN_MAX_AGE_MS;
@@ -293,6 +312,7 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
             refreshToken: refreshCookie?.value || null,
           };
           await saveCookies(email, state.token, state.refreshToken, state.expiresAt);
+
           logStore.log('info', 'auth', `✓ Token loaded from profile for ${email}`);
           return state;
         } else {
