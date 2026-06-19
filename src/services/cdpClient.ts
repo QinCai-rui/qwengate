@@ -557,6 +557,8 @@ export async function browserFetchForAccount(
   url: string,
   options: { method?: string; body?: string; timeout?: number } = {},
 ): Promise<CdpResponse> {
+  const state = accountStates.get(email)!;
+
   const { method = 'GET', body, timeout = 30000 } = options;
 
   // For large bodies, store in browser global first (same fix as streaming path)
@@ -902,21 +904,18 @@ export async function browserStreamFetchIncrementalForAccount(
   }, watchdogMs);
 
   // Clear watchdog when stream ends naturally (via __QSB_DONE__ or __QSB_ERROR__)
-  const origClose = streamController?.close.bind(streamController);
-  const origError = streamController?.error.bind(streamController);
-  if (streamController) {
-    streamController.close = (...args: any[]) => {
+  const sc = streamController as any;
+  if (sc) {
+    const origClose = sc.close.bind(sc);
+    const origError = sc.error.bind(sc);
+    sc.close = (...args: any[]) => {
       clearTimeout(watchdog);
       return origClose(...args);
     };
-    as;
-    any;
-    streamController.error = (...args: any[]) => {
+    sc.error = (...args: any[]) => {
       clearTimeout(watchdog);
       return origError(...args);
     };
-    as;
-    any;
   }
 
   return { ok: true, status: -1, statusText: '', headers: {}, stream: nodeStream };
