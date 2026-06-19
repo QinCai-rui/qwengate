@@ -325,7 +325,61 @@ export async function initAccountContext(email: string, profileCookies: string):
 
   // 5. Enable Network domain for this session (required for Network.setCookie)
   await sendToAccount(state, 'Network.enable', {});
-  console.log(`[CDP]   Network enabled for ${email}`);
+  await sendToAccount(state, 'Page.enable', {});
+  console.log(`[CDP]   Network + Page enabled for ${email}`);
+
+  // 5b. Inject stealth scripts BEFORE page load to evade headless detection
+  const stealthScript = `
+    // 1. Override navigator.webdriver — headless Chrome sets this to true
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+    // 2. Fake navigator.plugins — headless has empty plugins
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => {
+        const plugins = [
+          { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format', length: 1 },
+          { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '', length: 1 },
+          { name: 'Native Client', filename: 'internal-nacl-plugin', description: '', length: 2 },
+        ];
+        plugins.length = 3;
+        return plugins;
+      },
+    });
+
+    // 3. Ensure window.chrome exists with expected properties
+    if (!window.chrome) {
+      (window).chrome = { runtime: {}, loadTimes: function() { return {}; }, csi: function() { return {}; } };
+    }
+    if (!window.chrome.runtime) {
+      window.chrome.runtime = {};
+    }
+
+    // 4. Fake navigator.languages
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+    // 5. Override permissions query for notifications (headless returns 'denied')
+    const originalQuery = window.navigator.permissions?.query;
+    if (originalQuery) {
+      (window.navigator.permissions as any).query = (params: any) => {
+        if (params.name === 'notifications') {
+          return Promise.resolve({ state: Notification.permission || 'default' } as PermissionStatus);
+        }
+        return originalQuery.call(window.navigator.permissions, params);
+      };
+    }
+
+    // 6. Ensure WebGL works — override getParameter to avoid UNMASKED_VENDOR_WEBGL detection
+    const getParameter = WebGLRenderingContext.prototype.getParameter;
+    WebGLRenderingContext.prototype.getParameter = function(parameter: number) {
+      // UNMASKED_VENDOR_WEBGL
+      if (parameter === 37445) return 'Intel Inc.';
+      // UNMASKED_RENDERER_WEBGL
+      if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+      return getParameter.call(this, parameter);
+    };
+  `;
+  await sendToAccount(state, 'Page.addScriptToEvaluateOnNewDocument', { source: stealthScript });
+  console.log(`[CDP]   Stealth scripts injected for ${email}`);
 
   // 6. Inject cookies from profileCookies
   if (profileCookies) {
@@ -355,8 +409,28 @@ export async function initAccountContext(email: string, profileCookies: string):
   await sendToAccount(state, 'Page.navigate', { url: 'https://chat.qwen.ai/' });
   console.log(`[CDP]   Navigating ${email} to chat.qwen.ai...`);
 
-  // 8. Wait for SPA to load + baxia to initialize
-  await Bun.sleep(5000);
+  // 8. Wait for SPA to load + baxia to initialize (poll with backoff)
+  let baxiaReady = false;
+  for (let waitMs = 0; waitMs < 15000; waitMs += 1000) {
+    await Bun.sleep(waitMs === 0 ? 2000 : 1000);
+    try {
+      const check = await evaluateInAccount<{ fetchIsWrapped: boolean }>(
+        email,
+        '({fetchIsWrapped:!fetch.toString().includes("native")})',
+        false,
+      );
+      if (check.fetchIsWrapped) {
+        baxiaReady = true;
+        console.log(`[CDP]   baxia ready for ${email} after ${waitMs + 2000}ms`);
+        break;
+      }
+    } catch {
+      // Page may not be loaded yet
+    }
+  }
+  if (!baxiaReady) {
+    console.warn(`[CDP]   baxia not ready for ${email} after 15s — proceeding anyway`);
+  }
 
   // 9. Verify baxia
   try {
@@ -434,6 +508,40 @@ function triggerBxHeaderCaptureForAccount(state: AccountCdpState): void {
     }),
   );
   state.queue.set(id, { resolve: () => {}, reject: () => {}, settled: false });
+}
+
+/**
+ * Refresh baxia state for an account by re-navigating to chat.qwen.ai.
+ * Call this periodically or after bot detection to re-initialize baxia tokens.
+ */
+export async function refreshBaxiaForAccount(email: string): Promise<void> {
+  const state = accountStates.get(email);
+  if (!state) return;
+  console.log(`[CDP] Refreshing baxia for ${email}...`);
+  try {
+    await sendToAccount(state, 'Page.navigate', { url: 'https://chat.qwen.ai/' });
+    // Wait for baxia to re-initialize
+    for (let waitMs = 0; waitMs < 10000; waitMs += 1000) {
+      await Bun.sleep(waitMs === 0 ? 2000 : 1000);
+      try {
+        const check = await evaluateInAccount<{ fetchIsWrapped: boolean }>(
+          email,
+          '({fetchIsWrapped:!fetch.toString().includes("native")})',
+          false,
+        );
+        if (check.fetchIsWrapped) {
+          console.log(`[CDP]   baxia refreshed for ${email} after ${waitMs + 2000}ms`);
+          triggerBxHeaderCaptureForAccount(state);
+          return;
+        }
+      } catch {
+        /* not ready */
+      }
+    }
+    console.warn(`[CDP]   baxia refresh incomplete for ${email} after 10s`);
+  } catch (err: any) {
+    console.warn(`[CDP]   baxia refresh failed for ${email}: ${err.message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------

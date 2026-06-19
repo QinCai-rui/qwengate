@@ -164,10 +164,20 @@ async function applyRequestJitter(accountEmail?: string): Promise<void> {
   const now = Date.now();
   const last = lastRequestTime.get(accountEmail) || 0;
   const elapsed = now - last;
-  if (elapsed < 2000) {
-    const jitter = 100 + Math.random() * 400;
-    await new Promise((r) => setTimeout(r, jitter));
+
+  // Minimum gap between requests from the same account (1-3 seconds)
+  const minGap = 1000 + Math.random() * 2000;
+  if (elapsed < minGap) {
+    const wait = minGap - elapsed + Math.random() * 500;
+    await new Promise((r) => setTimeout(r, wait));
   }
+
+  // Occasional longer pause (10% chance of 2-5s delay — simulates user reading/thinking)
+  if (Math.random() < 0.1) {
+    const pause = 2000 + Math.random() * 3000;
+    await new Promise((r) => setTimeout(r, pause));
+  }
+
   lastRequestTime.set(accountEmail, Date.now());
 }
 
