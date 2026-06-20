@@ -398,6 +398,17 @@ export async function createQwenStream(
           (typeof parsed.data?.url === 'string' && parsed.data.url.includes('_____tmd_____'))
         ) {
           console.warn(`[Qwen] BOT DETECTION for ${currentAccountEmail}: FAIL_SYS_USER_VALIDATE — throttling account 5min`);
+          // Throttle this account and throw to trigger retry with different account
+          if (currentAccountEmail) {
+            throttleAccount(currentAccountEmail, 5 * 60 * 1000); // 5 minutes
+          }
+          const mockResponse = new Response(firstText, {
+            status: 200,
+            statusText: 'OK',
+            headers: { 'content-type': 'application/json' },
+          });
+          await handleErrorResponse(mockResponse, debugEntry.id);
+          // handleErrorResponse always throws, so we never reach here
         }
       } catch (parseErr) {
         // If it's a known error type from handleErrorResponse, rethrow it
