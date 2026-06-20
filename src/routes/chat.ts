@@ -89,6 +89,29 @@ async function parseRequestBody(c: Context) {
 async function setupSession(messages: any[], body: OpenAIRequest, availableTokens: number, toolCalling: boolean, logId: string) {
   const { qwenMessages: processedMessages } = buildQwenMessages(messages, body, availableTokens, toolCalling);
 
+  // Determine if file upload is needed based on flattened content size.
+  // When uploading, chat history (all messages except the last) goes into the file,
+  // and only the latest user message stays inline. This gives Qwen both context
+  // and the user's current instruction directly, while keeping the request body small.
+  const FILE_UPLOAD_THRESHOLD = 100_000; // 100K chars — upload anything above this
+  const flattenedContent = processedMessages[0]?.content || '';
+  const needsUpload = !process.env.TEST_MOCK_PLAYWRIGHT && flattenedContent.length > FILE_UPLOAD_THRESHOLD;
+
+  // Helper: serialize an OpenAI message to text for the history file
+  const serializeMsg = (m: any): string => {
+    const role = m.role === 'assistant' ? 'Assistant' : m.role === 'system' ? 'System' : 'User';
+    const content = Array.isArray(m.content) ? m.content.map((c: any) => c.text || JSON.stringify(c)).join('\n') : String(m.content ?? '');
+    return `${role}: ${content}`;
+  };
+
+  // Extract the latest message content (kept inline) — computed once, outside the retry loop
+  const lastMsg = messages[messages.length - 1];
+  const latestMessageContent = needsUpload
+    ? Array.isArray(lastMsg?.content)
+      ? lastMsg.content.map((c: any) => c.text || JSON.stringify(c)).join('\n')
+      : String(lastMsg?.content ?? '')
+    : '';
+
   let lastFailedEmail: string | undefined;
 
   const isThinkingModel = !body.model.includes('no-thinking');
@@ -122,28 +145,27 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
 
     // Upload large message content as a txt file attachment.
     // Qwen's per-message limit is ~131K characters. Payloads above this threshold
-    // are uploaded via Qwen's file API and replaced with a short reference.
-    // Keeps the chat completion request body small (<130KB) to prevent bot detection.
-    // Skip in test mode — mocked browser cannot upload files.
-    const FILE_UPLOAD_THRESHOLD = 100_000; // 100K chars — upload anything above this
-    if (!process.env.TEST_MOCK_PLAYWRIGHT && sessionMessages[0] && typeof sessionMessages[0].content === 'string') {
-      const originalContent = sessionMessages[0].content;
-      const charCount = originalContent.length;
-      if (charCount > FILE_UPLOAD_THRESHOLD) {
-        try {
-          const fileAttachment = await uploadLargeTextAsFile(resolvedEmail, originalContent, 'payload.txt');
-          // Replace content with a short reference — the full text is in the file attachment.
-          // Keeping the original content would make the request body >130KB, triggering bot detection.
-          sessionMessages[0].content = `I've uploaded my full message as the attached file "payload.txt". Please read the file and respond to its contents.`;
-          sessionMessages[0].files = [fileAttachment];
-          console.log(
-            `[Chat] Payload uploaded as file — id=${fileAttachment.id}, chars=${charCount}, content replaced with short reference`,
-          );
-        } catch (uploadErr: any) {
-          console.error(`[Chat] File upload failed: ${uploadErr.message} — falling back to inline content`);
-          // If upload fails, keep content inline (will work for payloads under 131K)
-          // For over-131K payloads, this will hit Qwen's limit but there's no other option.
-        }
+    // are uploaded via Qwen's file API.
+    //
+    // Strategy: chat history (all messages except the last) goes into the file,
+    // and the latest user message stays inline. This way Qwen gets both context
+    // and the user's current instruction directly.
+    //
+    // Also keeps the chat completion request body small (<130KB) to prevent bot detection.
+    if (needsUpload) {
+      try {
+        // Serialize history (all messages except the last) for the file
+        const historyMsgs = messages.slice(0, -1);
+        const historyText = historyMsgs.map(serializeMsg).join('\n\n');
+        const fileAttachment = await uploadLargeTextAsFile(resolvedEmail, historyText, 'payload.txt');
+        // Replace content with the latest message + a reference to the history file
+        sessionMessages[0].content = `[Previous conversation context is attached as "payload.txt".]\n\n---\n\n${latestMessageContent}`;
+        sessionMessages[0].files = [fileAttachment];
+        console.log(`[Chat] History uploaded as file — id=${fileAttachment.id}, historyChars=${historyText.length}`);
+      } catch (uploadErr: any) {
+        console.error(`[Chat] File upload failed: ${uploadErr.message} — falling back to inline content`);
+        // If upload fails, keep content inline (will work for payloads under 131K)
+        // For over-131K payloads, this will hit Qwen's limit but there's no other option.
       }
     }
 
