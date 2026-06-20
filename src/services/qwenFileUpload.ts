@@ -1,0 +1,300 @@
+import crypto from 'node:crypto';
+import { performBrowserFetch } from './playwright.ts';
+import { QWEN_API_BASE } from './qwen.ts';
+
+/**
+ * Character limit enforced by Qwen on message content.
+ * When a message exceeds this, it must be uploaded as a file instead.
+ * Source: Qwen web UI error message — "more than 131072 characters".
+ */
+export const QWEN_CONTENT_CHAR_LIMIT = 131_072;
+
+// --- Types ---
+
+interface StsTokenResponse {
+  access_key_id: string;
+  access_key_secret: string;
+  security_token: string;
+  bucketname: string;
+  region: string;
+  endpoint: string;
+  file_id: string;
+  file_path: string;
+  file_url: string;
+}
+
+/**
+ * Qwen web UI file attachment format — exact structure from browser HAR capture.
+ * The web UI sends this complex nested object in messages[].files[].
+ */
+export interface QwenFileAttachment {
+  type: 'file';
+  file: {
+    created_at: number;
+    data: Record<string, unknown>;
+    filename: string;
+    hash: string | null;
+    id: string;
+    user_id: string;
+    meta: {
+      name: string;
+      size: number;
+      content_type: string;
+      parse_meta: { parse_status: string };
+    };
+    update_at: number;
+    lastModified: number;
+    name: string;
+    webkitRelativePath: string;
+    size: number;
+    type: string; // MIME type
+  };
+  id: string;
+  url: string;
+  name: string;
+  collection_name: string;
+  progress: number;
+  status: string;
+  greenNet: string;
+  size: number;
+  error: string;
+  itemId: string;
+  file_type: string;
+  showType: string;
+  file_class: string;
+  uploadTaskId: string;
+}
+
+// --- Step 1: Get STS credentials for OSS upload ---
+
+async function getstsToken(email: string, filename: string, filesize: number): Promise<StsTokenResponse> {
+  const url = `${QWEN_API_BASE}/api/v2/files/getstsToken`;
+  const body = JSON.stringify({
+    filename,
+    filesize: String(filesize),
+    filetype: 'file',
+  });
+
+  const result = await performBrowserFetch(email, url, { method: 'POST', body });
+
+  if (!result.ok) {
+    throw new Error(`getstsToken failed: ${result.status} ${result.statusText} — ${result.body.substring(0, 200)}`);
+  }
+
+  const data = JSON.parse(result.body);
+  if (!data.data) {
+    throw new Error(`getstsToken returned unexpected response: ${result.body.substring(0, 200)}`);
+  }
+
+  return data.data;
+}
+
+// --- Step 2: Upload file content to Alibaba Cloud OSS ---
+
+function hmacSha1Base64(key: string, message: string): string {
+  return crypto.createHmac('sha1', key).update(message).digest('base64');
+}
+
+function buildOssCanonicalRequest(
+  method: string,
+  contentType: string,
+  date: string,
+  securityToken: string,
+  bucket: string,
+  key: string,
+): string {
+  return [
+    method,
+    '', // Content-MD5 (empty)
+    contentType,
+    date, // Date header
+    `x-oss-security-token:${securityToken}`,
+    `/${bucket}/${key}`,
+  ].join('\n');
+}
+
+async function uploadToOss(sts: StsTokenResponse, fileContent: Buffer, contentType: string): Promise<string> {
+  const date = new Date().toUTCString();
+  const key = sts.file_path;
+
+  // file_path may or may not include the bucket prefix.
+  // CanonicalizedResource = /{bucket}/{objectKey} where objectKey is WITHOUT the bucket prefix.
+  // If file_path starts with bucket name + '/', strip it to get the object key.
+  let objectKey = key;
+  const bucketPrefix = `${sts.bucketname}/`;
+  if (objectKey.startsWith(bucketPrefix)) {
+    objectKey = objectKey.substring(bucketPrefix.length);
+  }
+
+  console.log(`[FileUpload] OSS upload — endpoint=${sts.endpoint}, bucket=${sts.bucketname}, key=${key}, objectKey=${objectKey}`);
+
+  const canonicalRequest = buildOssCanonicalRequest('PUT', contentType, date, sts.security_token, sts.bucketname, objectKey);
+
+  console.log(`[FileUpload] OSS canonical request:\n${canonicalRequest}`);
+
+  const signature = hmacSha1Base64(sts.access_key_secret, canonicalRequest);
+
+  // Build OSS endpoint URL: https://{bucket}.{endpoint}/{objectKey}
+  let endpoint = sts.endpoint.replace(/\/+$/, '');
+  if (!endpoint.includes(sts.bucketname)) {
+    endpoint = `https://${sts.bucketname}.${endpoint.replace(/^https?:\/\//, '')}`;
+  }
+  const uploadUrl = `${endpoint}/${objectKey}`;
+
+  console.log(`[FileUpload] OSS upload URL: ${uploadUrl}`);
+
+  const authHeader = `OSS ${sts.access_key_id}:${signature}`;
+
+  const response = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': contentType,
+      Date: date,
+      Authorization: authHeader,
+      'x-oss-security-token': sts.security_token,
+    },
+    body: fileContent,
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`OSS upload failed: ${response.status} ${response.statusText} — ${errText.substring(0, 200)}`);
+  }
+
+  return sts.file_url;
+}
+
+// --- Step 3: Trigger server-side file parsing ---
+
+async function parseFile(email: string, fileId: string): Promise<void> {
+  const url = `${QWEN_API_BASE}/api/v2/files/parse`;
+  const body = JSON.stringify({ file_id: fileId });
+
+  const result = await performBrowserFetch(email, url, { method: 'POST', body });
+
+  if (!result.ok) {
+    throw new Error(`parseFile failed: ${result.status} ${result.statusText} — ${result.body.substring(0, 200)}`);
+  }
+}
+
+// --- Step 4: Poll parse status until complete ---
+
+interface ParseStatusResponse {
+  file_id: string;
+  status: 'running' | 'success' | 'failed';
+}
+
+async function pollParseStatus(email: string, fileId: string, maxWaitMs = 60_000): Promise<void> {
+  const url = `${QWEN_API_BASE}/api/v2/files/parse/status`;
+  const startTime = Date.now();
+  const pollInterval = 1_000;
+
+  while (Date.now() - startTime < maxWaitMs) {
+    const body = JSON.stringify({ file_id_list: [fileId] });
+    const result = await performBrowserFetch(email, url, { method: 'POST', body });
+
+    if (!result.ok) {
+      // Non-fatal: poll may fail transiently, retry
+      await Bun.sleep(pollInterval);
+      continue;
+    }
+
+    try {
+      const data = JSON.parse(result.body);
+      const status: string = data.data?.[0]?.status || data.status || '';
+
+      if (status === 'success') {
+        return;
+      }
+      if (status === 'failed') {
+        throw new Error(`File parsing failed for ${fileId}`);
+      }
+      // status === 'running' or unknown — keep polling
+    } catch {
+      // JSON parse error or missing field — keep polling
+    }
+
+    await Bun.sleep(pollInterval);
+  }
+
+  throw new Error(`File parse status poll timed out after ${maxWaitMs}ms for ${fileId}`);
+}
+
+// --- Orchestrator: upload large text as a Qwen file attachment ---
+
+/**
+ * Build the exact file attachment object matching Qwen web UI format.
+ * Extracts user_id from file_path (format: "<user_id>/<file_id>_<filename>").
+ */
+function buildQwenFileAttachment(sts: StsTokenResponse, fileName: string, fileSize: number, contentType: string): QwenFileAttachment {
+  // Extract user_id from file_path: "5309db52-.../370e7cdc-..._filename" → first segment
+  const userId = sts.file_path.split('/')[0] || '';
+  const now = Date.now();
+
+  return {
+    type: 'file',
+    file: {
+      created_at: now,
+      data: {},
+      filename: fileName,
+      hash: null,
+      id: sts.file_id,
+      user_id: userId,
+      meta: {
+        name: fileName,
+        size: fileSize,
+        content_type: contentType,
+        parse_meta: { parse_status: 'success' },
+      },
+      update_at: now,
+      lastModified: now,
+      name: fileName,
+      webkitRelativePath: '',
+      size: fileSize,
+      type: contentType,
+    },
+    id: sts.file_id,
+    url: sts.file_url,
+    name: fileName,
+    collection_name: '',
+    progress: 0,
+    status: 'uploaded',
+    greenNet: 'success',
+    size: fileSize,
+    error: '',
+    itemId: crypto.randomUUID(),
+    file_type: contentType,
+    showType: 'file',
+    file_class: 'document',
+    uploadTaskId: crypto.randomUUID(),
+  };
+}
+
+export async function uploadLargeTextAsFile(email: string, text: string, fileName: string): Promise<QwenFileAttachment> {
+  const encoder = new TextEncoder();
+  const content = encoder.encode(text);
+  const fileSize = content.length;
+  const contentType = 'text/plain';
+
+  console.log(`[FileUpload] Uploading ${fileSize} bytes (${text.length} chars) as "${fileName}" for ${email}`);
+
+  // Step 1: Get STS credentials
+  const sts = await getstsToken(email, fileName, fileSize);
+  console.log(
+    `[FileUpload] Got STS token — bucket=${sts.bucketname}, file_id=${sts.file_id}, file_url=${sts.file_url}, endpoint=${sts.endpoint}, file_path=${sts.file_path}`,
+  );
+
+  // Step 2: Upload to OSS
+  const fileUrl = await uploadToOss(sts, Buffer.from(content), contentType);
+  console.log(`[FileUpload] Uploaded to OSS — url=${fileUrl.substring(0, 80)}...`);
+
+  // Step 3: Trigger parsing
+  await parseFile(email, sts.file_id);
+  console.log(`[FileUpload] Parse triggered for ${sts.file_id}`);
+
+  // Step 4: Poll until parsed
+  await pollParseStatus(email, sts.file_id);
+  console.log(`[FileUpload] Parse complete for ${sts.file_id}`);
+
+  return buildQwenFileAttachment(sts, fileName, fileSize, contentType);
+}

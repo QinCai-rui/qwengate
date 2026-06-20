@@ -903,26 +903,23 @@ async function fetchViaChromeIntercept(
     console.log(`[CDP-Fetch][${email}] Request intercepted in ${Date.now() - t0}ms`);
 
     // ── Step 3: Continue request with the actual large body ──
-    // Rebuild headers from the intercepted request, updating Content-Length and removing marker
-    const bodyByteLength = new TextEncoder().encode(body).length;
+    // Rebuild headers from the intercepted request, removing marker and unsafe headers.
+    // CDP's Fetch.continueRequest rejects "unsafe headers" like Content-Length, Host,
+    // Transfer-Encoding, etc. — Chrome computes these automatically from the body.
+    // See: https://chromedevtools.github.io/devtools-protocol/tot/Fetch/#method-continueRequest
     const headerEntries: Array<{ name: string; value: string }> = [];
     for (const [name, value] of Object.entries(entry.requestHeaders)) {
       const lower = name.toLowerCase();
       if (lower === 'x-cdp-marker') continue; // Remove our marker
-      if (lower === 'content-length') {
-        headerEntries.push({ name, value: String(bodyByteLength) });
-      } else {
-        headerEntries.push({ name, value });
-      }
-    }
-    // Ensure Content-Length is present
-    if (!headerEntries.some((h) => h.name.toLowerCase() === 'content-length')) {
-      headerEntries.push({ name: 'Content-Length', value: String(bodyByteLength) });
+      if (lower === 'content-length' || lower === 'host' || lower === 'transfer-encoding' || lower === 'connection') continue; // Unsafe — Chrome manages
+      headerEntries.push({ name, value });
     }
 
+    // CDP Fetch.continueRequest requires postData as base64 (per protocol spec: "Encoded as a base64 string when passed over JSON")
+    // Chrome automatically computes Content-Length from the base64-decoded postData.
     await sendToAccount(state, 'Fetch.continueRequest', {
       requestId,
-      postData: body,
+      postData: Buffer.from(body).toString('base64'),
       headers: headerEntries,
     });
 

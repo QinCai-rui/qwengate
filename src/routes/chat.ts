@@ -5,6 +5,7 @@ import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
 import { RetryableQwenStreamError } from '../services/qwen.ts';
+import { uploadLargeTextAsFile } from '../services/qwenFileUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import { OpenAIRequest } from '../types/openai.ts';
@@ -25,7 +26,7 @@ export {
   getNewContent,
 } from './chatHelpers.ts';
 
-const MAX_MESSAGE_SIZE = 100_000; // 100KB per message
+const MAX_MESSAGE_SIZE = 10_000_000; // 10MB — large payloads are uploaded as files via Qwen's file API
 
 async function parseRequestBody(c: Context) {
   const rawBody = await c.req.json();
@@ -118,6 +119,33 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
     logStore.updateEntry(logId, (entry) => {
       entry.accountEmail = resolvedEmail;
     });
+
+    // Upload large message content as a txt file attachment.
+    // Qwen's per-message limit is ~131K characters. Payloads above this threshold
+    // are uploaded via Qwen's file API and replaced with a short reference.
+    // Keeps the chat completion request body small (<130KB) to prevent bot detection.
+    // Skip in test mode — mocked browser cannot upload files.
+    const FILE_UPLOAD_THRESHOLD = 100_000; // 100K chars — upload anything above this
+    if (!process.env.TEST_MOCK_PLAYWRIGHT && sessionMessages[0] && typeof sessionMessages[0].content === 'string') {
+      const originalContent = sessionMessages[0].content;
+      const charCount = originalContent.length;
+      if (charCount > FILE_UPLOAD_THRESHOLD) {
+        try {
+          const fileAttachment = await uploadLargeTextAsFile(resolvedEmail, originalContent, 'payload.txt');
+          // Replace content with a short reference — the full text is in the file attachment.
+          // Keeping the original content would make the request body >130KB, triggering bot detection.
+          sessionMessages[0].content = `The attached file "payload.txt" contains the full text content (${charCount} characters). Please process and respond to the content of the attached file.`;
+          sessionMessages[0].files = [fileAttachment];
+          console.log(
+            `[Chat] Payload uploaded as file — id=${fileAttachment.id}, chars=${charCount}, content replaced with short reference`,
+          );
+        } catch (uploadErr: any) {
+          console.error(`[Chat] File upload failed: ${uploadErr.message} — falling back to inline content`);
+          // If upload fails, keep content inline (will work for payloads under 131K)
+          // For over-131K payloads, this will hit Qwen's limit but there's no other option.
+        }
+      }
+    }
 
     let routedModel;
     let streamResult;
