@@ -134,7 +134,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
           const fileAttachment = await uploadLargeTextAsFile(resolvedEmail, originalContent, 'payload.txt');
           // Replace content with a short reference — the full text is in the file attachment.
           // Keeping the original content would make the request body >130KB, triggering bot detection.
-          sessionMessages[0].content = `The attached file "payload.txt" contains the full text content (${charCount} characters). Please process and respond to the content of the attached file.`;
+          sessionMessages[0].content = `I've uploaded my full message as the attached file "payload.txt". Please read the file and respond to its contents.`;
           sessionMessages[0].files = [fileAttachment];
           console.log(
             `[Chat] Payload uploaded as file — id=${fileAttachment.id}, chars=${charCount}, content replaced with short reference`,
