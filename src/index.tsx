@@ -11,12 +11,10 @@ import { configRouter } from './routes/config.ts';
 import { registerDashboardRoutes } from './routes/dashboard/dashboardRoutes.ts';
 import { debugNetworkApp } from './routes/debugNetwork.ts';
 import { getAccountCount, getAccountStats, getAccounts, getAvailableCount, initAuth, setStartupStatus } from './services/auth.ts';
-import { startBrowser, stopBrowser } from './services/autoBrowser.ts';
-import { hasAccountContext } from './services/cdpClient.ts';
 import { config } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
-import { BrowserType, closePlaywright, getBrowser, getQwenHeaders, initPlaywright } from './services/playwright.ts';
-import { configureAccount, fetchQwenModels } from './services/qwen.ts';
+import { getQwenHeaders } from './services/playwright.ts';
+import { fetchQwenModels } from './services/qwen.ts';
 import { safeCompare } from './utils/auth.ts';
 import { isBun } from './utils/env.ts';
 import { projectPath } from './utils/paths.ts';
@@ -79,22 +77,6 @@ async function gracefulShutdown(_signal: string): Promise<void> {
       await new Promise((r) => setTimeout(r, 100));
     }
   }
-  try {
-    await stopBrowser();
-  } catch {
-    /* intentional */
-  }
-  try {
-    const { stopAllAccounts } = await import('./services/cdpClient.ts');
-    stopAllAccounts();
-  } catch {
-    /* intentional */
-  }
-  try {
-    await closePlaywright();
-  } catch (err: any) {
-    console.error('[Shutdown] Playwright close error:', err.message);
-  }
   stopAutoCleanup();
   const pidFile = projectPath('.qwen', 'gate.pid');
   try {
@@ -121,20 +103,17 @@ app.use('*', async (c, next) => {
 
 // Health check — reports actual system status
 app.get('/health', (c) => {
-  const browser = getBrowser();
-  const playwrightReady = browser !== null;
   const totalAccounts = getAccountCount();
   const availableAccounts = getAvailableCount();
   const stats = getAccountStats();
   const authenticatedCount = stats.filter((s) => s.authenticated).length;
   const throttledCount = stats.filter((s) => s.throttled).length;
-  const isHealthy = playwrightReady && totalAccounts > 0 && authenticatedCount > 0;
+  const isHealthy = totalAccounts > 0 && authenticatedCount > 0;
   return c.json({
     status: isHealthy ? 'ok' : 'degraded',
-    version: '0.5.1',
+    version: '0.7.0',
     uptime: process.uptime(),
     inFlight: inFlightRequests,
-    playwright: playwrightReady,
     accounts: {
       total: totalAccounts,
       authenticated: authenticatedCount,
@@ -221,33 +200,14 @@ app.get(
   },
 );
 
-// Initialize playwright when server starts
+// Start server
 if (import.meta.main) {
-  let browserType: BrowserType = 'chromium';
-  const browserArg = process.argv.find((arg) => arg.startsWith('--browser='));
-  if (browserArg) {
-    browserType = browserArg.split('=')[1] as BrowserType;
-  } else if (config.get('BROWSER')) {
-    browserType = config.get('BROWSER') as BrowserType;
-  }
-
   // Enable per-request file logging
   logStore.enableRequestFileLogging(projectPath('.logs'));
 
   const port = config.getPort();
   const hostArg = process.argv.indexOf('--host');
   const host = hostArg !== -1 && process.argv[hostArg + 1] ? process.argv[hostArg + 1] : config.get('HOST') || 'localhost';
-
-  // Kill orphan Chromium/Chrome processes from previous crashes/restarts
-  // that didn't run gracefulShutdown. Each orphan has a --remote-debugging-port
-  // flag visible via /proc. We use pkill by flag instead of by name to avoid
-  // hitting non-related Chrome instances.
-  try {
-    const { execSync } = await import('child_process');
-    execSync("pkill -f '--remote-debugging-port=26404' 2>/dev/null", { stdio: 'ignore' });
-  } catch {
-    // pkill may not be available (Windows) or no matching processes — both fine
-  }
 
   // Show banner immediately on startup
   process.stdout.write(`\x1b[31m
@@ -275,170 +235,119 @@ if (import.meta.main) {
   \x1b[32m●\x1b[0m Dashboard: http://${host}:${port}/dashboard (Ctrl+Click)\x1b[0m
   `);
 
-  // Auto-launch headless Chrome with CDP if no CHROME_CDP_ENDPOINT is set
-  if (!process.env.CHROME_CDP_ENDPOINT) {
-    try {
-      const browserResult = await startBrowser();
-      if (browserResult.success) {
-        process.env.CHROME_CDP_ENDPOINT = browserResult.cdpEndpoint;
-        logStore.log(
-          'info',
-          'boot',
-          `Auto-browser: ${browserResult.alreadyRunning ? 'detected existing' : 'launched'} Chrome on ${browserResult.cdpEndpoint}`,
-        );
+  async function startServer() {
+    // ── Phase 1: Start HTTP server FIRST so dashboard is live immediately ──
+    const createServer = async function (p: number, h: string) {
+      if (isBun) {
+        const bunServer = Bun.serve({
+          fetch: app.fetch,
+          port: p,
+          hostname: h,
+          idleTimeout: 0,
+        });
+        serverStop = () => bunServer.stop(false);
       } else {
-        logStore.log('warn', 'boot', `Auto-browser failed: ${browserResult.error} — falling back to Playwright`);
+        const { serve } = await import('@hono/node-server');
+        const nodeServer = serve({
+          fetch: app.fetch,
+          port: p,
+          hostname: h,
+          serverOptions: {
+            requestTimeout: 600_000,
+            keepAliveTimeout: 75_000,
+            headersTimeout: 65_000,
+          },
+        });
+        serverStop = () => new Promise<void>((resolve) => nodeServer.close(() => resolve()));
       }
+    };
+
+    try {
+      await createServer(port, host);
     } catch (err: any) {
-      logStore.log('warn', 'boot', `Auto-browser error: ${err.message} — falling back to Playwright`);
+      if (err.code === 'EADDRINUSE') {
+        const fallbackPort = port + 1;
+        logStore.log('debug', 'server', `Port ${port} in use, trying ${fallbackPort}...`);
+        await createServer(fallbackPort, host);
+      } else {
+        throw err;
+      }
     }
+
+    // Pre-warm DNS and TCP connection to Qwen upstream
+    if (isBun) {
+      try {
+        // @ts-ignore — Bun-specific API
+        Bun.dns?.prefetch?.('chat.qwen.ai', 443);
+        // @ts-ignore
+        fetch.preconnect?.('https://chat.qwen.ai');
+        logStore.log('info', 'boot', 'DNS prefetch + TCP preconnect initiated');
+      } catch {
+        // Not all Bun versions support these — silently skip
+      }
+    }
+
+    const pidFile = projectPath('.qwen', 'gate.pid');
+    try {
+      writeFileSync(pidFile, String(process.pid));
+    } catch {
+      /* best effort */
+    }
+    logStore.log('info', 'server', `Server started on ${host}:${port}`);
+
+    if (config.getBool('OPEN_DASHBOARD_ON_START')) {
+      const { exec } = await import('child_process');
+      const url = `http://localhost:${port}/dashboard`;
+      const cmd =
+        process.platform === 'darwin' ? `open "${url}"` : process.platform === 'win32' ? `start "" "${url}"` : `xdg-open "${url}"`;
+      exec(cmd);
+      logStore.log('info', 'server', `Opening dashboard at ${url}`);
+    }
+    startAutoCleanup();
+
+    logStore.log('info', 'boot', 'Dashboard live — starting background initialization...');
+
+    // ── Phase 2: Auth + post-boot tasks ──
+    (async () => {
+      logStore.log('info', 'boot', '[1/5] Authenticating accounts...');
+      try {
+        await initAuth();
+        logStore.log('info', 'boot', '[1/5] Accounts authenticated');
+        for (const acct of getAccounts()) {
+          setStartupStatus(acct.email, 'pending');
+        }
+      } catch (err: any) {
+        logStore.log('warn', 'boot', `[1/5] initAuth failed: ${err.message}`);
+      }
+
+      // ── Phase 2b: Configure loaded accounts ──
+      logStore.log('info', 'boot', '[2/5] Configuring accounts...');
+      try {
+        const acctList = getAccounts().filter((a) => a.state?.token);
+        for (const acct of acctList) {
+          setStartupStatus(acct.email, 'ready');
+        }
+        logStore.log('info', 'boot', `[2/5] Accounts configured: ${acctList.length} ready`);
+      } catch (err: any) {
+        logStore.log('warn', 'boot', `[2/5] Configure failed: ${err.message}`);
+      }
+
+      logStore.log('info', 'boot', '[3/5] Pre-warming headers...');
+      try {
+        await getQwenHeaders();
+        logStore.log('info', 'boot', '[3/5] Headers ready');
+      } catch (err: any) {
+        logStore.log('warn', 'boot', `[3/5] Header pre-warm failed: ${err.message}`);
+      }
+
+      logStore.log('info', 'boot', 'Background initialization complete');
+    })().catch((err) => {
+      logStore.log('error', 'boot', `Background init error: ${err.message}`);
+    });
   }
 
-  initPlaywright(true, browserType)
-    .then(async () => {
-      // ── Phase 1: Start HTTP server FIRST so dashboard is live immediately ──
-
-      async function createServer(port: number, host: string) {
-        if (isBun) {
-          const bunServer = Bun.serve({
-            fetch: app.fetch,
-            port,
-            hostname: host,
-            idleTimeout: 0,
-          });
-          serverStop = () => bunServer.stop(false);
-        } else {
-          const { serve } = await import('@hono/node-server');
-          const nodeServer = serve({
-            fetch: app.fetch,
-            port,
-            hostname: host,
-            serverOptions: {
-              requestTimeout: 600_000,
-              keepAliveTimeout: 75_000,
-              headersTimeout: 65_000,
-            },
-          });
-          serverStop = () => new Promise<void>((resolve) => nodeServer.close(() => resolve()));
-        }
-      }
-
-      try {
-        await createServer(port, host);
-      } catch (err: any) {
-        if (err.code === 'EADDRINUSE') {
-          const fallbackPort = port + 1;
-          logStore.log('debug', 'server', `Port ${port} in use, trying ${fallbackPort}...`);
-          await createServer(fallbackPort, host);
-        } else {
-          throw err;
-        }
-      }
-
-      // Pre-warm DNS and TCP connection to Qwen upstream
-      if (isBun) {
-        try {
-          // @ts-ignore — Bun-specific API
-          Bun.dns?.prefetch?.('chat.qwen.ai', 443);
-          // @ts-ignore
-          fetch.preconnect?.('https://chat.qwen.ai');
-          logStore.log('info', 'boot', 'DNS prefetch + TCP preconnect initiated');
-        } catch {
-          // Not all Bun versions support these — silently skip
-        }
-      }
-
-      const pidFile = projectPath('.qwen', 'gate.pid');
-      try {
-        writeFileSync(pidFile, String(process.pid));
-      } catch {
-        /* best effort */
-      }
-      logStore.log('info', 'server', `Server started on ${host}:${port}`);
-
-      if (config.getBool('OPEN_DASHBOARD_ON_START')) {
-        const { exec } = await import('child_process');
-        const url = `http://localhost:${port}/dashboard`;
-        const cmd =
-          process.platform === 'darwin' ? `open "${url}"` : process.platform === 'win32' ? `start "" "${url}"` : `xdg-open "${url}"`;
-        exec(cmd);
-        logStore.log('info', 'server', `Opening dashboard at ${url}`);
-      }
-      startAutoCleanup();
-
-      // Force GC after Playwright init — browser profile loading allocates heavily
-      if (isBun) {
-        Bun.gc(true);
-        logStore.log('info', 'boot', 'GC triggered after Playwright init');
-      }
-
-      logStore.log('info', 'boot', 'Dashboard live — starting background initialization...');
-
-      // ── Phase 2: Auth + CDP contexts + post-boot tasks ──
-      (async () => {
-        logStore.log('info', 'boot', '[1/5] Authenticating accounts...');
-        try {
-          await initAuth();
-          logStore.log('info', 'boot', '[1/5] Accounts authenticated');
-          for (const acct of getAccounts()) {
-            setStartupStatus(acct.email, 'pending');
-          }
-        } catch (err: any) {
-          logStore.log('warn', 'boot', `[1/5] initAuth failed: ${err.message}`);
-        }
-
-        // ── Phase 2b: Initialize CDP contexts AFTER auth (fresh profileCookies) ──
-        if (process.env.CHROME_CDP_ENDPOINT) {
-          try {
-            const { initAllAccountContexts } = await import('./services/cdpClient.ts');
-            // Use in-memory accounts — profileCookies were loaded from browser profiles during initAuth
-            const acctData = getAccounts().map((a) => ({
-              email: a.email,
-              profileCookies: a.profileCookies,
-            }));
-            await initAllAccountContexts(acctData);
-            logStore.log('info', 'boot', `[2/5] CDP contexts initialized for ${acctData.length} accounts`);
-          } catch (err: any) {
-            logStore.log('warn', 'boot', `CDP account contexts init failed: ${err.message}`);
-          }
-        }
-
-        // ── Phase 2c: Configure accounts AFTER CDP contexts are ready ──
-        logStore.log('info', 'boot', '[3/5] Configuring accounts...');
-        try {
-          const acctList = getAccounts().filter((a) => a.state?.token && hasAccountContext(a.email));
-          await Promise.allSettled(
-            acctList.map(async (acct) => {
-              try {
-                await configureAccount(acct.email);
-              } catch (err: any) {
-                logStore.log('warn', 'boot', `Configure failed for ${acct.email}: ${err.message}`);
-              }
-            }),
-          );
-          logStore.log('info', 'boot', `[3/5] Accounts configured`);
-          for (const acct of getAccounts()) {
-            if (acct.state?.token) setStartupStatus(acct.email, 'ready');
-          }
-        } catch (err: any) {
-          logStore.log('warn', 'boot', `[3/5] Configure failed: ${err.message}`);
-        }
-
-        logStore.log('info', 'boot', '[4/5] Pre-warming headers...');
-        try {
-          await getQwenHeaders();
-          logStore.log('info', 'boot', '[4/5] Headers ready');
-        } catch (err: any) {
-          logStore.log('warn', 'boot', `[4/5] Header pre-warm failed: ${err.message}`);
-        }
-
-        logStore.log('info', 'boot', 'All background initialization complete');
-      })().catch((err) => {
-        logStore.log('error', 'boot', `Background init error: ${err.message}`);
-      });
-    })
-    .catch((err: any) => {
-      console.error('Failed to initialize playwright:', err);
-      process.exit(1);
-    });
+  startServer().catch((err) => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  });
 }

@@ -1,11 +1,12 @@
 import crypto from 'node:crypto';
 import { CircuitBreaker, CircuitOpenError, withRetry } from '../utils/retry.ts';
-import { decrementInFlight, pickAccount, throttleAccount } from './auth.ts';
+import { decrementInFlight, getTokenWithAccount, pickAccount, throttleAccount } from './auth.ts';
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
 import { completeEntry, createNetworkEntry, errorEntry, recordResponse, recordStreamChunk } from './networkDebug.ts';
-import { forceRefreshBxHeaders, getQwenHeaders, performBrowserStream } from './playwright.ts';
+import { getQwenHeaders } from './playwright.ts';
 import { logQwenRequest, logQwenResponse } from './qwenLogger.ts';
+import { browserlessFetch } from './browserlessFetch.ts';
 
 export { configureAccount, deleteAllChats, fetchQwenModels } from './qwenModels.ts';
 
@@ -305,12 +306,11 @@ export async function createQwenStream(
           throw new QwenUpstreamError(`Qwen upstream error: ${code}: ${details}.${wait}`, code, status);
         }
 
-        // Qwen anti-bot CAPTCHA — force header refresh and switch accounts
+        // Qwen anti-bot CAPTCHA — throttle account and switch
         if (errorJson?.ret?.[0] === 'FAIL_SYS_USER_VALIDATE') {
           const details = errorJson.ret[1] || 'CAPTCHA required';
           logStore.log('warn', 'qwen', `CAPTCHA detected for ${currentAccountEmail || 'unknown'}: ${details}`);
           if (currentAccountEmail) {
-            forceRefreshBxHeaders(currentAccountEmail).catch(() => {});
             throttleAccount(currentAccountEmail, 5 * 60 * 1000);
             logStore.log(
               'debug',
@@ -352,192 +352,41 @@ export async function createQwenStream(
 
   let makeRequestQwenLogFile: string | undefined;
   const makeRequest = async (): Promise<{ response: Response; headers: Record<string, string>; qwenLogFile?: string }> => {
-    // CDP mode: route through real Chrome's network stack
-    if (process.env.CHROME_CDP_ENDPOINT) {
-      const bodyStr = JSON.stringify(payload);
-      logStore.log(
-        'debug',
-        'qwen',
-        `[Qwen] CDP request: url=${url} bodyLen=${bodyStr.length} model=${payload.model} chatId=${payload.chat_id} parentId=${payload.parent_id} msgs=${payload.messages.length} hasTools=${!!(payload as any).tools || !!payload.messages[0]?.feature_config?.local_mcp}`,
-      );
-      const debugEntry = createNetworkEntry({
-        url,
-        method: 'POST',
-        headers: {},
-        body: payload,
-        category: 'chat',
-        accountEmail: currentAccountEmail,
-      });
-      lastDebugEntryId = debugEntry.id;
-      const _cdpStartTime = Date.now();
-      const stream = await performBrowserStream(currentAccountEmail || '', url, bodyStr, streamAbortController.signal);
-
-      // Read first chunk to check for __httpError (sent by performBrowserStream when status is non-2xx)
-      const reader = stream.getReader();
-      const firstChunk = await reader.read();
-      if (firstChunk.done) throw new Error('Browser stream returned empty response');
-
-      const firstText = new TextDecoder().decode(firstChunk.value);
-      logStore.log(
-        'debug',
-        'qwen',
-        `[Qwen] CDP first chunk (${firstText.length} bytes) after ${Date.now() - _cdpStartTime}ms: ${firstText.substring(0, 200)}`,
-      );
-      try {
-        const parsed = JSON.parse(firstText);
-        if (parsed.__httpError) {
-          logStore.log(
-            'debug',
-            'qwen',
-            `[Qwen] CDP HTTP error for ${currentAccountEmail}: status=${parsed.status} body=${(parsed.body || '').substring(0, 300)}`,
-          );
-          // Create a mock Response so handleErrorResponse can process it
-          const mockResponse = new Response(parsed.body, {
-            status: parsed.status,
-            statusText: parsed.statusText || 'Error',
-            headers: { 'content-type': 'application/json' },
-          });
-          await handleErrorResponse(mockResponse, debugEntry.id);
-          // handleErrorResponse always throws, so we never reach here
-        }
-        // Check for FAIL_SYS_USER_VALIDATE in the first chunk body directly
-        if (
-          parsed.ret?.[0] === 'FAIL_SYS_USER_VALIDATE' ||
-          (typeof parsed.data?.url === 'string' && parsed.data.url.includes('_____tmd_____'))
-        ) {
-          logStore.log(
-            'debug',
-            'qwen',
-            `[Qwen] BOT DETECTION for ${currentAccountEmail}: FAIL_SYS_USER_VALIDATE — throttling account 5min`,
-          );
-          if (currentAccountEmail) {
-            throttleAccount(currentAccountEmail, 5 * 60 * 1000); // 5 minutes
-          }
-        }
-      } catch (parseErr) {
-        // If it's a known error type from handleErrorResponse, rethrow it
-        if (
-          parseErr instanceof RetryableQwenStreamError ||
-          parseErr instanceof QwenUpstreamError ||
-          parseErr instanceof UpstreamStatusError
-        ) {
-          throw parseErr;
-        }
-        // Otherwise it's a JSON parse error — meaning the first chunk is normal SSE data, not an error
-      }
-
-      // Normal path: re-enqueue first chunk + pipe remaining reader into a merged stream.
-      // Race-safe: Bun's runtime may close the controller BEFORE our cancel() handler runs,
-      // so we rely on try-catch around enqueue/close rather than just a boolean guard.
-      // The "Controller is already closed" error is a normal cancellation signal, not an error.
-      const mergedStream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(firstChunk.value);
-          (async () => {
-            try {
-              while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                // enqueue() can throw if Bun closed the controller before cancel() ran
-                try {
-                  controller.enqueue(value);
-                } catch {
-                  return; // Controller already closed — done
-                }
-              }
-            } catch {
-              // Stream cancelled — reader.read() threw, exit gracefully
-              return;
-            }
-            try {
-              controller.close();
-            } catch {
-              /* already closed */
-            }
-          })().catch(() => {}); // Prevent unhandled rejection from fire-and-forget async
-        },
-        cancel() {
-          try {
-            reader.cancel();
-          } catch {
-            /* already cancelled */
-          }
-        },
-      });
-
-      logStore.log('debug', 'qwen', `[Qwen] CDP stream ready: ${Date.now() - _cdpStartTime}ms total setup time for ${currentAccountEmail}`);
-      return { response: new Response(mergedStream), headers: {}, qwenLogFile: undefined };
+    const bodyStr = JSON.stringify(payload);
+    if (config.get('SAVE_REQUEST_LOGS') === 'true') {
+      makeRequestQwenLogFile = logQwenRequest(payload, url);
     }
 
-    const { headers: reqHeaders } = await getQwenHeaders(currentAccountEmail);
-    const requestHeaders = buildRequestHeaders(reqHeaders, chatId);
-    // Human-like jitter between requests from the same account
-    await applyRequestJitter(currentAccountEmail);
-    const debugEntry = createNetworkEntry({
-      url,
+    // Browserless path: wreq-js for TLS/HTTP2 impersonation, cookie from account manager
+    const tokenInfo = currentAccountEmail ? await getTokenWithAccount(currentAccountEmail) : null;
+    const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+
+    const response = await browserlessFetch(url, {
       method: 'POST',
-      headers: requestHeaders,
-      body: payload,
-      category: 'chat',
+      headers: {
+        accept: 'application/json, text/plain, */*',
+        'accept-language': 'en-US,en;q=0.9',
+        'content-type': 'application/json',
+        version: '0.2.66', // Qwen SPA version — required or Qwen returns Bad_Request
+        source: 'web',
+        cookie: cookieStr,
+        origin: QWEN_API_BASE,
+        referer: chatId ? `https://chat.qwen.ai/c/${chatId}` : 'https://chat.qwen.ai/',
+        'sec-ch-ua': '"Chromium";v="142", "Google Chrome";v="142", "Not?A_Brand";v="99"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Linux"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
+        'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+        'x-accel-buffering': 'no',
+        'x-request-id': crypto.randomUUID(),
+        timezone: cachedTimezone,
+      },
+      body: bodyStr,
       accountEmail: currentAccountEmail,
     });
-    lastDebugEntryId = debugEntry.id;
-    try {
-      let response: Response;
-      try {
-        const { controller, cleanup } = createFetchTimeout();
-        const onFetchAbort = () => {
-          if (!streamAbortController.signal.aborted) {
-            streamAbortController.abort(controller.signal.reason || new Error('Fetch timeout'));
-          }
-        };
-        const onStreamAbort = () => {
-          if (!controller.signal.aborted) {
-            controller.abort(streamAbortController.signal.reason);
-          }
-        };
-        controller.signal.addEventListener('abort', onFetchAbort);
-        streamAbortController.signal.addEventListener('abort', onStreamAbort);
-        try {
-          const bodyStr = JSON.stringify(payload);
-
-          if (config.get('SAVE_REQUEST_LOGS') === 'true') {
-            makeRequestQwenLogFile = logQwenRequest(payload, url);
-          }
-          response = await fetch(url, {
-            method: 'POST',
-            headers: requestHeaders,
-            body: bodyStr,
-            signal: controller.signal,
-          });
-          const respHeaders: Record<string, string> = {};
-          response.headers.forEach((v, k) => {
-            respHeaders[k] = v;
-          });
-          if (makeRequestQwenLogFile) logQwenResponse(makeRequestQwenLogFile, response.status, response.statusText, respHeaders, '');
-        } finally {
-          cleanup();
-          controller.signal.removeEventListener('abort', onFetchAbort);
-          streamAbortController.signal.removeEventListener('abort', onStreamAbort);
-        }
-      } catch (fetchErr: unknown) {
-        if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
-          logStore.log('warn', 'qwen', 'Request timed out');
-          throw new RetryableQwenStreamError('Request timed out', 0);
-        }
-        const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
-        errorEntry(debugEntry.id, msg);
-        throw fetchErr;
-      }
-      recordResponse(debugEntry.id, response);
-      if (!response.ok || !response.body) {
-        await handleErrorResponse(response, debugEntry.id);
-      }
-      return { response, headers: reqHeaders, qwenLogFile: makeRequestQwenLogFile };
-    } catch (err) {
-      errorEntry(debugEntry.id, err instanceof Error ? err.message : String(err));
-      throw err;
-    }
+    return { response, headers: {}, qwenLogFile: makeRequestQwenLogFile };
   };
 
   let result: { response: Response; headers: Record<string, string>; qwenLogFile?: string };

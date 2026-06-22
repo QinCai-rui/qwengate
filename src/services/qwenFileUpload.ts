@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { logStore } from './logStore.ts';
-import { performBrowserFetch } from './playwright.ts';
+import { getTokenWithAccount } from './auth.ts';
+import { browserlessFetch } from './browserlessFetch.ts';
 import { QWEN_API_BASE } from './qwen.ts';
 
 /**
@@ -76,18 +77,30 @@ async function getstsToken(email: string, filename: string, filesize: number): P
     filetype: 'file',
   });
 
-  const result = await performBrowserFetch(email, url, { method: 'POST', body });
-
-  if (!result.ok) {
-    throw new Error(`getstsToken failed: ${result.status} ${result.statusText} — ${result.body.substring(0, 200)}`);
+  const tokenInfo = await getTokenWithAccount(email);
+  const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+  const response = await browserlessFetch(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/plain, */*',
+      source: 'web',
+      cookie: cookieStr,
+      origin: QWEN_API_BASE,
+    },
+    body,
+    accountEmail: email,
+  });
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`getstsToken failed: ${response.status} — ${errText.substring(0, 200)}`);
   }
-
-  const data = JSON.parse(result.body);
-  if (!data.data) {
-    throw new Error(`getstsToken returned unexpected response: ${result.body.substring(0, 200)}`);
+  const resText = await response.text();
+  const resData = JSON.parse(resText);
+  if (!resData.data) {
+    throw new Error(`getstsToken returned unexpected response: ${resText.substring(0, 200)}`);
   }
-
-  return data.data;
+  return resData.data;
 }
 
 // --- Step 2: Upload file content to Alibaba Cloud OSS ---
@@ -175,10 +188,23 @@ async function parseFile(email: string, fileId: string): Promise<void> {
   const url = `${QWEN_API_BASE}/api/v2/files/parse`;
   const body = JSON.stringify({ file_id: fileId });
 
-  const result = await performBrowserFetch(email, url, { method: 'POST', body });
-
-  if (!result.ok) {
-    throw new Error(`parseFile failed: ${result.status} ${result.statusText} — ${result.body.substring(0, 200)}`);
+  const tokenInfo = await getTokenWithAccount(email);
+  const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+  const response = await browserlessFetch(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/plain, */*',
+      source: 'web',
+      cookie: cookieStr,
+      origin: QWEN_API_BASE,
+    },
+    body,
+    accountEmail: email,
+  });
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`parseFile failed: ${response.status} — ${errText.substring(0, 200)}`);
   }
 }
 
@@ -196,27 +222,31 @@ async function pollParseStatus(email: string, fileId: string, maxWaitMs = 60_000
 
   while (Date.now() - startTime < maxWaitMs) {
     const body = JSON.stringify({ file_id_list: [fileId] });
-    const result = await performBrowserFetch(email, url, { method: 'POST', body });
 
-    if (!result.ok) {
-      // Non-fatal: poll may fail transiently, retry
-      await Bun.sleep(pollInterval);
-      continue;
-    }
-
-    try {
-      const data = JSON.parse(result.body);
-      const status: string = data.data?.[0]?.status || data.status || '';
-
-      if (status === 'success') {
-        return;
+    const tokenInfo = await getTokenWithAccount(email);
+    const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+    const response = await browserlessFetch(url, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/plain, */*',
+        source: 'web',
+        cookie: cookieStr,
+        origin: QWEN_API_BASE,
+      },
+      body,
+      accountEmail: email,
+    });
+    if (response.ok) {
+      try {
+        const resText = await response.text();
+        const data = JSON.parse(resText);
+        const status: string = data.data?.[0]?.status || data.status || '';
+        if (status === 'success') return;
+        if (status === 'failed') throw new Error(`File parsing failed for ${fileId}`);
+      } catch {
+        // JSON parse error or missing field — keep polling
       }
-      if (status === 'failed') {
-        throw new Error(`File parsing failed for ${fileId}`);
-      }
-      // status === 'running' or unknown — keep polling
-    } catch {
-      // JSON parse error or missing field — keep polling
     }
 
     await Bun.sleep(pollInterval);

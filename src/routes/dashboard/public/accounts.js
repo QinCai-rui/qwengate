@@ -69,27 +69,6 @@ function makeThrottleBadge(acct) {
   return '<span class="badge badge-neutral">OK</span>';
 }
 
-function makeCdpBadge(a) {
-  var cdp = a.cdp;
-  if (!cdp || !cdp.connected) {
-    return '<span class="badge badge-neutral">Not connected</span>';
-  }
-  var parts = [];
-  parts.push('<span class="badge badge-success">Connected</span>');
-  if (cdp.baxiaReady) {
-    parts.push('<span class="badge badge-success">Baxia OK</span>');
-  } else {
-    parts.push('<span class="badge badge-warning">Baxia pending</span>');
-  }
-  if (cdp.activeBindings > 0) {
-    parts.push('<span class="badge badge-info">' + cdp.activeBindings + ' streams</span>');
-  }
-  if (cdp.queueSize > 0) {
-    parts.push('<span class="badge badge-warning">' + cdp.queueSize + ' queued</span>');
-  }
-  return '<div class="auth-status" style="flex-wrap:wrap;gap:3px">' + parts.join('') + '</div>';
-}
-
 function renderAccountsTable(accts) {
   if (!Array.isArray(accts) || accts.length === 0) {
     document.getElementById('acctBody').innerHTML = '';
@@ -105,7 +84,6 @@ function renderAccountsTable(accts) {
     var status = getAuthStatus(a);
     var label = getAuthLabel(status);
     var hideLogin = status === 'live' ? ' style="display:none"' : '';
-    var cdp = makeCdpBadge(a);
     rows +=
       '<tr>' +
       '<td>' +
@@ -116,9 +94,6 @@ function renderAccountsTable(accts) {
       '"></span>' +
       label +
       '</div></td>' +
-      '<td>' +
-      cdp +
-      '</td>' +
       '<td>' +
       (a.inFlight || 0) +
       '</td>' +

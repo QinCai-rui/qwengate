@@ -1,12 +1,13 @@
 import modelSpecs from '../models.json' with { type: 'json' };
 import type { ModelSpec } from '../types/openai.ts';
-import { decrementInFlight, getAllAccountEmails } from './auth.ts';
+import { decrementInFlight, getAllAccountEmails, getTokenWithAccount } from './auth.ts';
 import { config } from './configService.ts';
 import { DEFAULT_SYSTEM_PROMPT } from './defaultSystemPrompt.ts';
 import { logStore } from './logStore.ts';
 import { completeEntry, errorEntry } from './networkDebug.ts';
-import { getBasicHeaders, getQwenHeaders, performBrowserFetch } from './playwright.ts';
-import { QWEN_CHATS_URL, QWEN_MODELS_URL, QWEN_SETTINGS_URL } from './qwen.ts';
+import { getBasicHeaders } from './playwright.ts';
+import { browserlessFetch } from './browserlessFetch.ts';
+import { QWEN_API_BASE, QWEN_CHATS_URL, QWEN_MODELS_URL, QWEN_SETTINGS_URL } from './qwen.ts';
 
 export { DEFAULT_SYSTEM_PROMPT };
 
@@ -14,20 +15,23 @@ async function postQwenSettings(
   email: string | undefined,
   payload: Record<string, unknown>,
 ): Promise<{ response: Response; debugId: string }> {
-  // Ensure browser context exists
-  await getQwenHeaders(email);
-  // Route through real browser (Chrome TLS, automatic headers, baxia)
-  const result = await performBrowserFetch(email!, QWEN_SETTINGS_URL, {
+  const bodyStr = JSON.stringify(payload);
+  const tokenInfo = email ? await getTokenWithAccount(email) : null;
+  const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+  const response = await browserlessFetch(QWEN_SETTINGS_URL, {
     method: 'POST',
-    body: JSON.stringify(payload),
-    timeout: 30000,
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/plain, */*',
+      source: 'web',
+      cookie: cookieStr,
+      origin: QWEN_API_BASE,
+      referer: 'https://chat.qwen.ai/',
+    },
+    body: bodyStr,
+    accountEmail: email,
   });
-  const mockResponse = new Response(result.body, {
-    status: result.status,
-    statusText: result.statusText,
-    headers: result.headers,
-  });
-  return { response: mockResponse, debugId: 'browser-' + Date.now() };
+  return { response, debugId: 'browserless-' + Date.now() };
 }
 
 let cachedModels: any[] | null = null;
@@ -126,23 +130,31 @@ export async function configureAccount(email: string, instruction?: string): Pro
 
 export async function deleteAllChats(email: string): Promise<void> {
   try {
-    await getQwenHeaders(email);
-    const result = await performBrowserFetch(email, QWEN_CHATS_URL, {
+    const tokenInfo = email ? await getTokenWithAccount(email) : null;
+    const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+    const response = await browserlessFetch(QWEN_CHATS_URL, {
       method: 'DELETE',
-      timeout: 30000,
+      headers: {
+        accept: 'application/json, text/plain, */*',
+        source: 'web',
+        cookie: cookieStr,
+        origin: QWEN_API_BASE,
+        referer: 'https://chat.qwen.ai/',
+      },
+      accountEmail: email,
     });
-    if (result.ok) {
-      const body = JSON.parse(result.body);
+    if (response.ok) {
+      const body = await response.json().catch(() => ({}));
       if (body?.success !== false) {
         logStore.log('info', 'account', `All chats deleted for ${email}`);
       } else {
         throw new Error(`Delete chats failed: ${body?.message || body?.error || JSON.stringify(body)}`);
       }
     } else {
-      const errMsg = result.body || `HTTP ${result.status}`;
-      console.error(`[Qwen] Failed to delete chats for ${email}: ${result.status} - ${errMsg}`);
-      throw new Error(`Delete chats failed: ${errMsg}`);
+      const errText = await response.text().catch(() => '');
+      throw new Error(`Delete chats failed for ${email}: ${response.status} - ${errText}`);
     }
+    return;
   } catch (err: any) {
     console.error(`[Qwen] Error deleting chats for ${email}: ${err.message}`);
     throw err;
@@ -164,14 +176,20 @@ export async function fetchQwenModels(): Promise<any[]> {
     try {
       if (attempt > 0) await new Promise((r) => setTimeout(r, 500 * attempt));
 
-      const result = await performBrowserFetch(resolvedEmail!, QWEN_MODELS_URL, {
+      const response = await browserlessFetch(QWEN_MODELS_URL, {
         method: 'GET',
-        timeout: 30000,
+        headers: {
+          accept: 'application/json, text/plain, */*',
+          source: 'web',
+          origin: QWEN_API_BASE,
+          referer: 'https://chat.qwen.ai/',
+        },
+        accountEmail: resolvedEmail,
       });
 
-      if (!result.ok) throw new Error(`Failed to fetch models from Qwen: ${result.status} ${result.statusText}`);
+      if (!response.ok) throw new Error(`Failed to fetch models from Qwen: ${response.status} ${response.statusText}`);
 
-      const json = JSON.parse(result.body);
+      const json = JSON.parse(await response.text());
       if (!json.data || !Array.isArray(json.data)) {
         logStore.log('debug', 'qwen', `[Qwen] fetchQwenModels: response missing data array, returning cached or empty`);
         return cachedModels || [];

@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import { decrementInFlight, getAccountByEmail, getAllAccountEmails, incrementTotalRequests, pickAccount, throttleAccount } from './auth.ts';
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
-import { type BasicHeaders, getBasicHeaders, performBrowserFetch } from './playwright.ts';
+import { type BasicHeaders, getBasicHeaders } from './playwright.ts';
+import { browserlessFetch } from './browserlessFetch.ts';
 import { QWEN_API_BASE } from './qwen.ts';
 
 interface PoolEntry {
@@ -222,12 +223,20 @@ export class SessionPool {
     }
 
     try {
-      const result = await performBrowserFetch(email!, `${QWEN_API_BASE}/api/v2/chats/${chatId}`, {
+      const tokenInfo = email ? await import('./auth.ts').then((m) => m.getTokenWithAccount(email!)) : null;
+      const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+      const response = await browserlessFetch(`${QWEN_API_BASE}/api/v2/chats/${chatId}`, {
         method: 'DELETE',
-        timeout: 10000,
+        headers: {
+          accept: 'application/json, text/plain, */*',
+          source: 'web',
+          cookie: cookieStr,
+          origin: QWEN_API_BASE,
+        },
+        accountEmail: email,
       });
-      if (!result.ok) {
-        logStore.log('debug', 'pool', `[SessionPool] Delete returned ${result.status} for ${chatId.substring(0, 8)}...`);
+      if (!response.ok) {
+        logStore.log('debug', 'pool', `[SessionPool] Delete returned ${response.status} for ${chatId.substring(0, 8)}...`);
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
@@ -262,17 +271,44 @@ export class SessionPool {
       project_id: '',
     });
 
-    const result = await performBrowserFetch(email!, `${QWEN_API_BASE}/api/v2/chats/new`, {
+    const tokenInfo = email ? await import('./auth.ts').then((m) => m.getTokenWithAccount(email!)) : null;
+    const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+
+    const response = await browserlessFetch(`${QWEN_API_BASE}/api/v2/chats/new`, {
       method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/plain, */*',
+        source: 'web',
+        cookie: cookieStr,
+        origin: QWEN_API_BASE,
+        referer: 'https://chat.qwen.ai/',
+      },
       body: sessionBody,
-      timeout: 30000,
+      accountEmail: email,
     });
 
-    if (!result.ok) {
-      throw new Error(`Chats/new returned ${result.status}`);
+    if (!response.ok) {
+      const bodySnippet = await response
+        .text()
+        .then((t) => t.substring(0, 200))
+        .catch(() => 'unknown');
+      logStore.log('warn', 'session', `Chats/new returned ${response.status}: ${bodySnippet.substring(0, 100)}`);
+      throw new Error(`Chats/new returned ${response.status}`);
     }
 
-    const json = JSON.parse(result.body);
+    const responseText = await response.text();
+    if (responseText.startsWith('<')) {
+      logStore.log('warn', 'session', `Chats/new returned HTML instead of JSON (${responseText.substring(0, 80)}...) — baxia challenge`);
+      throw new Error(`Chats/new blocked by WAF — cookies may be expired`);
+    }
+    let json: any;
+    try {
+      json = JSON.parse(responseText);
+    } catch {
+      logStore.log('warn', 'session', `Chats/new returned non-JSON: ${responseText.substring(0, 120)}`);
+      throw new Error(`Chats/new returned non-JSON response`);
+    }
     if (!json.data?.id) {
       const message = formatQwenEnvelopeError(json);
       throw new Error(`Chats/new returned no id: ${message}`);

@@ -585,49 +585,8 @@ export function getBrowser(): Browser | null {
 export async function getQwenHeaders(
   email?: string,
 ): Promise<{ headers: Record<string, string>; chatSessionId: string; parentMessageId: string | null }> {
-  if (process.env.TEST_MOCK_PLAYWRIGHT) {
-    return {
-      headers: {
-        'bx-umidtoken': 'mock-umid-' + crypto.randomUUID().slice(0, 8),
-        'bx-ua': 'mock-ua-' + crypto.randomUUID().slice(0, 8),
-        'user-agent': 'mock-user-agent',
-        cookie: 'token=mock',
-      },
-      chatSessionId: 'mock-session-' + crypto.randomUUID().slice(0, 8),
-      parentMessageId: null,
-    };
-  }
-  // CDP mode: headers are handled by the browser (baxia, cookies, etc.)
-  if (process.env.CHROME_CDP_ENDPOINT) {
-    return { headers: {}, chatSessionId: crypto.randomUUID(), parentMessageId: null };
-  }
-  await initPlaywright();
-  const { pickAccount, decrementInFlight, getTokenWithAccount } = await import('./auth.ts');
-  const pickedFromPool = !email;
-  const targetEmail = email || (await pickAccount())?.email;
-  if (!targetEmail) throw new Error('No account available for header extraction');
-  try {
-    let accCtx = accountContexts.get(targetEmail);
-    if (!accCtx) {
-      const tokenInfo = await getTokenWithAccount(targetEmail);
-      const initialCookies = tokenInfo?.token ? { token: tokenInfo.token } : undefined;
-      accCtx = await createAccountContext(targetEmail, initialCookies);
-      await refreshAccountCookies(targetEmail);
-      accCtx = accountContexts.get(targetEmail)!;
-    } else if (Date.now() - accCtx.lastRefresh > COOKIE_REFRESH_INTERVAL) {
-      await refreshAccountCookies(targetEmail);
-      accCtx = accountContexts.get(targetEmail)!;
-    }
-    const cookies = await accCtx.context.cookies();
-    const cookieStr = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
-    const headers: Record<string, string> = { ...accCtx.headers, cookie: cookieStr };
-    accCtx.headers = headers;
-    accCtx.lastRefresh = Date.now();
-    const chatSessionId = crypto.randomUUID();
-    return { headers, chatSessionId, parentMessageId: null };
-  } finally {
-    if (pickedFromPool) decrementInFlight(targetEmail);
-  }
+  // Browserless mode only — bx headers handled by browserlessFetch, skip CDP/Playwright
+  return { headers: {}, chatSessionId: crypto.randomUUID(), parentMessageId: null };
 }
 
 /**
