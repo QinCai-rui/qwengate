@@ -12,6 +12,7 @@ import { compressToolResult } from './compressToolResult.ts';
 export * from './chatHelpersCore.ts';
 
 /** Pre-compiled regex patterns for user content sanitization */
+const SYSTEM_REMINDER_RE = /<system-reminder\b[^>]*>([\s\S]*?)<\/system-reminder>/gi;
 const TAG_STRIP_RE = /<(?:system|instruction|prompt|rule)\b[^>]*>[\s\S]*?<\/(?:system|instruction|prompt|rule)>/gi;
 const THINK_TAG_STRIP_RE = new RegExp(`<(?:${THINK_TAG_NAMES.join('|')})\\b[^>]*>[\\s\\S]*?<\/(?:${THINK_TAG_NAMES.join('|')})>`, 'gi');
 const ROLE_PREFIX_RE = /^(?:System|Assistant|User|Human):\s*/gim;
@@ -44,6 +45,8 @@ export interface QwenMessage {
 
 export interface BuildQwenMessagesResult {
   qwenMessages: QwenMessage[];
+  systemContent?: string;
+  toolResultsContent?: string;
 }
 
 // ── Business logic ───────────────────────────────────────────────
@@ -53,8 +56,8 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
   const model = (body.model || '').replace('-no-thinking', '');
 
   const segments: string[] = [];
-  let accumulatedSystemContent = '';
-  let hasSystemContent = false;
+  const systemParts: string[] = [];
+  const toolResultObjects: any[] = [];
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
@@ -69,20 +72,25 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
     }
 
     if (msg.role === 'system') {
-      accumulatedSystemContent += (contentStr || '').trim() + '\n\n';
-      hasSystemContent = true;
+      systemParts.push((contentStr || '').trim());
     } else if (msg.role === 'user') {
-      let sanitized = contentStr
+      // Extract <system-reminder> blocks to systemParts instead of stripping them
+      let text = contentStr;
+      const sysReminders: string[] = [];
+      text = text.replace(SYSTEM_REMINDER_RE, (_m: string, inner: string) => {
+        sysReminders.push(inner.trim());
+        return '';
+      });
+      sysReminders.forEach((r) => systemParts.push(r));
+
+      let sanitized = text
         .replace(TAG_STRIP_RE, '')
         .replace(THINK_TAG_STRIP_RE, '')
         .replace(ROLE_PREFIX_RE, '')
-        .replace(CONTROL_CHAR_RE, '');
+        .replace(CONTROL_CHAR_RE, '')
+        .trim();
 
-      // Prepend system content to first message
-      if (hasSystemContent && !segments.length) {
-        sanitized = accumulatedSystemContent + sanitized;
-        hasSystemContent = false;
-      }
+      if (sanitized.length === 0) continue;
 
       const charLimit = Math.floor(availableTokens * 3.0);
       const truncated =
@@ -91,7 +99,7 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
             `\n\n[TRUNCATED: input exceeded ${charLimit} characters (model: ${body.model}, available tokens: ${availableTokens})]`
           : sanitized;
 
-      segments.push(truncated);
+      segments.push(`<user>\n${truncated}\n</user>`);
     } else if (msg.role === 'assistant') {
       let assistantContent = contentStr || '';
       const reasoning = msg.reasoning_content;
@@ -120,7 +128,7 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
         }
       }
 
-      segments.push(assistantContent);
+      segments.push(`<assist>\n${assistantContent}\n</assist>`);
     } else if (msg.role === 'tool' || msg.role === 'function') {
       let toolName = msg.name;
       if (!toolName && msg.tool_call_id) {
@@ -137,22 +145,21 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
       }
 
       const truncated = compressToolResult(contentStr || '');
-      const qwenResultStr = JSON.stringify([
-        {
-          type: 'function',
-          tool: toolName || 'unknown',
-          result: {
-            success: true,
-            stdout: truncated,
-            stderr: '',
-            command: toolName || '',
-          },
+      toolResultObjects.push({
+        type: 'function',
+        tool: toolName || 'unknown',
+        result: {
+          success: true,
+          stdout: truncated,
+          stderr: '',
+          command: toolName || '',
         },
-      ]);
-
-      segments.push(qwenResultStr);
+      });
     }
   }
+
+  // Single user message with all history wrapped in <user>/<assist> tags
+  let prompt = segments.length > 0 ? segments.join('\n\n') : '';
 
   const featureConfig = buildFeatureConfig(true);
 
@@ -169,9 +176,10 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
     featureConfig.local_mcp = localMcp;
   }
 
-  // Single message with all history flattened (Qwen API only accepts 1 message)
-  const prompt = segments.join('\n\n');
+  // Single message (Qwen API only accepts 1 message per chat)
   const fid = randomUUID();
+  const systemContent = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
+  const toolResultsContent = toolResultObjects.length > 0 ? JSON.stringify(toolResultObjects) : undefined;
   const qwenMessages: QwenMessage[] = [
     {
       fid,
@@ -191,7 +199,7 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
     },
   ];
 
-  return { qwenMessages };
+  return { qwenMessages, systemContent, toolResultsContent };
 }
 
 export function handleImageModelFallback(body: any, messages: any[]): void {

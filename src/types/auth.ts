@@ -22,4 +22,6 @@ export interface AccountEntry {
   totalRequests: number;
   /** Full cookie string from browser profile (cna, ssxmod_itna, tfstk, isg, token, etc.) for WAF bypass */
   profileCookies?: string;
+  /** Startup lifecycle — 'pending' (added), 'initializing' (boot in progress), 'ready' (fully initialized) */
+  startupStatus?: 'pending' | 'initializing' | 'connecting' | 'ready';
 }

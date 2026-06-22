@@ -18,6 +18,9 @@
  *   5. browserStreamFetchIncrementalForAccount(email, url, body) → streaming (Node.js fetch)
  */
 
+import { setStartupStatus } from './auth.ts';
+import { logStore } from './logStore.ts';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -52,7 +55,7 @@ export interface AccountCdpState {
   callIdCounter: number;
   streamBindings: Map<string, (chunk: string) => void>;
   cachedBxHeaders: Record<string, string>;
-  profileCookies: string;
+  profileCookies?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +116,7 @@ async function connectBrowserWs(): Promise<void> {
   if (browserConnected && browserWs) return;
 
   const wsUrl = await getBrowserWsUrl();
-  console.log(`[CDP] Connecting to browser WS: ${wsUrl}`);
+  logStore.log('debug', 'cdp', `Connecting to browser WS: ${wsUrl}`);
 
   return new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
@@ -126,7 +129,7 @@ async function connectBrowserWs(): Promise<void> {
       clearTimeout(timeout);
       browserWs = ws;
       browserConnected = true;
-      console.log('[CDP] Browser WS connected');
+      logStore.log('debug', 'cdp', 'Browser WS connected');
       resolve();
     };
 
@@ -237,8 +240,10 @@ async function connectBrowserWs(): Promise<void> {
                 origin: hdrs['origin'] || '',
                 referer: hdrs['referer'] || '',
               };
-              console.log(
-                `[CDP] Captured ${Object.keys(state.cachedBxHeaders).length} headers for ${state.email} (hasCookie: ${!!hdrs['cookie']}, hasBxUa: ${!!hdrs['bx-ua']})`,
+              logStore.log(
+                'debug',
+                'cdp',
+                `Captured ${Object.keys(state.cachedBxHeaders).length} headers for ${state.email} (hasCookie: ${!!hdrs['cookie']}, hasBxUa: ${!!hdrs['bx-ua']})`,
               );
             }
           }
@@ -379,15 +384,15 @@ function evaluateInAccount<T>(email: string, expression: string, awaitPromise = 
  * Create an isolated browser context for an account, inject cookies,
  * navigate to chat.qwen.ai, and wait for baxia to initialize.
  */
-export async function initAccountContext(email: string, profileCookies: string): Promise<void> {
+export async function initAccountContext(email: string, profileCookies?: string): Promise<void> {
   await connectBrowserWs();
 
-  console.log(`[CDP] Creating context for ${email}...`);
+  logStore.log('debug', 'cdp', `Creating context for ${email}...`);
 
   // 1. Create browser context
   const ctxResult = await browserEvaluate<{ browserContextId: string }>('Target.createBrowserContext', {});
   const contextId = ctxResult.browserContextId;
-  console.log(`[CDP]   contextId=${contextId}`);
+  logStore.log('debug', 'cdp', `  contextId=${contextId}`);
 
   // 2. Create target (page) in that context
   const tgtResult = await browserEvaluate<{ targetId: string }>('Target.createTarget', {
@@ -395,7 +400,7 @@ export async function initAccountContext(email: string, profileCookies: string):
     browserContextId: contextId,
   });
   const targetId = tgtResult.targetId;
-  console.log(`[CDP]   targetId=${targetId}`);
+  logStore.log('debug', 'cdp', `  targetId=${targetId}`);
 
   // 3. Attach to target with flatten: true → get sessionId
   const attachResult = await browserEvaluate<{ sessionId: string }>('Target.attachToTarget', {
@@ -403,7 +408,7 @@ export async function initAccountContext(email: string, profileCookies: string):
     flatten: true,
   });
   const sessionId = attachResult.sessionId;
-  console.log(`[CDP]   sessionId=${sessionId}`);
+  logStore.log('debug', 'cdp', `  sessionId=${sessionId}`);
 
   // 4. Create account state
   const state: AccountCdpState = {
@@ -433,7 +438,7 @@ export async function initAccountContext(email: string, profileCookies: string):
       { urlPattern: '*chat.qwen.ai/api/v2/chat/completions*', requestStage: 'Response' },
     ],
   });
-  console.log(`[CDP]   Network + Page + Runtime + Fetch enabled for ${email}`);
+  logStore.log('debug', 'cdp', `Network + Page + Runtime + Fetch enabled for ${email}`);
 
   // 5b. Inject stealth scripts BEFORE page load to evade headless detection
   const stealthScript = `
@@ -486,7 +491,7 @@ export async function initAccountContext(email: string, profileCookies: string):
     };
   `;
   await sendToAccount(state, 'Page.addScriptToEvaluateOnNewDocument', { source: stealthScript });
-  console.log(`[CDP]   Stealth scripts injected for ${email}`);
+  logStore.log('debug', 'cdp', `  Stealth scripts injected for ${email}`);
 
   // 6. Inject cookies from profileCookies
   if (profileCookies) {
@@ -509,12 +514,12 @@ export async function initAccountContext(email: string, profileCookies: string):
         sameSite: 'Lax',
       });
     }
-    console.log(`[CDP]   Injected ${injected} cookies for ${email}`);
+    logStore.log('debug', 'cdp', `  Injected ${injected} cookies for ${email}`);
   }
 
   // 7. Navigate to chat.qwen.ai to load SPA + baxia
   await sendToAccount(state, 'Page.navigate', { url: 'https://chat.qwen.ai/' });
-  console.log(`[CDP]   Navigating ${email} to chat.qwen.ai...`);
+  logStore.log('debug', 'cdp', `  Navigating ${email} to chat.qwen.ai...`);
 
   // 8. Wait for SPA to load + baxia to initialize (poll with backoff)
   let baxiaReady = false;
@@ -528,7 +533,7 @@ export async function initAccountContext(email: string, profileCookies: string):
       );
       if (check.fetchIsWrapped) {
         baxiaReady = true;
-        console.log(`[CDP]   baxia ready for ${email} after ${waitMs + 2000}ms`);
+        logStore.log('debug', 'cdp', `  baxia ready for ${email} after ${waitMs + 2000}ms`);
         break;
       }
     } catch {
@@ -546,7 +551,7 @@ export async function initAccountContext(email: string, profileCookies: string):
       '({hasBaxia:!!window.__baxia__,fetchIsWrapped:!fetch.toString().includes("native")})',
       false,
     );
-    console.log(`[CDP]   baxia for ${email}: ${status.hasBaxia} | fetch wrapped: ${status.fetchIsWrapped}`);
+    logStore.log('debug', 'cdp', `  baxia for ${email}: ${status.hasBaxia} | fetch wrapped: ${status.fetchIsWrapped}`);
   } catch (err: any) {
     console.warn(`[CDP]   baxia check failed for ${email}: ${err.message}`);
   }
@@ -556,7 +561,7 @@ export async function initAccountContext(email: string, profileCookies: string):
   triggerBxHeaderCaptureForAccount(state);
   await Bun.sleep(1500);
 
-  console.log(`[CDP] Account context ready: ${email} (sessionId=${sessionId})`);
+  logStore.log('debug', 'cdp', `Account context ready: ${email} (sessionId=${sessionId})`);
 }
 
 /**
@@ -624,7 +629,7 @@ function triggerBxHeaderCaptureForAccount(state: AccountCdpState): void {
 export async function refreshBaxiaForAccount(email: string): Promise<void> {
   const state = accountStates.get(email);
   if (!state) return;
-  console.log(`[CDP] Refreshing baxia for ${email}...`);
+  logStore.log('debug', 'cdp', `Refreshing baxia for ${email}...`);
   try {
     await sendToAccount(state, 'Page.navigate', { url: 'https://chat.qwen.ai/' });
     // Wait for baxia to re-initialize
@@ -637,7 +642,7 @@ export async function refreshBaxiaForAccount(email: string): Promise<void> {
           false,
         );
         if (check.fetchIsWrapped) {
-          console.log(`[CDP]   baxia refreshed for ${email} after ${waitMs + 2000}ms`);
+          logStore.log('debug', 'cdp', `  baxia refreshed for ${email} after ${waitMs + 2000}ms`);
           triggerBxHeaderCaptureForAccount(state);
           return;
         }
@@ -717,7 +722,7 @@ export async function nodeFetchForAccount(
   }
 
   const requestId = crypto.randomUUID();
-  console.log(`[NodeFetch][${email}] Non-streaming request, body=${body.length} chars`);
+  logStore.log('debug', 'cdp', `NodeFetch ${email} Non-streaming request, body=${body.length} chars`);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -755,7 +760,7 @@ export async function nodeFetchForAccount(
     });
 
     clearTimeout(timer);
-    console.log(`[NodeFetch][${email}] Response: ${resp.status}`);
+    logStore.log('debug', 'cdp', `NodeFetch ${email} Response: ${resp.status}`);
 
     const text = await resp.text();
     const respHeaders: Record<string, string> = {};
@@ -1000,7 +1005,8 @@ export async function browserFetchForAccount(
   url: string,
   options: { method?: string; body?: string; timeout?: number } = {},
 ): Promise<CdpResponse> {
-  const state = accountStates.get(email)!;
+  const state = accountStates.get(email);
+  if (!state) throw new Error(`No CDP context for ${email} — account not initialized`);
   const { method = 'GET', body = '', timeout = 30000 } = options;
 
   // Ensure we have baxia headers
@@ -1065,7 +1071,7 @@ export async function nodeFetchStreamForAccount(
 
   const requestId = crypto.randomUUID();
 
-  console.log(`[NodeFetch][${email}] Starting node fetch, body=${body.length} chars`);
+  logStore.log('debug', 'cdp', `NodeFetch ${email} Starting node fetch, body=${body.length} chars`);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -1105,7 +1111,7 @@ export async function nodeFetchStreamForAccount(
     });
 
     clearTimeout(timer);
-    console.log(`[NodeFetch][${email}] Response: ${resp.status}, body: ${resp.headers.get('content-length')}`);
+    logStore.log('debug', 'cdp', `NodeFetch ${email} Response: ${resp.status}, body: ${resp.headers.get('content-length')}`);
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');
@@ -1475,21 +1481,22 @@ export function getCdpStatuses(): CdpAccountStatus[] {
  */
 export async function initAllAccountContexts(accounts: Array<{ email: string; profileCookies?: string }>): Promise<void> {
   await connectBrowserWs();
-  console.log(`[CDP] Initializing ${accounts.length} account contexts...`);
+  logStore.log('debug', 'cdp', `Initializing ${accounts.length} account contexts...`);
 
   for (const acct of accounts) {
     if (!acct.profileCookies) {
-      console.warn(`[CDP] Skipping ${acct.email} — no profileCookies`);
+      logStore.log('debug', 'cdp', `Waiting for auth for ${acct.email} — no profile cookies yet`);
       continue;
     }
     try {
+      setStartupStatus(acct.email, 'connecting');
       await initAccountContext(acct.email, acct.profileCookies);
     } catch (err: any) {
       console.error(`[CDP] Failed to init context for ${acct.email}: ${err.message}`);
     }
   }
 
-  console.log(`[CDP] Account contexts ready: ${getAccountEmails().join(', ')}`);
+  logStore.log('debug', 'cdp', `Account contexts ready: ${getAccountEmails().join(', ')}`);
 }
 
 /**

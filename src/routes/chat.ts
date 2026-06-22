@@ -1,11 +1,12 @@
 import crypto from 'node:crypto';
 import { Context } from 'hono';
-import { pickAccount } from '../services/auth.ts';
+import { pickAccount, decrementInFlight, incrementInFlight } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
 import { RetryableQwenStreamError } from '../services/qwen.ts';
 import { uploadLargeTextAsFile } from '../services/qwenFileUpload.ts';
+import type { QwenFileAttachment } from '../services/qwenFileUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import { OpenAIRequest } from '../types/openai.ts';
@@ -27,6 +28,18 @@ export {
 } from './chatHelpers.ts';
 
 const MAX_MESSAGE_SIZE = 10_000_000; // 10MB — large payloads are uploaded as files via Qwen's file API
+
+// ponytail: per-process Map, not shared across cluster workers.
+// Upgrade to a shared store (Redis) if multi-worker conversation pinning is needed.
+const conversationAccount = new Map<string, string>();
+const MAX_CONVERSATIONS = 1000;
+
+function conversationKey(messages: any[]): string {
+  const first = messages[0];
+  if (!first) return '';
+  const raw = typeof first.content === 'string' ? first.content.substring(0, 500) : JSON.stringify(first);
+  return crypto.createHash('sha256').update(raw).digest('hex').substring(0, 16);
+}
 
 async function parseRequestBody(c: Context) {
   const rawBody = await c.req.json();
@@ -87,34 +100,39 @@ async function parseRequestBody(c: Context) {
 }
 
 async function setupSession(messages: any[], body: OpenAIRequest, availableTokens: number, toolCalling: boolean, logId: string) {
-  const { qwenMessages: processedMessages } = buildQwenMessages(messages, body, availableTokens, toolCalling);
+  const {
+    qwenMessages: processedMessages,
+    systemContent,
+    toolResultsContent,
+  } = buildQwenMessages(messages, body, availableTokens, toolCalling);
 
-  // Determine if file upload is needed based on flattened content size.
-  // When uploading, ALL content (including the latest user message) goes into the file,
-  // and only a short reference stays inline. This keeps the request body small enough
-  // to avoid WAF/CDP-Fetch interception while still giving Qwen the full context via the file.
-  const FILE_UPLOAD_THRESHOLD = 100_000; // 100K chars — upload anything above this
-  const flattenedContent = processedMessages[0]?.content || '';
-  const flattenedLen = typeof flattenedContent === 'string' ? flattenedContent.length : JSON.stringify(flattenedContent).length;
-  const needsUpload = !process.env.TEST_MOCK_PLAYWRIGHT && flattenedLen > FILE_UPLOAD_THRESHOLD;
-  console.log(
-    `[Chat] needsUpload check: flattenedLen=${flattenedLen}, FILE_UPLOAD_THRESHOLD=${FILE_UPLOAD_THRESHOLD}, needsUpload=${needsUpload}`,
-  );
-
-  // Helper: serialize an OpenAI message to text for the history file
-  const serializeMsg = (m: any): string => {
-    const role = m.role === 'assistant' ? 'Assistant' : m.role === 'system' ? 'System' : 'User';
-    const content = Array.isArray(m.content) ? m.content.map((c: any) => c.text || JSON.stringify(c)).join('\n') : String(m.content ?? '');
-    return `${role}: ${content}`;
-  };
-
-  // Extract the latest message content (uploaded to file when needsUpload) — computed once, outside the retry loop
-  const lastMsg = messages[messages.length - 1];
-  const latestMessageContent = needsUpload
-    ? Array.isArray(lastMsg?.content)
-      ? lastMsg.content.map((c: any) => c.text || JSON.stringify(c)).join('\n')
-      : String(lastMsg?.content ?? '')
-    : '';
+  // Upload system prompt and tool results as files attached to the message
+  const fileAttachments: QwenFileAttachment[] = [];
+  if (systemContent || toolResultsContent) {
+    const uploadAccount = await pickAccount();
+    if (uploadAccount?.email) {
+      if (systemContent) {
+        try {
+          const file = await uploadLargeTextAsFile(uploadAccount.email, systemContent, 'system-prompt.md');
+          fileAttachments.push(file);
+        } catch (err: any) {
+          console.warn('[Chat] Failed to upload system prompt file:', err.message || err);
+        }
+      }
+      if (toolResultsContent) {
+        try {
+          const file = await uploadLargeTextAsFile(uploadAccount.email, toolResultsContent, 'tool-result.md');
+          fileAttachments.push(file);
+        } catch (err: any) {
+          console.warn('[Chat] Failed to upload tool results file:', err.message || err);
+        }
+      }
+    }
+    if (uploadAccount?.email) decrementInFlight(uploadAccount.email);
+  }
+  if (fileAttachments.length > 0) {
+    processedMessages[0] = { ...processedMessages[0], files: fileAttachments };
+  }
 
   let lastFailedEmail: string | undefined;
 
@@ -122,14 +140,23 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
   const MAX_ACCOUNT_RETRIES = 5;
   let lastError: any;
 
+  // Pin conversation to the same account so messages don't spread across multiple Qwen accounts
+  const convKey = conversationKey(messages);
+  const pinnedEmail = convKey ? conversationAccount.get(convKey) : undefined;
+
   for (let attempt = 0; attempt < MAX_ACCOUNT_RETRIES; attempt++) {
-    const selectedAccount = await pickAccount(lastFailedEmail);
-    // If no accounts available AND none are throttled, there are simply no accounts configured.
-    // Fall through to acquireSessionWithCorrections with undefined email (mock Playwright path).
-    const accountEmail = selectedAccount?.email;
-    if (!selectedAccount && attempt > 0) {
-      // On retry: if still no accounts, all are throttled — stop retrying
-      throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
+    let accountEmail: string | undefined;
+    if (pinnedEmail && attempt === 0) {
+      // Use the pinned account for conversation affinity
+      accountEmail = pinnedEmail;
+      incrementInFlight(pinnedEmail);
+    } else {
+      const selectedAccount = await pickAccount(lastFailedEmail);
+      accountEmail = selectedAccount?.email;
+      if (!selectedAccount && attempt > 0) {
+        // On retry: if still no accounts, all are throttled — stop retrying
+        throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
+      }
     }
 
     let sessionResult;
@@ -138,6 +165,10 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
     } catch (err) {
       lastFailedEmail = accountEmail;
       lastError = err;
+      if (accountEmail) decrementInFlight(accountEmail);
+      if (convKey && pinnedEmail && accountEmail === pinnedEmail) {
+        conversationAccount.delete(convKey); // Don't retry a broken pin
+      }
       continue; // Try next account
     }
     const { session, qwenMessages: sessionMessages, nextParentId, sessionHeaders, resolvedEmail } = sessionResult;
@@ -147,31 +178,12 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       entry.accountEmail = resolvedEmail;
     });
 
-    // Upload large message content as a txt file attachment.
-    // Qwen's per-message limit is ~131K characters. Payloads above this threshold
-    // are uploaded via Qwen's file API.
-    //
-    // Strategy: ALL content (history + latest user message) goes into the file,
-    // and only a short file-reference placeholder stays inline. This keeps the
-    // request body well under 130KB to avoid WAF/CDP-Fetch interception.
-    if (needsUpload) {
-      try {
-        // Serialize history (all messages except the last) for the file
-        const historyMsgs = messages.slice(0, -1);
-        const historyText = historyMsgs.map(serializeMsg).join('\n\n');
-        // Include latest message in the file too so the entire request body stays small
-        const fullFileContent = historyText
-          ? `${historyText}\n\n--- Latest User Message ---\n\n${latestMessageContent}`
-          : `--- Latest User Message ---\n\n${latestMessageContent}`;
-        const fileAttachment = await uploadLargeTextAsFile(resolvedEmail, fullFileContent, 'payload.txt');
-        // Replace content with a short file reference — Qwen will read the attached file
-        sessionMessages[0].content = `Conversation context is attached as "payload.txt". Please refer to the file for the full conversation history and instructions.`;
-        sessionMessages[0].files = [fileAttachment];
-        console.log(`[Chat] Full context uploaded as file — id=${fileAttachment.id}, fullChars=${fullFileContent.length}`);
-      } catch (uploadErr: any) {
-        console.error(`[Chat] File upload failed: ${uploadErr.message} — falling back to inline content`);
-        // If upload fails, keep content inline (will work for payloads under 131K)
-        // For over-131K payloads, this will hit Qwen's limit but there's no other option.
+    // Pin this conversation to this account so future requests reuse it
+    if (convKey && resolvedEmail) {
+      conversationAccount.set(convKey, resolvedEmail);
+      if (conversationAccount.size > MAX_CONVERSATIONS) {
+        const key = conversationAccount.keys().next().value;
+        if (key) conversationAccount.delete(key);
       }
     }
 
@@ -195,17 +207,19 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
 
       console.log(`[Chat] Request failed on ${resolvedEmail}: ${err.message || err} (attempt ${attempt + 1}/${MAX_ACCOUNT_RETRIES})`);
 
-      // If rate limited or retryable, try next account silently
-      if (
-        err.upstreamStatus === 429 ||
-        /RateLimited|daily usage limit|CAPTCHA|FAIL_SYS_USER_VALIDATE/i.test(err.message || '') ||
-        err instanceof RetryableQwenStreamError
-      ) {
+      // If rate limited, try next account — Qwen didn't process the request yet
+      if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
         lastFailedEmail = resolvedEmail;
         lastError = err;
+        if (convKey && resolvedEmail && conversationAccount.get(convKey) === resolvedEmail) {
+          conversationAccount.delete(convKey); // Unpin rate-limited account
+        }
         continue;
       }
-      throw err; // Non-rate-limit errors propagate immediately
+      // CAPTCHA / FAIL_SYS_USER_VALIDATE means Qwen already received the request on this account.
+      // Retrying on another account would send the same messages to Qwen again (duplicate processing).
+      // Return the error — the user can retry manually.
+      throw err;
     }
     let { stream, abortController: qwenAbortController } = streamResult;
 
@@ -364,4 +378,5 @@ export async function chatCompletions(c: Context) {
       status,
     );
   }
+  if (uploadAccount) decrementInFlight(uploadAccount.email);
 }
