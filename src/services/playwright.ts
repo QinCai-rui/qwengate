@@ -137,26 +137,13 @@ export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
     const { pickAccount, decrementInFlight } = await import('./auth.ts');
     const acct = email ? { email } : await pickAccount();
     const result = { cookie: '', userAgent: '', bxV: QWEN_BX_V, bxUmidtoken: '', bxUa: '', email: acct?.email || '' };
-    // pickAccount incremented inFlight — release since we're not using the account for a request
     if (!email && acct?.email) decrementInFlight(acct.email);
     return result;
   }
-  await initPlaywright();
+  // Browserless mode: no Playwright needed for headers.
+  // Cookies from saved profileCookies (disk), bx-ua from Node.js generator.
   if (!cachedUserAgent) {
-    try {
-      for (const accCtx of accountContexts.values()) {
-        cachedUserAgent = await Promise.race([
-          accCtx.page.evaluate(() => navigator.userAgent),
-          new Promise<string>((_, reject) => setTimeout(() => reject(new Error('UserAgent timeout')), 10_000)),
-        ]);
-        break;
-      }
-    } catch (err) {
-      console.error('[Playwright] UserAgent extraction failed:', err);
-    }
-    if (!cachedUserAgent) {
-      cachedUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
-    }
+    cachedUserAgent = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36';
   }
   let cookieStr = await getCookies(email);
   const { getTokenWithAccount } = await import('./auth.ts');
@@ -165,17 +152,14 @@ export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
     const tokenEntry = `token=${tokenInfo.token}`;
     cookieStr = tokenEntry + (cookieStr ? '; ' + cookieStr : '');
   }
-  const bxV = QWEN_BX_V;
-  let bxUmidtoken = '';
-  let bxUa = '';
-  if (email) {
-    const accCtx = accountContexts.get(email);
-    if (accCtx?.headers) {
-      bxUmidtoken = accCtx.headers['bx-umidtoken'] || '';
-      bxUa = accCtx.headers['bx-ua'] || '';
-    }
-  }
-  return { cookie: cookieStr, userAgent: cachedUserAgent, bxV, bxUmidtoken, bxUa, email: tokenInfo?.email };
+  return {
+    cookie: cookieStr,
+    userAgent: cachedUserAgent,
+    bxV: QWEN_BX_V,
+    bxUmidtoken: '', // browserlessFetch fills this via ensureBxUmidtoken
+    bxUa: '', // browserlessFetch fills this via generateBxUa
+    email: tokenInfo?.email,
+  };
 }
 export async function initPlaywright(headless = true, browserType: BrowserType = 'chromium') {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return;
