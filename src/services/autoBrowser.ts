@@ -111,6 +111,16 @@ function findChromeBinary(): string | null {
 // Launch
 // ---------------------------------------------------------------------------
 
+// Realistic User-Agent strings for rotation (avoids baxia fingerprinting one static UA)
+const USER_AGENTS = [
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+];
+
 function launchChrome(binary: string): void {
   mkdirSync(PROFILE_DIR, { recursive: true });
 
@@ -126,7 +136,7 @@ function launchChrome(binary: string): void {
     '--disable-extensions',
     `--user-data-dir=${PROFILE_DIR}`,
     // Anti-detection: override User-Agent to remove "Headless" marker
-    '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
+    `--user-agent=${USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]}`,
     // Minimal URL to open so Chrome actually starts
     'about:blank',
   ];

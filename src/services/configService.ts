@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { projectPath } from '../utils/paths.ts';
+import { logStore } from './logStore.ts';
 
 export interface ConfigSchema {
   PORT: string;
@@ -87,7 +88,7 @@ export class ConfigService {
         // Warn about unknown keys
         for (const key of Object.keys(parsed)) {
           if (!CONFIG_KEYS.has(key)) {
-            console.warn(`[config] Unknown key "${key}" in config.json — ignoring`);
+            logStore.log('debug', 'config', `[config] Unknown key "${key}" in config.json — ignoring`);
           }
         }
 
@@ -118,13 +119,13 @@ export class ConfigService {
   validate(): void {
     const port = parseInt(this.get('PORT'), 10);
     if (isNaN(port) || port < 1 || port > 65535) {
-      console.warn(`[config] PORT "${this.get('PORT')}" is invalid, using default ${DEFAULT_CONFIG.PORT}`);
+      logStore.log('debug', 'config', `[config] PORT "${this.get('PORT')}" is invalid, using default ${DEFAULT_CONFIG.PORT}`);
     }
 
     const checkPositive = (key: keyof ConfigSchema, name: string): void => {
       const val = parseInt(this.get(key), 10);
       if (!isNaN(val) && val < 0) {
-        console.warn(`[config] ${name} (${key}) is negative (${val}), using default ${DEFAULT_CONFIG[key]}`);
+        logStore.log('debug', 'config', `[config] ${name} (${key}) is negative (${val}), using default ${DEFAULT_CONFIG[key]}`);
       }
     };
 

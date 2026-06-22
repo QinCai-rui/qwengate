@@ -46,6 +46,8 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
   c.header('Connection', 'close');
 
   return honoStream(c, async (streamWriter: any) => {
+    const _streamStartTime = Date.now();
+    logStore.log('debug', 'stream', `[Stream] >>> Streaming started for ${logId}, model=${body.model}, tools=${body.tools?.length || 0}`);
     let streamReleased = false;
     let heartbeatInterval: any;
     let streamReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -79,7 +81,7 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
 
       if (loopResult.error) {
         // Upstream went silent — silently terminate stream, log server-side only
-        console.warn(`[Chat] Stream timeout for ${logId}: ${loopResult.error}`);
+        logStore.log('debug', 'stream', `[Chat] Stream timeout for ${logId}: ${loopResult.error}`);
         logStore.addError(logId, loopResult.error);
         await streamWriter.write('data: [DONE]\n\n');
         logStore.updateEntry(logId, (entry) => {
@@ -130,6 +132,7 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       );
 
       streamReleased = true;
+      logStore.log('debug', 'stream', `[Stream] <<< Streaming completed for ${logId} in ${Date.now() - _streamStartTime}ms`);
     } finally {
       if (!streamReleased) {
         // Always write [DONE] so the SSE stream terminates cleanly, even on error

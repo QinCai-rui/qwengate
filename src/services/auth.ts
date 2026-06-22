@@ -14,6 +14,7 @@ import {
   decodeJwt,
   discoverSavedAccounts,
   enableHotReload as enableHotReloadImpl,
+  getAccountByEmail,
   loadAccountsFromFile,
   migrateFromOldPaths,
   rebuildEmailIndex,
@@ -119,6 +120,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       inFlight: 0,
       totalRequests: 0,
       profileCookies: a.profileCookies,
+      startupStatus: 'initializing',
     });
   }
   rebuildEmailIndex();
@@ -189,6 +191,11 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
   }
 }
 
+export function setStartupStatus(email: string, status: 'initializing' | 'pending' | 'connecting' | 'ready'): void {
+  const account = getAccountByEmail(email);
+  if (account) account.startupStatus = status;
+}
+
 export async function autoLoginAllAccounts(): Promise<void> {
   const needLogin = accounts.filter((a) => !a.state && a.password);
   if (needLogin.length === 0) return;
@@ -214,34 +221,37 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
   try {
     const { getProfileDir } = await import('./playwright.ts');
     const profileDir = getProfileDir(email);
-    if (!existsSync(profileDir)) {
-      logStore.log('warn', 'auth', `No profile dir for ${email}`);
-      return null;
-    }
-
-    // Look up password from accounts array
     const acct = accounts.find((a) => a.email.toLowerCase().trim() === email.toLowerCase().trim());
     const password = acct?.password;
 
+    if (!existsSync(join(profileDir, 'Default', 'Cookies'))) {
+      logStore.log('warn', 'auth', `No profile dir for ${email} — creating via browser login...`);
+      if (password) {
+        const { openBrowserProfile } = await import('./browserProfiles.ts');
+        let result = await openBrowserProfile(email, password, { headless: true });
+        if (result === 'captcha') {
+          logStore.log('info', 'auth', `Captcha for ${email} — opening headed browser for manual login...`);
+          result = await openBrowserProfile(email, password, { headless: false });
+        }
+        if (result === 'success') {
+          logStore.log('info', 'auth', `✓ Profile created for ${email} via browser login`);
+          if (acct?.state) return acct.state;
+        } else {
+          logStore.log('warn', 'auth', `Profile creation failed for ${email}: ${result}`);
+        }
+      }
+      return null;
+    }
+
     logStore.log('info', 'auth', `Loading token from profile for ${email}...`);
+    const { BROWSER_DEFAULT_ARGS } = await import('./playwright.ts');
     const { launchPersistentContext } = await import('cloakbrowser');
     const PROFILE_LAUNCH_TIMEOUT_MS = 30_000;
     context = await Promise.race([
       launchPersistentContext({
         userDataDir: profileDir,
         headless: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--mute-audio',
-          '--no-first-run',
-          '--disable-background-networking',
-          '--disable-default-apps',
-          '--disable-sync',
-          '--disable-translate',
-          '--disable-blink-features=AutomationControlled',
-        ],
+        args: [...BROWSER_DEFAULT_ARGS],
       }),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Profile launch timed out after 30s')), PROFILE_LAUNCH_TIMEOUT_MS),
@@ -267,7 +277,11 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
         }
 
         const { openBrowserProfile } = await import('./browserProfiles.ts');
-        const result = await openBrowserProfile(email, password, { headless: true });
+        let result = await openBrowserProfile(email, password, { headless: true });
+        if (result === 'captcha') {
+          logStore.log('info', 'auth', `Captcha for ${email} — opening headed browser for manual login...`);
+          result = await openBrowserProfile(email, password, { headless: false });
+        }
 
         if (result === 'success') {
           const updated = accounts.find((a) => a.email.toLowerCase().trim() === email.toLowerCase().trim());
@@ -373,17 +387,7 @@ export async function saveCookies(email: string, token: string, refreshToken?: s
         acct.throttledUntil = 0;
       }
 
-      // Fire-and-forget disk persistence
-      try {
-        mkdirSync(TOKEN_DIR, { recursive: true });
-        writeFileSync(
-          join(TOKEN_DIR, `${normalizedEmail}.json`),
-          JSON.stringify({ token, refreshToken, expiresAt: jwtExpiresAt }),
-          'utf-8',
-        );
-      } catch {
-        /* non-blocking */
-      }
+      // Token lives in browser profile's Default/Cookies SQLite — no separate file needed
     }
   } catch (err: any) {
     logStore.log('error', 'auth', `Failed to save cookies for ${normalizedEmail}: ${err.message}`);

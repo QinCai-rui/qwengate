@@ -15,9 +15,9 @@ export const QWEN_CHAT_COMPLETIONS_URL = `${QWEN_API_BASE}/api/v2/chat/completio
 export const QWEN_SETTINGS_URL = `${QWEN_API_BASE}/api/v2/users/user/settings/update`;
 
 /** Build shared feature_config for Qwen message payloads. */
-export function buildFeatureConfig(enableThinking: boolean): Record<string, any> {
+export function buildFeatureConfig(_enableThinking: boolean): Record<string, any> {
   return {
-    thinking_enabled: enableThinking,
+    thinking_enabled: true,
     output_schema: 'phase',
     research_mode: 'normal',
     auto_thinking: false,
@@ -164,16 +164,28 @@ async function applyRequestJitter(accountEmail?: string): Promise<void> {
   const now = Date.now();
   const last = lastRequestTime.get(accountEmail) || 0;
   const elapsed = now - last;
-  if (elapsed < 2000) {
-    const jitter = 100 + Math.random() * 400;
-    await new Promise((r) => setTimeout(r, jitter));
+
+  // Minimum gap between requests from the same account (1-3 seconds)
+  const minGap = 1000 + Math.random() * 2000;
+  if (elapsed < minGap) {
+    const wait = minGap - elapsed + Math.random() * 500;
+    await new Promise((r) => setTimeout(r, wait));
   }
+
+  // Occasional longer pause (10% chance of 2-5s delay — simulates user reading/thinking)
+  if (Math.random() < 0.1) {
+    const pause = 2000 + Math.random() * 3000;
+    await new Promise((r) => setTimeout(r, pause));
+  }
+
   lastRequestTime.set(accountEmail, Date.now());
 }
 
 const qwenCircuitBreaker = new CircuitBreaker('qwen-api', {
-  failureThreshold: 5,
-  resetTimeoutMs: 30_000,
+  // In CDP mode, first requests per context can take longer (baxia warmup).
+  // With 8 accounts, we need a higher threshold to avoid premature circuit open.
+  failureThreshold: process.env.CHROME_CDP_ENDPOINT ? 15 : 5,
+  resetTimeoutMs: process.env.CHROME_CDP_ENDPOINT ? 15_000 : 30_000,
   halfOpenMaxAttempts: 1,
 });
 
@@ -244,6 +256,9 @@ export async function createQwenStream(
     baseDelayMs: Math.max(0, config.getInt('RETRY_BASE_DELAY_MS', 1000)),
     maxDelayMs: Math.max(0, config.getInt('RETRY_MAX_DELAY_MS', 30000)),
     backoffMultiplier: Math.max(0.1, config.getFloat('RETRY_BACKOFF_MULTIPLIER', 2)),
+    // CDP mode: no per-attempt timeout — the stream has its own idle timeout.
+    // Non-CDP mode: 30s default timeout for direct fetch.
+    attemptTimeoutMs: process.env.CHROME_CDP_ENDPOINT ? 0 : 30_000,
   };
 
   const retriesEnabled = config.getBool('RETRY_ENABLED', true);
@@ -272,8 +287,8 @@ export async function createQwenStream(
             // Use the full duration from Qwen (e.g. 7 hours) — do NOT cap at 2h.
             // Capping caused accounts to become "available" while Qwen still rejected them.
             throttleAccount(currentAccountEmail, throttleMs);
-            const nextAccount = await pickAccount();
-            if (nextAccount && nextAccount.email !== currentAccountEmail) {
+            const nextAccount = await pickAccount(currentAccountEmail);
+            if (nextAccount) {
               currentAccountEmail = nextAccount.email;
               // pickAccount incremented inFlight for the new account, but we're about to throw
               // so decrement it — the caller will retry with a fresh pickAccount
@@ -299,8 +314,13 @@ export async function createQwenStream(
           if (currentAccountEmail) {
             forceRefreshBxHeaders(currentAccountEmail).catch(() => {});
             throttleAccount(currentAccountEmail, 5 * 60 * 1000);
-            const nextAccount = await pickAccount();
-            if (nextAccount && nextAccount.email !== currentAccountEmail) {
+            logStore.log(
+              'debug',
+              'qwen',
+              `[Qwen] BOT DETECTION: ${currentAccountEmail} hit FAIL_SYS_USER_VALIDATE — throttled 5min, switching account`,
+            );
+            const nextAccount = await pickAccount(currentAccountEmail);
+            if (nextAccount) {
               currentAccountEmail = nextAccount.email;
               decrementInFlight(nextAccount.email);
             }
@@ -337,7 +357,9 @@ export async function createQwenStream(
     // CDP mode: route through real Chrome's network stack
     if (process.env.CHROME_CDP_ENDPOINT) {
       const bodyStr = JSON.stringify(payload);
-      console.log(
+      logStore.log(
+        'debug',
+        'qwen',
         `[Qwen] CDP request: url=${url} bodyLen=${bodyStr.length} model=${payload.model} chatId=${payload.chat_id} parentId=${payload.parent_id} msgs=${payload.messages.length} hasTools=${!!(payload as any).tools || !!payload.messages[0]?.feature_config?.local_mcp}`,
       );
       const debugEntry = createNetworkEntry({
@@ -349,6 +371,7 @@ export async function createQwenStream(
         accountEmail: currentAccountEmail,
       });
       lastDebugEntryId = debugEntry.id;
+      const _cdpStartTime = Date.now();
       const stream = await performBrowserStream(currentAccountEmail || '', url, bodyStr, streamAbortController.signal);
 
       // Read first chunk to check for __httpError (sent by performBrowserStream when status is non-2xx)
@@ -357,14 +380,45 @@ export async function createQwenStream(
       if (firstChunk.done) throw new Error('Browser stream returned empty response');
 
       const firstText = new TextDecoder().decode(firstChunk.value);
-      console.log(`[Qwen] CDP first chunk (${firstText.length} bytes): ${firstText.substring(0, 200)}`);
+      logStore.log(
+        'debug',
+        'qwen',
+        `[Qwen] CDP first chunk (${firstText.length} bytes) after ${Date.now() - _cdpStartTime}ms: ${firstText.substring(0, 200)}`,
+      );
       try {
         const parsed = JSON.parse(firstText);
         if (parsed.__httpError) {
+          logStore.log(
+            'debug',
+            'qwen',
+            `[Qwen] CDP HTTP error for ${currentAccountEmail}: status=${parsed.status} body=${(parsed.body || '').substring(0, 300)}`,
+          );
           // Create a mock Response so handleErrorResponse can process it
           const mockResponse = new Response(parsed.body, {
             status: parsed.status,
             statusText: parsed.statusText || 'Error',
+            headers: { 'content-type': 'application/json' },
+          });
+          await handleErrorResponse(mockResponse, debugEntry.id);
+          // handleErrorResponse always throws, so we never reach here
+        }
+        // Check for FAIL_SYS_USER_VALIDATE in the first chunk body directly
+        if (
+          parsed.ret?.[0] === 'FAIL_SYS_USER_VALIDATE' ||
+          (typeof parsed.data?.url === 'string' && parsed.data.url.includes('_____tmd_____'))
+        ) {
+          logStore.log(
+            'debug',
+            'qwen',
+            `[Qwen] BOT DETECTION for ${currentAccountEmail}: FAIL_SYS_USER_VALIDATE — throttling account 5min`,
+          );
+          // Throttle this account and throw to trigger retry with different account
+          if (currentAccountEmail) {
+            throttleAccount(currentAccountEmail, 5 * 60 * 1000); // 5 minutes
+          }
+          const mockResponse = new Response(firstText, {
+            status: 200,
+            statusText: 'OK',
             headers: { 'content-type': 'application/json' },
           });
           await handleErrorResponse(mockResponse, debugEntry.id);
@@ -421,6 +475,7 @@ export async function createQwenStream(
         },
       });
 
+      logStore.log('debug', 'qwen', `[Qwen] CDP stream ready: ${Date.now() - _cdpStartTime}ms total setup time for ${currentAccountEmail}`);
       return { response: new Response(mergedStream), headers: {}, qwenLogFile: undefined };
     }
 

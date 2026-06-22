@@ -3,14 +3,15 @@ import { existsSync, unlinkSync, writeFileSync } from 'fs';
 import { Hono } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
 import { cors } from 'hono/cors';
-import { fileURLToPath } from 'url';
+
 import { rateLimitMiddleware, startAutoCleanup, stopAutoCleanup } from './middleware/rateLimit.ts';
 import { accountsRouter } from './routes/accounts.ts';
 import { chatCompletions } from './routes/chat.ts';
 import { configRouter } from './routes/config.ts';
 import { registerDashboardRoutes } from './routes/dashboard/dashboardRoutes.ts';
 import { debugNetworkApp } from './routes/debugNetwork.ts';
-import { getAccountCount, getAccountStats, getAvailableCount, initAuth } from './services/auth.ts';
+import { getAccountCount, getAccountStats, getAccounts, getAvailableCount, initAuth, setStartupStatus } from './services/auth.ts';
+import { hasAccountContext } from './services/cdpClient.ts';
 import { startBrowser, stopBrowser } from './services/autoBrowser.ts';
 import { config } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
@@ -84,6 +85,12 @@ async function gracefulShutdown(_signal: string): Promise<void> {
     /* intentional */
   }
   try {
+    const { stopAllAccounts } = await import('./services/cdpClient.ts');
+    stopAllAccounts();
+  } catch {
+    /* intentional */
+  }
+  try {
     await closePlaywright();
   } catch (err: any) {
     console.error('[Shutdown] Playwright close error:', err.message);
@@ -101,7 +108,16 @@ async function gracefulShutdown(_signal: string): Promise<void> {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-app.use('*', cors({ origin: ['http://localhost:26405', 'http://127.0.0.1:26405'] }));
+app.use('*', cors({ origin: '*' }));
+
+// Debug: log all incoming requests
+app.use('*', async (c, next) => {
+  const method = c.req.method;
+  const path = c.req.path;
+  const ua = c.req.header('user-agent') || 'unknown';
+  logStore.log('debug', 'http', `${method} ${path} UA=${ua.slice(0, 80)}`);
+  await next();
+});
 
 // Health check — reports actual system status
 app.get('/health', (c) => {
@@ -206,7 +222,7 @@ app.get(
 );
 
 // Initialize playwright when server starts
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   let browserType: BrowserType = 'chromium';
   const browserArg = process.argv.find((arg) => arg.startsWith('--browser='));
   if (browserArg) {
@@ -301,7 +317,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       } catch (err: any) {
         if (err.code === 'EADDRINUSE') {
           const fallbackPort = port + 1;
-          console.warn(`Port ${port} in use, trying ${fallbackPort}...`);
+          logStore.log('debug', 'server', `Port ${port} in use, trying ${fallbackPort}...`);
           await createServer(fallbackPort, host);
         } else {
           throw err;
@@ -347,35 +363,62 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 
       logStore.log('info', 'boot', 'Dashboard live — starting background initialization...');
 
-      // ── Phase 1.5: Initialize CDP client before auth (connects to auto-launched Chrome) ──
-      if (process.env.CHROME_CDP_ENDPOINT) {
-        try {
-          const { initCdpClient } = await import('./services/cdpClient.ts');
-          await initCdpClient();
-          logStore.log('info', 'boot', 'CDP client initialized');
-        } catch (err: any) {
-          logStore.log('warn', 'boot', `CDP client init failed: ${err.message}`);
-        }
-      }
-
-      // ── Phase 2: Auth + post-boot tasks run in background ──
+      // ── Phase 2: Auth + CDP contexts + post-boot tasks ──
       (async () => {
         logStore.log('info', 'boot', '[1/5] Authenticating accounts...');
         try {
-          await initAuth(async (email) => {
-            await configureAccount(email);
-          });
-          logStore.log('info', 'boot', '[1/5] Accounts authenticated + configured');
+          await initAuth();
+          logStore.log('info', 'boot', '[1/5] Accounts authenticated');
+          for (const acct of getAccounts()) {
+            setStartupStatus(acct.email, 'pending');
+          }
         } catch (err: any) {
           logStore.log('warn', 'boot', `[1/5] initAuth failed: ${err.message}`);
         }
 
-        logStore.log('info', 'boot', '[2/5] Pre-warming headers...');
+        // ── Phase 2b: Initialize CDP contexts AFTER auth (fresh profileCookies) ──
+        if (process.env.CHROME_CDP_ENDPOINT) {
+          try {
+            const { initAllAccountContexts } = await import('./services/cdpClient.ts');
+            // Use in-memory accounts — profileCookies were loaded from browser profiles during initAuth
+            const acctData = getAccounts().map((a) => ({
+              email: a.email,
+              profileCookies: a.profileCookies,
+            }));
+            await initAllAccountContexts(acctData);
+            logStore.log('info', 'boot', `[2/5] CDP contexts initialized for ${acctData.length} accounts`);
+          } catch (err: any) {
+            logStore.log('warn', 'boot', `CDP account contexts init failed: ${err.message}`);
+          }
+        }
+
+        // ── Phase 2c: Configure accounts AFTER CDP contexts are ready ──
+        logStore.log('info', 'boot', '[3/5] Configuring accounts...');
+        try {
+          const acctList = getAccounts().filter((a) => a.state?.token && hasAccountContext(a.email));
+          await Promise.allSettled(
+            acctList.map(async (acct) => {
+              try {
+                await configureAccount(acct.email);
+              } catch (err: any) {
+                logStore.log('warn', 'boot', `Configure failed for ${acct.email}: ${err.message}`);
+              }
+            }),
+          );
+          logStore.log('info', 'boot', `[3/5] Accounts configured`);
+          for (const acct of getAccounts()) {
+            if (acct.state?.token) setStartupStatus(acct.email, 'ready');
+          }
+        } catch (err: any) {
+          logStore.log('warn', 'boot', `[3/5] Configure failed: ${err.message}`);
+        }
+
+        logStore.log('info', 'boot', '[4/5] Pre-warming headers...');
         try {
           await getQwenHeaders();
-          logStore.log('info', 'boot', '[2/5] Headers ready');
+          logStore.log('info', 'boot', '[4/5] Headers ready');
         } catch (err: any) {
-          logStore.log('warn', 'boot', `[2/5] Header pre-warm failed: ${err.message}`);
+          logStore.log('warn', 'boot', `[4/5] Header pre-warm failed: ${err.message}`);
         }
 
         logStore.log('info', 'boot', 'All background initialization complete');

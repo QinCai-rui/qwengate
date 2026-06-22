@@ -5,7 +5,8 @@
  */
 
 import { launchPersistentContext as cloakPersistentContext } from 'cloakbrowser';
-import { mkdirSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import type { Cookie } from 'playwright';
 import { projectPath } from '../utils/paths.ts';
 import { logStore } from './logStore.ts';
@@ -17,7 +18,24 @@ export function getProfileDir(email: string): string {
     .replace(/[^a-z0-9]/g, '_');
   const dir = projectPath('.qwen', 'browser-profiles', safe);
   mkdirSync(dir, { recursive: true });
+  // Set profile name to email so the Chrome window shows the account
+  const prefsFile = `${dir}/Preferences`;
+  const prefs: Record<string, any> = existsSync(prefsFile) ? JSON.parse(readFileSync(prefsFile, 'utf-8')) : {};
+  prefs.profile = { ...prefs.profile, name: email };
+  writeFileSync(prefsFile, JSON.stringify(prefs), 'utf-8');
   return dir;
+}
+
+/** Remove stale Chrome singleton files that block new instances from starting on this profile. */
+function cleanupSingletonLock(profileDir: string): void {
+  for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+    try {
+      const f = join(profileDir, name);
+      if (existsSync(f)) rmSync(f, { recursive: true });
+    } catch {
+      // best effort
+    }
+  }
 }
 
 export type LoginResult = 'success' | 'captcha' | 'closed' | 'error';
@@ -30,27 +48,15 @@ import { validateQwenUrl } from './playwright.ts';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+export const BROWSER_DEFAULT_ARGS: readonly string[] = ['--no-sandbox', '--disable-setuid-sandbox', '--ozone-platform-hint=auto'];
+
 function getBrowserArgs(): string[] {
-  return [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--window-size=1920,1080',
-    '--window-position=0,0',
-    '--disable-dev-shm-usage',
-    '--disable-popup-blocking',
-    '--mute-audio',
-    '--no-first-run',
-    '--disable-background-networking',
-    '--disable-default-apps',
-    '--disable-sync',
-    '--disable-translate',
-    '--metrics-recording-only',
-    '--disable-blink-features=AutomationControlled',
-  ];
+  return [...BROWSER_DEFAULT_ARGS];
 }
 
 async function setupBrowserContext(email: string, headless: boolean): Promise<any> {
   const profileDir = getProfileDir(email);
+  cleanupSingletonLock(profileDir);
   return await cloakPersistentContext({
     userDataDir: profileDir,
     headless,
@@ -139,34 +145,26 @@ async function tryCheckToken(context: any, email: string): Promise<LoginResult |
   }
 }
 
-async function tryCheckCaptcha(page: any, context: any, attempt: number, headless: boolean): Promise<'captcha' | null> {
+async function tryCheckCaptcha(page: any, context: any, attempt: number): Promise<'captcha' | null> {
   if (attempt <= 0 || attempt % 3 !== 0) return null;
   try {
     const hasCaptcha = await detectCaptcha(page);
     if (!hasCaptcha) return null;
-    if (headless) {
-      try {
-        await context.close();
-      } catch {
-        logStore.log('warn', 'browser', 'context.close failed in tryCheckCaptcha');
-      }
-      return 'captcha';
-    }
+    return 'captcha';
   } catch {
     logStore.log('warn', 'browser', 'captcha detection failed in tryCheckCaptcha');
   }
   return null;
 }
 
-async function pollForToken(page: any, context: any, email: string, headless: boolean): Promise<LoginResult | null> {
-  const maxAttempts = headless ? 20 : Infinity;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+async function pollForToken(page: any, context: any, email: string): Promise<LoginResult | null> {
+  for (let attempt = 0; attempt < 20; attempt++) {
     await sleep(2000);
 
     const tokenResult = await tryCheckToken(context, email);
     if (tokenResult) return tokenResult;
 
-    const captchaResult = await tryCheckCaptcha(page, context, attempt, headless);
+    const captchaResult = await tryCheckCaptcha(page, context, attempt);
     if (captchaResult) return captchaResult;
   }
   return null;
@@ -200,7 +198,7 @@ export async function openBrowserProfile(email: string, password?: string, optio
     }
 
     logStore.log('info', 'browser', `Polling for token for ${email}...`);
-    const result = await pollForToken(page, context, email, headless);
+    const result = await pollForToken(page, context, email);
     if (result) {
       logStore.log('info', 'browser', `✓ Login successful for ${email}`);
       return result;
@@ -238,20 +236,7 @@ export async function refreshViaProfile(email: string): Promise<boolean> {
       headless: true,
       humanize: true,
       geoip: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-popup-blocking',
-        '--mute-audio',
-        '--no-first-run',
-        '--disable-background-networking',
-        '--disable-default-apps',
-        '--disable-sync',
-        '--disable-translate',
-        '--metrics-recording-only',
-        '--disable-blink-features=AutomationControlled',
-      ],
+      args: [...BROWSER_DEFAULT_ARGS],
     });
 
     const page = context.pages()[0] || (await context.newPage());

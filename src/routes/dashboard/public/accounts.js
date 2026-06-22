@@ -35,14 +35,20 @@ function setError(msg) {
 
 /* ── Accounts Table ── */
 function getAuthStatus(acct) {
-  if (acct.authenticated) return 'live';
+  if (acct.startupStatus === 'connecting') return 'connecting';
+  if (acct.startupStatus === 'initializing' || acct.startupStatus === 'pending') {
+    return 'pending';
+  }
   if (acct.throttled) return 'throttled';
+  if (acct.authenticated) return 'live';
   if (acct.tokenExpiresInMs != null && acct.tokenExpiresInMs < 0) return 'expired';
   return 'unknown';
 }
 
 function getAuthLabel(status) {
   if (status === 'live') return 'Authenticated';
+  if (status === 'pending') return 'Starting...';
+  if (status === 'connecting') return 'Connecting...';
   if (status === 'expired') return 'Expired';
   if (status === 'throttled') return 'Throttled';
   return 'Not authenticated';
@@ -63,6 +69,27 @@ function makeThrottleBadge(acct) {
   return '<span class="badge badge-neutral">OK</span>';
 }
 
+function makeCdpBadge(a) {
+  var cdp = a.cdp;
+  if (!cdp || !cdp.connected) {
+    return '<span class="badge badge-neutral">Not connected</span>';
+  }
+  var parts = [];
+  parts.push('<span class="badge badge-success">Connected</span>');
+  if (cdp.baxiaReady) {
+    parts.push('<span class="badge badge-success">Baxia OK</span>');
+  } else {
+    parts.push('<span class="badge badge-warning">Baxia pending</span>');
+  }
+  if (cdp.activeBindings > 0) {
+    parts.push('<span class="badge badge-info">' + cdp.activeBindings + ' streams</span>');
+  }
+  if (cdp.queueSize > 0) {
+    parts.push('<span class="badge badge-warning">' + cdp.queueSize + ' queued</span>');
+  }
+  return '<div class="auth-status" style="flex-wrap:wrap;gap:3px">' + parts.join('') + '</div>';
+}
+
 function renderAccountsTable(accts) {
   if (!Array.isArray(accts) || accts.length === 0) {
     document.getElementById('acctBody').innerHTML = '';
@@ -78,6 +105,7 @@ function renderAccountsTable(accts) {
     var status = getAuthStatus(a);
     var label = getAuthLabel(status);
     var hideLogin = status === 'live' ? ' style="display:none"' : '';
+    var cdp = makeCdpBadge(a);
     rows +=
       '<tr>' +
       '<td>' +
@@ -88,6 +116,9 @@ function renderAccountsTable(accts) {
       '"></span>' +
       label +
       '</div></td>' +
+      '<td>' +
+      cdp +
+      '</td>' +
       '<td>' +
       (a.inFlight || 0) +
       '</td>' +

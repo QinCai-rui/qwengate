@@ -5,7 +5,7 @@ import { logStore } from './logStore.ts';
 import { QWEN_BX_V } from './qwen.ts';
 
 export type { BrowserProfileOptions, LoginResult } from './browserProfiles.ts';
-export { getProfileDir, openBrowserProfile, refreshViaProfile } from './browserProfiles.ts';
+export { getProfileDir, openBrowserProfile, refreshViaProfile, BROWSER_DEFAULT_ARGS } from './browserProfiles.ts';
 
 const QWEN_BASE_URL = 'https://chat.qwen.ai';
 export type BrowserType = 'chromium' | 'firefox' | 'webkit' | 'chrome' | 'edge';
@@ -134,9 +134,12 @@ export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
     return { cookie: 'token=mock', userAgent: 'mock', bxV: QWEN_BX_V, bxUmidtoken: '', bxUa: '', email: 'mock@test' };
   // CDP mode: browser handles all headers automatically
   if (process.env.CHROME_CDP_ENDPOINT) {
-    const { pickAccount } = await import('./auth.ts');
+    const { pickAccount, decrementInFlight } = await import('./auth.ts');
     const acct = email ? { email } : await pickAccount();
-    return { cookie: '', userAgent: '', bxV: QWEN_BX_V, bxUmidtoken: '', bxUa: '', email: acct?.email || '' };
+    const result = { cookie: '', userAgent: '', bxV: QWEN_BX_V, bxUmidtoken: '', bxUa: '', email: acct?.email || '' };
+    // pickAccount incremented inFlight — release since we're not using the account for a request
+    if (!email && acct?.email) decrementInFlight(acct.email);
+    return result;
   }
   await initPlaywright();
   if (!cachedUserAgent) {
@@ -756,8 +759,8 @@ export async function performBrowserFetch(
   // This bypasses WAF by using Chrome's native TLS/HTTP2 fingerprint with
   // baxia-wrapped fetch — the only reliable way to avoid FAIL_SYS_USER_VALIDATE.
   if (process.env.CHROME_CDP_ENDPOINT) {
-    const { browserFetch: cdpFetch } = await import('./cdpClient.ts');
-    return cdpFetch(url, { method: options.method, body: options.body, timeout: options.timeout || 30000 });
+    const { browserFetchForAccount } = await import('./cdpClient.ts');
+    return browserFetchForAccount(email, url, { method: options.method, body: options.body, timeout: options.timeout || 30000 });
   }
 
   let accCtx = accountContexts.get(email);
@@ -895,10 +898,9 @@ export async function performBrowserStream(
   // CDP mode: route through real Chrome's network stack with incremental streaming.
   // Uses Runtime.addBinding + XHR onprogress to deliver SSE chunks in real time.
   if (process.env.CHROME_CDP_ENDPOINT) {
-    const { browserStreamFetchIncremental } = await import('./cdpClient.ts');
-    const result = await browserStreamFetchIncremental(url, body);
+    const { browserStreamFetchIncrementalForAccount } = await import('./cdpClient.ts');
+    const result = await browserStreamFetchIncrementalForAccount(email, url, body);
     if (!result.ok) {
-      // Should not happen — errors arrive as __httpError chunks in the stream
       const errPayload = JSON.stringify({ __httpError: true, status: result.status, body: '' });
       return new ReadableStream<Uint8Array>({
         start(controller) {
@@ -907,7 +909,6 @@ export async function performBrowserStream(
         },
       });
     }
-    // Return the incremental stream directly — chunks arrive as they're produced
     return result.stream;
   }
 

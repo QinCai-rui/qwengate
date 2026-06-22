@@ -9,6 +9,7 @@ import os from 'os';
 import path from 'path';
 import type { AccountEntry } from '../types/auth.ts';
 import { projectPath } from '../utils/paths.ts';
+import { getCdpStatuses } from './cdpClient.ts';
 import { config } from './configService.ts';
 import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
@@ -64,7 +65,6 @@ interface PersistedAccountData {
   email: string;
   password: string;
   throttledUntil?: number;
-  profileCookies?: string;
 }
 export function parseAccountsFromEnv(): Array<{ email: string; password: string }> {
   const result: Array<{ email: string; password: string }> = [];
@@ -194,13 +194,12 @@ export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
     .filter((a) => a.password)
     .map((a) => ({
       email: a.email,
-      password: encryptPassword(a.password),
+      password: a.password, // plaintext
       ...(a.throttledUntil > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
-      ...(a.profileCookies ? { profileCookies: a.profileCookies } : {}),
     }));
   writeFileSync(ACCOUNTS_FILE, JSON.stringify(data, null, 2), 'utf-8');
 }
-export function loadAccountsFromFile(): Array<{ email: string; password: string; throttledUntil?: number; profileCookies?: string }> {
+export function loadAccountsFromFile(): Array<{ email: string; password: string; throttledUntil?: number }> {
   try {
     if (!existsSync(ACCOUNTS_FILE)) {
       return [];
@@ -212,7 +211,6 @@ export function loadAccountsFromFile(): Array<{ email: string; password: string;
         email: d.email,
         password: decryptPassword(d.password),
         throttledUntil: d.throttledUntil,
-        profileCookies: d.profileCookies,
       }));
   } catch (err: any) {
     logStore.log('error', 'auth', `Failed to load accounts file: ${err.message}`);
@@ -242,7 +240,11 @@ export async function addAccount(email: string, password: string): Promise<{ log
 
   // Step 1: Create and authorize the browser profile
   const { openBrowserProfile } = await import('./browserProfiles.ts');
-  const profileResult = await openBrowserProfile(normalizedEmail, password, { headless: true });
+  let profileResult = await openBrowserProfile(normalizedEmail, password, { headless: true });
+  if (profileResult === 'captcha') {
+    logStore.log('info', 'account', `Captcha for ${normalizedEmail} — opening headed browser...`);
+    profileResult = await openBrowserProfile(normalizedEmail, password, { headless: false });
+  }
 
   if (profileResult === 'success') {
     // Step 2: Extract token from the now-authenticated profile
@@ -408,12 +410,15 @@ export function isAvailable(acct: AccountEntry): boolean {
   if (acct.throttledUntil > Date.now()) return false;
   return true;
 }
-export async function pickAccount(): Promise<AccountEntry | null> {
+export async function pickAccount(excludeEmail?: string): Promise<AccountEntry | null> {
   // No lock needed — all operations are synchronous and fast.
   // Worst case for concurrent access: slightly imbalanced inFlight count,
   // which is acceptable for load-balancing purposes.
   try {
-    const available = accounts.filter(isAvailable);
+    let available = accounts.filter(isAvailable);
+    if (excludeEmail) {
+      available = available.filter((a) => a.email !== excludeEmail);
+    }
     if (available.length === 0) {
       // All accounts are throttled or unauthenticated — return null instead
       // of falling back to a throttled account (which would guaranteed fail).
@@ -421,7 +426,9 @@ export async function pickAccount(): Promise<AccountEntry | null> {
       if (accounts.length === 0) {
         return null;
       }
-      logStore.log('warn', 'auth', `All ${accounts.length} accounts throttled — returning null`);
+      const throttled = accounts.filter((a) => a.throttledUntil > Date.now()).length;
+      const noState = accounts.filter((a) => !a.state).length;
+      logStore.log('warn', 'auth', `All ${accounts.length} accounts exhausted — ${throttled} throttled, ${noState} unauthenticated`);
       return null;
     }
     const pool = available.filter((a) => a.inFlight === 0);
@@ -431,11 +438,20 @@ export async function pickAccount(): Promise<AccountEntry | null> {
     for (let i = 1; i < candidates.length; i++) {
       const a = candidates[i];
       const b = candidates[bestIdx];
-      if (a.inFlight < b.inFlight || (a.inFlight === b.inFlight && (a.lastUsed || 0) < (b.lastUsed || 0))) {
+      if (
+        a.inFlight < b.inFlight ||
+        (a.inFlight === b.inFlight && a.totalRequests < b.totalRequests) ||
+        (a.inFlight === b.inFlight && a.totalRequests === b.totalRequests && (a.lastUsed || 0) < (b.lastUsed || 0))
+      ) {
         bestIdx = i;
       }
     }
     const picked = candidates[bestIdx];
+    logStore.log(
+      'debug',
+      'auth',
+      `[Account] Picked ${picked.email} — inFlight=${picked.inFlight} totalReqs=${picked.totalRequests} lastUsed=${picked.lastUsed ? Date.now() - picked.lastUsed + 'ms ago' : 'never'}${excludeEmail ? ` (excluded: ${excludeEmail})` : ''}`,
+    );
     picked.lastUsed = Date.now();
     picked.inFlight++;
     // Safety valve: reset if counter drifts unreasonably high
@@ -491,8 +507,19 @@ export function getAccountStats(): Array<{
   lastUsedAgoMs: number;
   inFlight: number;
   totalRequests: number;
+  cdp: {
+    email: string;
+    connected: boolean;
+    baxiaReady: boolean;
+    fetchWrapped: boolean;
+    sessionId: string;
+    queueSize: number;
+    activeBindings: number;
+  } | null;
 }> {
   const now = Date.now();
+  const cdpStatuses = getCdpStatuses();
+  const cdpByEmail = new Map(cdpStatuses.map((c) => [c.email, c]));
   return accounts.map((a) => ({
     email: a.email,
     authenticated: a.state !== null,
@@ -503,6 +530,7 @@ export function getAccountStats(): Array<{
     lastUsedAgoMs: a.lastUsed ? now - a.lastUsed : -1,
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
+    cdp: cdpByEmail.get(a.email) ?? null,
   }));
 }
 export function getAccountCount(): number {
@@ -519,10 +547,15 @@ export function getAccounts(): readonly AccountEntry[] {
 }
 export async function getToken(): Promise<string | null> {
   const acct = await pickAccount();
-  return acct?.state?.token || null;
+  if (acct) {
+    decrementInFlight(acct.email);
+    return acct.state?.token || null;
+  }
+  return null;
 }
 export async function getTokenWithAccount(email?: string): Promise<{ token: string; email: string } | null> {
   let acct: AccountEntry | null;
+  let picked = false;
   if (email) {
     acct = getAccountByEmail(email);
     if (acct && !isAvailable(acct) && acct.state) {
@@ -530,8 +563,13 @@ export async function getTokenWithAccount(email?: string): Promise<{ token: stri
     }
   } else {
     acct = await pickAccount();
+    picked = true;
   }
-  if (!acct?.state?.token) return null;
+  if (!acct?.state?.token) {
+    if (picked && acct) decrementInFlight(acct.email);
+    return null;
+  }
   acct.lastUsed = Date.now();
+  if (picked) decrementInFlight(acct.email);
   return { token: acct.state.token, email: acct.email };
 }

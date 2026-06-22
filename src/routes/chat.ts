@@ -1,9 +1,12 @@
 import crypto from 'node:crypto';
 import { Context } from 'hono';
-import { pickAccount } from '../services/auth.ts';
+import { pickAccount, decrementInFlight, throttleAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
+import { RetryableQwenStreamError } from '../services/qwen.ts';
+import { uploadLargeTextAsFile } from '../services/qwenFileUpload.ts';
+import type { QwenFileAttachment } from '../services/qwenFileUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import { OpenAIRequest } from '../types/openai.ts';
@@ -24,7 +27,7 @@ export {
   getNewContent,
 } from './chatHelpers.ts';
 
-const MAX_MESSAGE_SIZE = 100_000; // 100KB per message
+const MAX_MESSAGE_SIZE = 10_000_000; // 10MB — large payloads are uploaded as files via Qwen's file API
 
 async function parseRequestBody(c: Context) {
   const rawBody = await c.req.json();
@@ -85,16 +88,48 @@ async function parseRequestBody(c: Context) {
 }
 
 async function setupSession(messages: any[], body: OpenAIRequest, availableTokens: number, toolCalling: boolean, logId: string) {
-  const { qwenMessages: processedMessages } = buildQwenMessages(messages, body, availableTokens, toolCalling);
+  const {
+    qwenMessages: processedMessages,
+    systemContent,
+    toolResultsContent,
+  } = buildQwenMessages(messages, body, availableTokens, toolCalling);
+
+  // Upload system prompt and tool results as files attached to the message
+  const fileAttachments: QwenFileAttachment[] = [];
+  if (systemContent || toolResultsContent) {
+    const uploadAccount = await pickAccount();
+    if (uploadAccount?.email) {
+      if (systemContent) {
+        try {
+          const file = await uploadLargeTextAsFile(uploadAccount.email, systemContent, 'system-prompt.md');
+          fileAttachments.push(file);
+        } catch (err: any) {
+          logStore.log('debug', 'chat', '[Chat] Failed to upload system prompt file: ' + (err.message || err));
+        }
+      }
+      if (toolResultsContent) {
+        try {
+          const file = await uploadLargeTextAsFile(uploadAccount.email, toolResultsContent, 'tool-result.md');
+          fileAttachments.push(file);
+        } catch (err: any) {
+          logStore.log('debug', 'chat', '[Chat] Failed to upload tool results file: ' + (err.message || err));
+        }
+      }
+    }
+    if (uploadAccount?.email) decrementInFlight(uploadAccount.email);
+  }
+  if (fileAttachments.length > 0) {
+    processedMessages[0] = { ...processedMessages[0], files: fileAttachments };
+  }
+
+  let lastFailedEmail: string | undefined;
 
   const isThinkingModel = !body.model.includes('no-thinking');
   const MAX_ACCOUNT_RETRIES = 5;
   let lastError: any;
 
   for (let attempt = 0; attempt < MAX_ACCOUNT_RETRIES; attempt++) {
-    const selectedAccount = await pickAccount();
-    // If no accounts available AND none are throttled, there are simply no accounts configured.
-    // Fall through to acquireSessionWithCorrections with undefined email (mock Playwright path).
+    const selectedAccount = await pickAccount(lastFailedEmail);
     const accountEmail = selectedAccount?.email;
     if (!selectedAccount && attempt > 0) {
       // On retry: if still no accounts, all are throttled — stop retrying
@@ -105,7 +140,9 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
     try {
       sessionResult = await acquireSessionWithCorrections(accountEmail, processedMessages);
     } catch (err) {
+      lastFailedEmail = accountEmail;
       lastError = err;
+      if (accountEmail) decrementInFlight(accountEmail);
       continue; // Try next account
     }
     const { session, qwenMessages: sessionMessages, nextParentId, sessionHeaders, resolvedEmail } = sessionResult;
@@ -133,12 +170,46 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       // Release the acquired session to prevent pool exhaustion + inFlight leak
       sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
 
-      // If rate limited, try next account silently (don't send error to client yet)
+      logStore.log(
+        'debug',
+        'chat',
+        `[Chat] Request failed on ${resolvedEmail}: ${err.message || err} (attempt ${attempt + 1}/${MAX_ACCOUNT_RETRIES})`,
+      );
+
+      // If rate limited, try next account — Qwen didn't process the request yet
       if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
+        lastFailedEmail = resolvedEmail;
         lastError = err;
         continue;
       }
-      throw err; // Non-rate-limit errors propagate immediately
+      // Bot detection / CAPTCHA: Qwen rejected BEFORE processing (safe to retry on another account).
+      // Throttle the detected account so pickAccount won't pick it again.
+      if (
+        (err.message || '').includes('FAIL_SYS_USER_VALIDATE') ||
+        (err.message || '').includes('CAPTCHA') ||
+        err instanceof RetryableQwenStreamError
+      ) {
+        lastFailedEmail = resolvedEmail;
+        lastError = err;
+        if (resolvedEmail) throttleAccount(resolvedEmail, 5 * 60 * 1000);
+        continue;
+      }
+      // Timeout / slow response: Qwen didn't respond in time — skip to next account without penalty
+      if (
+        err.name === 'AbortError' ||
+        (err.message || '').includes('timed out') ||
+        (err.message || '').includes('timeout') ||
+        (err.message || '').includes('ETIMEDOUT') ||
+        err.upstreamStatus === 408 ||
+        err.upstreamStatus === 504
+      ) {
+        lastFailedEmail = resolvedEmail;
+        lastError = err;
+        continue;
+      }
+      // All other errors (network, session): Qwen may have processed the request.
+      // Don't throttle — let the user retry manually.
+      throw err;
     }
     let { stream, abortController: qwenAbortController } = streamResult;
 
@@ -156,6 +227,8 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
         preview: finalPrompt.length > 1000 ? finalPrompt.substring(0, 1000) + '...' : finalPrompt,
       };
     });
+
+    logStore.log('debug', 'chat', `[Chat] Request routed to ${resolvedEmail} — stream ready (attempt ${attempt + 1})`);
 
     return {
       sessionMessages,
@@ -188,10 +261,13 @@ function populateLogEntry(logEntry: any, body: OpenAIRequest, messages: any[]): 
 
 export async function chatCompletions(c: Context) {
   const logId = crypto.randomUUID();
+  const _requestStartTime = Date.now();
   try {
     const parsed = await parseRequestBody(c);
     const { body, isStream, toolCalling, cleanOutput, messages, contextCheck } = parsed;
-    console.log(
+    logStore.log(
+      'debug',
+      'chat',
       `[Chat] Request: model=${body.model} stream=${isStream} msgs=${messages.length} tools=${body.tools?.length || 0} msgSizes=[${messages.map((m: any) => `${m.role}:${typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content).length}`).join(',')}]`,
     );
     logStore.createEntry(logId, body.model, isStream);
@@ -258,6 +334,7 @@ export async function chatCompletions(c: Context) {
       cleanOutput,
     });
   } catch (err: any) {
+    console.error(`[Chat] <<< Request failed after ${Date.now() - _requestStartTime}ms: ${err?.message || err}`);
     console.error('Error in chatCompletions:', err);
     logStore.addError(logId, err.message || String(err));
     logStore.updateEntry(logId, (entry) => {
