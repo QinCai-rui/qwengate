@@ -11,12 +11,12 @@
  * Phase A: bx-ua still uses fallback (Phase B adds fireyejs generation).
  * Phase C: bx-pp will be added per-request.
  */
-import wreq, { type Session, type BrowserProfile, type EmulationOS } from 'wreq-js';
-import { logStore } from './logStore.ts';
-import { tokenCache } from './tokenCache.ts';
+import wreq, { type BrowserProfile, type EmulationOS, type Session } from 'wreq-js';
 import { extractBxUmidtoken } from './bxTokenExtractor.ts';
-import { generateBxUa, generateBxPp, refreshCookiesViaBrowser } from './fireyejsRunner.ts';
+import { generateBxPp, generateBxUa, refreshCookiesViaBrowser } from './fireyejsRunner.ts';
+import { logStore } from './logStore.ts';
 import { QWEN_API_BASE } from './qwen.ts';
+import { tokenCache } from './tokenCache.ts';
 
 // ponytail: single shared session for now. Upgrade to per-account sessions when
 // multiple accounts need independent cookie jars.

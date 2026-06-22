@@ -15,8 +15,9 @@
  *   8. WebGL (getParameter + method proxies)
  *   9. Math.random (seeded for reproducibility)
  */
-import vm from 'node:vm';
+
 import crypto from 'node:crypto';
+import vm from 'node:vm';
 
 // ─── Seeded PRNG (xoshiro128**) ──────────────────────────────────────────────
 

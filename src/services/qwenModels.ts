@@ -1,12 +1,12 @@
 import modelSpecs from '../models.json' with { type: 'json' };
 import type { ModelSpec } from '../types/openai.ts';
 import { decrementInFlight, getAllAccountEmails, getTokenWithAccount } from './auth.ts';
+import { browserlessFetch } from './browserlessFetch.ts';
 import { config } from './configService.ts';
 import { DEFAULT_SYSTEM_PROMPT } from './defaultSystemPrompt.ts';
 import { logStore } from './logStore.ts';
 import { completeEntry, errorEntry } from './networkDebug.ts';
 import { getBasicHeaders } from './playwright.ts';
-import { browserlessFetch } from './browserlessFetch.ts';
 import { QWEN_API_BASE, QWEN_CHATS_URL, QWEN_MODELS_URL, QWEN_SETTINGS_URL } from './qwen.ts';
 
 export { DEFAULT_SYSTEM_PROMPT };

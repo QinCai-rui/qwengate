@@ -1,7 +1,7 @@
 /**
  * Tests for bxUaGenerator — pure Node.js bx-ua token generator.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { getBxUaToken, resetCache } from './bxUaGenerator.ts';
 
 const BX_UA_PREFIX = '231!';
