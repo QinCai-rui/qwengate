@@ -3,7 +3,7 @@ import { existsSync, unlinkSync, writeFileSync } from 'fs';
 import { Hono } from 'hono';
 import { bearerAuth } from 'hono/bearer-auth';
 import { cors } from 'hono/cors';
-import { fileURLToPath } from 'url';
+
 import { rateLimitMiddleware, startAutoCleanup, stopAutoCleanup } from './middleware/rateLimit.ts';
 import { accountsRouter } from './routes/accounts.ts';
 import { chatCompletions } from './routes/chat.ts';
@@ -221,7 +221,7 @@ app.get(
 );
 
 // Initialize playwright when server starts
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   let browserType: BrowserType = 'chromium';
   const browserArg = process.argv.find((arg) => arg.startsWith('--browser='));
   if (browserArg) {
