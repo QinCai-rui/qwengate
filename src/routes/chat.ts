@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { Context } from 'hono';
-import { pickAccount, decrementInFlight, throttleAccount } from '../services/auth.ts';
+import { pickAccount, throttleAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
@@ -94,34 +94,8 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
     toolResultsContent,
   } = buildQwenMessages(messages, body, availableTokens, toolCalling);
 
-  // Upload system prompt and tool results as files attached to the message
-  const fileAttachments: QwenFileAttachment[] = [];
-  if (systemContent || toolResultsContent) {
-    const uploadAccount = await pickAccount();
-    if (uploadAccount?.email) {
-      if (systemContent) {
-        try {
-          const file = await uploadLargeTextAsFile(uploadAccount.email, systemContent, 'system-prompt.md');
-          fileAttachments.push(file);
-        } catch (err: any) {
-          logStore.log('debug', 'chat', '[Chat] Failed to upload system prompt file: ' + (err.message || err));
-        }
-      }
-      if (toolResultsContent) {
-        try {
-          const file = await uploadLargeTextAsFile(uploadAccount.email, toolResultsContent, 'tool-result.md');
-          fileAttachments.push(file);
-        } catch (err: any) {
-          logStore.log('debug', 'chat', '[Chat] Failed to upload tool results file: ' + (err.message || err));
-        }
-      }
-    }
-    if (uploadAccount?.email) decrementInFlight(uploadAccount.email);
-  }
-  if (fileAttachments.length > 0) {
-    processedMessages[0] = { ...processedMessages[0], files: fileAttachments };
-  }
-
+  // File upload happens inside retry loop using the same account as the request
+  // (accounts can't access files uploaded by other accounts — must share the account)
   let lastFailedEmail: string | undefined;
 
   const isThinkingModel = !body.model.includes('no-thinking');
@@ -136,13 +110,42 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
     }
 
+    // Upload files using THIS account (accounts can't access files uploaded by other accounts)
+    if (accountEmail && (systemContent || toolResultsContent)) {
+      const fileAttachments: QwenFileAttachment[] = [];
+      if (systemContent) {
+        try {
+          const file = await uploadLargeTextAsFile(accountEmail, systemContent, 'system.txt');
+          fileAttachments.push(file);
+        } catch (err: any) {
+          logStore.log('debug', 'chat', '[Chat] Failed to upload system prompt file: ' + (err.message || err));
+        }
+      }
+      if (toolResultsContent) {
+        try {
+          const file = await uploadLargeTextAsFile(accountEmail, toolResultsContent, 'tool-result.txt');
+          fileAttachments.push(file);
+        } catch (err: any) {
+          logStore.log('debug', 'chat', '[Chat] Failed to upload tool results file: ' + (err.message || err));
+        }
+      }
+      if (fileAttachments.length > 0) {
+        processedMessages[0] = { ...processedMessages[0], files: fileAttachments };
+      }
+    }
+
     let sessionResult;
     try {
       sessionResult = await acquireSessionWithCorrections(accountEmail, processedMessages);
     } catch (err) {
       lastFailedEmail = accountEmail;
       lastError = err;
-      if (accountEmail) decrementInFlight(accountEmail);
+      logStore.log(
+        'warn',
+        'chat',
+        `[Chat] Session acquire failed for ${accountEmail || '?'}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      logStore.addError(logId, `Session acquire failed for ${accountEmail || '?'}: ${err instanceof Error ? err.message : String(err)}`);
       continue; // Try next account
     }
     const { session, qwenMessages: sessionMessages, nextParentId, sessionHeaders, resolvedEmail } = sessionResult;
@@ -175,6 +178,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
         'chat',
         `[Chat] Request failed on ${resolvedEmail}: ${err.message || err} (attempt ${attempt + 1}/${MAX_ACCOUNT_RETRIES})`,
       );
+      logStore.addError(logId, `Stream creation failed for ${resolvedEmail}: ${err.message || String(err)}`);
 
       // If rate limited, try next account — Qwen didn't process the request yet
       if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
@@ -231,6 +235,12 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       ]);
     } catch (timeoutErr) {
       clearTimeout(firstChunkTimer);
+      logStore.log(
+        'warn',
+        'chat',
+        `[Chat] First-chunk timeout for ${resolvedEmail} after stream started (${attempt + 1}/${MAX_ACCOUNT_RETRIES})`,
+      );
+      logStore.addError(logId, `First-chunk timeout for ${resolvedEmail}`);
       streamReader.cancel().catch(() => {});
       qwenAbortController?.abort();
       sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);

@@ -248,7 +248,8 @@ function logStreamHandler(c: any) {
 }
 
 function logJsonHandler(c: any) {
-  const entries = logStore.getRecent(50);
+  const limit = parseInt(c.req.query('limit') || '50', 10);
+  const entries = logStore.getRecent(Math.max(1, Math.min(limit, 500)));
   const serialized = entries.map((e) => {
     const toolCalls = (e.parsedToolCalls || []).map((tc) => {
       let args: unknown = tc.args;

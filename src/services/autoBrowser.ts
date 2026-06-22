@@ -129,6 +129,23 @@ function launchChrome(binary: string): void {
     '--headless=new',
     '--no-sandbox',
     '--disable-gpu',
+
+    // Memory caps
+    '--renderer-process-limit=4',
+    '--disable-features=IsolateOrigins,site-per-process',
+    '--js-flags=--max-old-space-size=256',
+    '--in-process-gpu',
+    '--no-zygote',
+
+    // Background activity
+    '--disable-background-networking',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-sync',
+    '--disable-translate',
+    '--mute-audio',
+
     '--disable-dev-shm-usage',
     '--disable-blink-features=AutomationControlled',
     '--no-first-run',

@@ -8,6 +8,11 @@ import { THINK_TAG_NAMES, TOOL_CALL_KEYWORDS } from '../utils/tagNames.ts';
 import { pendingCorrections } from './chatHelpersCore.ts';
 import { compressToolResult } from './compressToolResult.ts';
 
+/** Escape special XML characters in a string (for safe attribute & element content). */
+function escXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
 // Re-export everything from core utilities
 export * from './chatHelpersCore.ts';
 
@@ -179,7 +184,13 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
   // Single message (Qwen API only accepts 1 message per chat)
   const fid = randomUUID();
   const systemContent = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
-  const toolResultsContent = toolResultObjects.length > 0 ? JSON.stringify(toolResultObjects) : undefined;
+  const formatToolResult = (r: {
+    type: string;
+    tool: string;
+    result: { success: boolean; stdout?: string; stderr?: string; command?: string };
+  }) =>
+    `<tool_result tool="${r.tool}" success="${r.result.success}">\n<command>${escXml(r.result.command || '')}</command>\n<stdout>${escXml(r.result.stdout || '')}</stdout>\n<stderr>${escXml(r.result.stderr || '')}</stderr>\n</tool_result>`;
+  const toolResultsContent = toolResultObjects.length > 0 ? toolResultObjects.map(formatToolResult).join('\n\n') : undefined;
   const qwenMessages: QwenMessage[] = [
     {
       fid,
@@ -291,8 +302,7 @@ export async function createQwenStreamWithRetry(
     return { stream: result.stream, abortController: result.abortController, qwenLogFile: result.qwenLogFile };
   } catch (err: any) {
     modelRouter.recordError(routedModel);
-    // Release session without counting as a successful request
-    sessionPool.release(chatId, nextParentId, undefined, resolvedEmail, false);
+    // ponytail: caller (chat.ts) handles session release — don't double-release
     throw err;
   }
 }

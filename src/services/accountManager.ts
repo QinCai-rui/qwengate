@@ -9,7 +9,7 @@ import os from 'os';
 import path from 'path';
 import type { AccountEntry } from '../types/auth.ts';
 import { projectPath } from '../utils/paths.ts';
-import { getCdpStatuses } from './cdpClient.ts';
+import { getCdpStatuses, hasAccountContext } from './cdpClient.ts';
 import { config } from './configService.ts';
 import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
@@ -420,6 +420,7 @@ export function isAvailable(acct: AccountEntry): boolean {
   if (acct.disabled) return false;
   if (!acct.state) return false;
   if (acct.throttledUntil > Date.now()) return false;
+  if (process.env.CHROME_CDP_ENDPOINT && !hasAccountContext(acct.email)) return false;
   return true;
 }
 export async function pickAccount(excludeEmail?: string): Promise<AccountEntry | null> {

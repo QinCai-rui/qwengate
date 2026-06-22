@@ -55,6 +55,7 @@ export interface AccountCdpState {
   streamBindings: Map<string, (chunk: string) => void>;
   cachedBxHeaders: Record<string, string>;
   profileCookies: string;
+  initialized: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +333,7 @@ export async function initAccountContext(email: string, profileCookies: string):
     streamBindings: new Map(),
     cachedBxHeaders: {},
     profileCookies,
+    initialized: false,
   };
   accountStates.set(email, state);
   sessionToEmail.set(sessionId, email);
@@ -458,6 +460,8 @@ export async function initAccountContext(email: string, profileCookies: string):
   // Network.enable already called above, trigger a fire-and-forget fetch
   triggerBxHeaderCaptureForAccount(state);
   await Bun.sleep(1500);
+
+  state.initialized = true;
 }
 
 /**
@@ -1159,9 +1163,9 @@ export async function browserStreamFetchIncremental(
   return browserStreamFetchIncrementalForAccount(getDefaultAccount(), url, body, options);
 }
 
-/** Check if an account context exists. */
+/** Check if an account context exists and is fully initialized. */
 export function hasAccountContext(email: string): boolean {
-  return accountStates.has(email);
+  return accountStates.get(email)?.initialized === true;
 }
 
 /** Get all initialized account emails. */
@@ -1203,16 +1207,25 @@ export function getCdpStatuses(): CdpAccountStatus[] {
 export async function initAllAccountContexts(accounts: Array<{ email: string; profileCookies?: string }>): Promise<void> {
   await connectBrowserWs();
 
-  for (const acct of accounts) {
+  const filtered = accounts.filter((acct) => {
     if (!acct.profileCookies) {
       console.warn(`[CDP] Skipping ${acct.email} — no profileCookies`);
-      continue;
+      return false;
     }
-    try {
-      await initAccountContext(acct.email, acct.profileCookies);
-    } catch (err: any) {
-      console.error(`[CDP] Failed to init context for ${acct.email}: ${err.message}`);
-    }
+    return true;
+  });
+
+  // Run 2 accounts at a time to avoid overwhelming the browser
+  const concurrency = 2;
+  for (let i = 0; i < filtered.length; i += concurrency) {
+    const batch = filtered.slice(i, i + concurrency);
+    await Promise.allSettled(
+      batch.map((acct) =>
+        initAccountContext(acct.email, acct.profileCookies!).catch((err: any) => {
+          console.error(`[CDP] Failed to init context for ${acct.email}: ${err.message}`);
+        }),
+      ),
+    );
   }
 }
 
