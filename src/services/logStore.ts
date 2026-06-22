@@ -89,10 +89,20 @@ export interface LogEntry {
   amplificationRatio?: number;
   amplificationTriggeredInput?: string;
 }
-const MAX_ENTRIES = config.getInt('MAX_LOGS', 50);
 const MAX_CHUNKS_PER_ENTRY = 100;
 const MAX_FIELD_LENGTH = 10240;
 export class RequestLogStore extends SystemLogger {
+  private _maxEntries: number | undefined;
+  private get maxEntries(): number {
+    if (this._maxEntries === undefined) {
+      try {
+        this._maxEntries = config.getInt('MAX_LOGS', 50);
+      } catch {
+        this._maxEntries = 50;
+      }
+    }
+    return this._maxEntries;
+  }
   private entries: LogEntry[] = [];
   private entryMap: Map<string, LogEntry> = new Map();
   private listeners: Set<(entry: LogEntry) => void> = new Set();
@@ -165,7 +175,8 @@ export class RequestLogStore extends SystemLogger {
     };
     this.entries.unshift(entry);
     this.entryMap.set(entry.id, entry);
-    if (this.entries.length > MAX_ENTRIES) {
+    const maxEntries = this.maxEntries;
+    if (this.entries.length > maxEntries) {
       const removed = this.entries.pop();
       if (removed) this.entryMap.delete(removed.id);
     }
