@@ -182,37 +182,41 @@ export async function processStreamData(data: any, state: StreamProcessingState,
     });
     return 'break_stream';
   }
+  let streamFinished = false;
   if (deltaStatus === 'finished') {
     const deltaPhase = data.choices[0].delta.phase;
+    // Always extract and emit local MCP tool calls before breaking
+    if (deltaPhase === 'local_tool') {
+      const localToolCalls = extractLocalMcpToolCalls(data);
+      const newToolCalls = localToolCalls.filter((tc) => {
+        const key = `${tc.name}:${JSON.stringify(tc.arguments)}`;
+        if (state.loggedToolCalls.has(key)) return false;
+        state.loggedToolCalls.add(key);
+        return true;
+      });
+
+      if (newToolCalls.length > 0) {
+        logStore.updateEntry(logId, (entry) => {
+          for (const tc of newToolCalls) {
+            entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
+          }
+        });
+        for (let i = 0; i < newToolCalls.length; i++) {
+          await writeToolCallEvent(streamWriter, completionId, model, newToolCalls[i], ctx.emittedToolCallCount + i);
+        }
+        ctx.emittedToolCallCount += newToolCalls.length;
+      }
+      if (ctx.qwenLogFile && localToolCalls.length > 0) {
+        logQwenSSE(ctx.qwenLogFile, ctx.sseEventCount || 0, localToolCalls.length, localToolCalls);
+      }
+    }
     // Don't break on think-phase finished — with thinking_format=full,
     // answer content arrives in a separate answer phase after think completes.
+    // For all other phases, mark as finished but still run content extraction:
+    // content may be bundled in the same SSE event as the finished status.
     if (deltaPhase !== 'thinking_summary' && deltaPhase !== 'think') {
-      // Extract and emit local MCP tool calls before breaking the stream
-      if (deltaPhase === 'local_tool') {
-        const localToolCalls = extractLocalMcpToolCalls(data);
-        const newToolCalls = localToolCalls.filter((tc) => {
-          const key = `${tc.name}:${JSON.stringify(tc.arguments)}`;
-          if (state.loggedToolCalls.has(key)) return false;
-          state.loggedToolCalls.add(key);
-          return true;
-        });
-
-        if (newToolCalls.length > 0) {
-          logStore.updateEntry(logId, (entry) => {
-            for (const tc of newToolCalls) {
-              entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
-            }
-          });
-          for (let i = 0; i < newToolCalls.length; i++) {
-            await writeToolCallEvent(streamWriter, completionId, model, newToolCalls[i], ctx.emittedToolCallCount + i);
-          }
-          ctx.emittedToolCallCount += newToolCalls.length;
-        }
-        if (ctx.qwenLogFile && localToolCalls.length > 0) {
-          logQwenSSE(ctx.qwenLogFile, ctx.sseEventCount || 0, localToolCalls.length, localToolCalls);
-        }
-      }
-      return 'break_stream';
+      streamFinished = true;
+      // Fall through to content extraction so content in finished chunk isn't lost
     }
   }
 
@@ -416,5 +420,6 @@ export async function processStreamData(data: any, state: StreamProcessingState,
     }
   }
 
+  if (streamFinished) return 'break_stream';
   return 'continue';
 }

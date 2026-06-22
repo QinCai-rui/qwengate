@@ -185,7 +185,12 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
 
   const delta = chunk.choices?.[0]?.delta;
   if (!delta) return;
-  if (state.targetResponseId !== null && chunk.response_id !== state.targetResponseId) return;
+  if (
+    state.targetResponseId !== null &&
+    chunk.response_id !== state.targetResponseId &&
+    chunk['response.created']?.response_id !== state.targetResponseId
+  )
+    return;
 
   if (delta.phase === 'think' || delta.phase === 'thinking_summary') {
     processThinkingDelta(delta, state);
