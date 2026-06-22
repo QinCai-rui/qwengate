@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
+import { logStore } from './logStore.ts';
 import { performBrowserFetch } from './playwright.ts';
 import { QWEN_API_BASE } from './qwen.ts';
-import { logStore } from './logStore.ts';
 
 /**
  * Character limit enforced by Qwen on message content.

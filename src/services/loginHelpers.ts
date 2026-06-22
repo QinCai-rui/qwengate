@@ -6,7 +6,7 @@
 
 import crypto from 'crypto';
 import type { AuthState } from '../types/auth.ts';
-import { getAuthTokenMaxAgeMs, checkPlaywrightSession } from './auth.ts';
+import { checkPlaywrightSession, getAuthTokenMaxAgeMs } from './auth.ts';
 import { logStore } from './logStore.ts';
 import { AccountContext, createAccountContext, getActivePage, getBrowser, Mutex } from './playwright.ts';
 import { createFetchTimeout, QWEN_BX_V } from './qwen.ts';

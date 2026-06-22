@@ -8,8 +8,8 @@
  */
 
 import { availableParallelism, cpus } from 'node:os';
-import { isBun } from './utils/env.ts';
 import { logStore } from './services/logStore.ts';
+import { isBun } from './utils/env.ts';
 
 if (!isBun) {
   console.error('[cluster] Cluster mode requires Bun runtime. Install Bun: https://bun.sh');
