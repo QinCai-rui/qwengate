@@ -13,7 +13,7 @@
  */
 import { writeFileSync } from 'fs';
 import { resolve } from 'path';
-import { getBxUaToken, resetCache as resetBxUaCache } from './bxUaGenerator.ts';
+import { getBxUaToken } from './bxUaGenerator.ts';
 import { logStore } from './logStore.ts';
 import { QWEN_API_BASE } from './qwen.ts';
 import { tokenCache } from './tokenCache.ts';
@@ -166,15 +166,4 @@ export async function refreshCookiesViaBrowser(cookieStr: string): Promise<strin
       }
     }
   }
-}
-
-/** Reset bx-ua cache. */
-export function resetBxUa(): void {
-  resetBxUaCache();
-  tokenCache.delete('bx-ua');
-}
-
-/** Dispose the Playwright browser instance (used only for cookie refresh). */
-export async function disposeFireyejs(): Promise<void> {
-  await closeBrowser();
 }

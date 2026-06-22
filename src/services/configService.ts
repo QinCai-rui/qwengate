@@ -6,7 +6,6 @@ export interface ConfigSchema {
   PORT: string;
   HOST: string;
   API_KEY: string;
-  BROWSER: string;
   TOOL_CALLING: string;
   CLEAN_OUTPUT: string;
   STREAMING_MODE: string;
@@ -34,7 +33,6 @@ export const DEFAULT_CONFIG: ConfigSchema = {
   PORT: '26405',
   HOST: '',
   API_KEY: '',
-  BROWSER: 'chromium',
   TOOL_CALLING: 'true',
   CLEAN_OUTPUT: 'true',
   STREAMING_MODE: 'auto',

@@ -1,6 +1,5 @@
-import { launch as cloakLaunch } from 'cloakbrowser';
 import crypto from 'crypto';
-import { Browser, BrowserContext, Cookie, chromium, firefox, Page, webkit } from 'playwright';
+import { type Browser, type BrowserContext, type Cookie, type Page } from 'playwright';
 import { logStore } from './logStore.ts';
 import { QWEN_BX_V } from './qwen.ts';
 
@@ -8,7 +7,6 @@ export type { BrowserProfileOptions, LoginResult } from './browserProfiles.ts';
 export { BROWSER_DEFAULT_ARGS, getProfileDir, openBrowserProfile, refreshViaProfile } from './browserProfiles.ts';
 
 const QWEN_BASE_URL = 'https://chat.qwen.ai';
-export type BrowserType = 'chromium' | 'firefox' | 'webkit' | 'chrome' | 'edge';
 export interface AccountContext {
   context: BrowserContext;
   page: Page;
@@ -20,13 +18,7 @@ export interface AccountContext {
 const accountContexts = new Map<string, AccountContext>();
 const contextCreationInFlight = new Map<string, Promise<AccountContext>>();
 let defaultBrowser: any = null;
-let initInFlight: Promise<void> | null = null;
 let cachedUserAgent: string | null = null;
-let cachedCookies: string | null = null;
-let lastCookiesTime = 0;
-const COOKIES_TTL = 30 * 1000;
-let cookiesInFlight: Promise<string> | null = null;
-const COOKIE_REFRESH_INTERVAL = 120 * 1000;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export function validateQwenUrl(url: string): void {
   let parsed: URL;
@@ -98,28 +90,8 @@ export async function getCookies(email?: string): Promise<string> {
     } catch (importErr: any) {
       logStore.log('debug', 'playwright', `getCookies fallback import error: ${importErr.message}`);
     }
-    return '';
   }
-  if (cachedCookies && Date.now() - lastCookiesTime < COOKIES_TTL) {
-    return cachedCookies;
-  }
-  if (cookiesInFlight) return cookiesInFlight;
-  cookiesInFlight = (async () => {
-    if (cachedCookies && Date.now() - lastCookiesTime < COOKIES_TTL) {
-      return cachedCookies;
-    }
-    const allCookieStrings: string[] = [];
-    for (const accCtx of accountContexts.values()) {
-      const cookies = await accCtx.context.cookies();
-      allCookieStrings.push(cookies.map((c) => `${c.name}=${c.value}`).join('; '));
-    }
-    cachedCookies = allCookieStrings.join('; ');
-    lastCookiesTime = Date.now();
-    return cachedCookies;
-  })().finally(() => {
-    cookiesInFlight = null;
-  });
-  return cookiesInFlight;
+  return '';
 }
 export interface BasicHeaders {
   cookie: string;
@@ -132,14 +104,6 @@ export interface BasicHeaders {
 export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
   if (process.env.TEST_MOCK_PLAYWRIGHT)
     return { cookie: 'token=mock', userAgent: 'mock', bxV: QWEN_BX_V, bxUmidtoken: '', bxUa: '', email: 'mock@test' };
-  // CDP mode: browser handles all headers automatically
-  if (process.env.CHROME_CDP_ENDPOINT) {
-    const { pickAccount, decrementInFlight } = await import('./auth.ts');
-    const acct = email ? { email } : await pickAccount();
-    const result = { cookie: '', userAgent: '', bxV: QWEN_BX_V, bxUmidtoken: '', bxUa: '', email: acct?.email || '' };
-    if (!email && acct?.email) decrementInFlight(acct.email);
-    return result;
-  }
   // Browserless mode: no Playwright needed for headers.
   // Cookies from saved profileCookies (disk), bx-ua from Node.js generator.
   if (!cachedUserAgent) {
@@ -161,93 +125,7 @@ export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
     email: tokenInfo?.email,
   };
 }
-export async function initPlaywright(headless = true, browserType: BrowserType = 'chromium') {
-  if (process.env.TEST_MOCK_PLAYWRIGHT) return;
-  if (defaultBrowser) return;
-  if (initInFlight) {
-    await initInFlight;
-    return;
-  }
-  initInFlight = (async () => {
-    if (defaultBrowser) return;
 
-    // CDP connection mode: route through existing Chrome via our own CDP
-    // client (cdpClient.ts) instead of Playwright's connectOverCDP, which
-    // hangs on Chromium 148+. Playwright is NOT used for CDP mode at all —
-    // performBrowserFetch/performBrowserStream use cdpClient.ts directly.
-    const cdpEndpoint = process.env.CHROME_CDP_ENDPOINT;
-    if (cdpEndpoint) {
-      logStore.log('info', 'playwright', `CDP mode: using cdpClient.ts for ${cdpEndpoint}`);
-      // Skip Playwright entirely — cdpClient.ts handles browser connection
-      return;
-    }
-
-    let browserEngine: any;
-    let channel: string | undefined;
-    switch (browserType) {
-      case 'firefox':
-        browserEngine = firefox;
-        break;
-      case 'webkit':
-        browserEngine = webkit;
-        break;
-      case 'chrome':
-        browserEngine = chromium;
-        channel = 'chrome';
-        break;
-      case 'edge':
-        browserEngine = chromium;
-        channel = 'msedge';
-        break;
-      case 'chromium':
-      default:
-        defaultBrowser = await cloakLaunch({
-          headless,
-          humanize: true,
-          geoip: true,
-          args: [
-            '--disable-dev-shm-usage',
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-popup-blocking',
-            '--mute-audio',
-            '--no-first-run',
-            '--disable-background-networking',
-            '--disable-default-apps',
-            '--disable-sync',
-            '--disable-translate',
-            '--metrics-recording-only',
-            '--disable-blink-features=AutomationControlled',
-          ],
-        });
-        break;
-    }
-    if (browserEngine) {
-      defaultBrowser = await browserEngine.launch({
-        headless,
-        channel,
-        ignoreDefaultArgs: ['--enable-automation'],
-        args: ['--disable-blink-features=AutomationControlled'],
-      });
-    }
-    const cleanupAllContexts = async () => {
-      for (const [_email, accCtx] of accountContexts.entries()) {
-        if (accCtx.refreshInterval) clearInterval(accCtx.refreshInterval);
-        await accCtx.context.close();
-      }
-      accountContexts.clear();
-      if (defaultBrowser) {
-        await defaultBrowser.close();
-        defaultBrowser = null;
-      }
-    };
-    process.on('SIGTERM', cleanupAllContexts);
-    process.on('SIGINT', cleanupAllContexts);
-  })().finally(() => {
-    initInFlight = null;
-  });
-  return initInFlight;
-}
 function typedCast<T>(v: unknown): T {
   return v as T;
 }
@@ -276,43 +154,8 @@ export async function createAccountContext(email: string, cookies?: Record<strin
   }
 }
 async function createContextInternal(email: string, cookies?: Record<string, string>): Promise<AccountContext> {
-  await initPlaywright();
   if (!defaultBrowser) throw new Error('Playwright browser not initialized');
   if (accountContexts.has(email)) return accountContexts.get(email)!;
-
-  // CDP mode: use the existing Chrome's default context. Cookies are already
-  // set from the real browser session — no injection needed. baxia is already
-  // active, wrapping fetch with real bx headers.
-  if (process.env.CHROME_CDP_ENDPOINT) {
-    const contexts = defaultBrowser.contexts();
-    if (contexts.length === 0) throw new Error('CDP browser has no contexts');
-    const context = contexts[0];
-    let page = context.pages().find((p: Page) => p.url().startsWith('https://chat.qwen.ai/'));
-    if (!page) {
-      page = await context.newPage();
-      await page.goto('https://chat.qwen.ai/', { waitUntil: 'load', timeout: 30000 });
-    }
-    // Verify baxia is loaded
-    const hasBaxia = await page
-      .evaluate(() => {
-        const w = window as any;
-        return !!(w.__baxia__ || w.baxiaCommon);
-      })
-      .catch(() => false);
-    if (!hasBaxia) {
-      logStore.log('warn', 'playwright', 'CDP browser: baxia not detected, reloading...');
-      await page.goto('https://chat.qwen.ai/', { waitUntil: 'load', timeout: 30000 });
-    }
-    const accCtx: AccountContext = {
-      context,
-      page,
-      lastRefresh: Date.now(),
-      cookies: cookies || {},
-      headers: {},
-    };
-    accountContexts.set(email, accCtx);
-    return accCtx;
-  }
 
   // Merge provided cookies with any saved profileCookies (full session with
   // baxia/WAF cookies: cna, ssxmod_itna, tfstk, isg, etc.)
@@ -435,7 +278,7 @@ async function createContextInternal(email: string, cookies?: Record<string, str
         console.error(`[AccountContext] Refresh failed for ${email}:`, err);
       }
     },
-    COOKIE_REFRESH_INTERVAL + Math.random() * 30000,
+    120_000 + Math.random() * 30000,
   );
   return accCtx;
 }
@@ -532,30 +375,6 @@ export function removeAccountContext(email: string): void {
   accountContexts.delete(email);
 }
 
-export async function closePlaywright() {
-  if (process.env.TEST_MOCK_PLAYWRIGHT) return;
-  for (const [_email, accCtx] of accountContexts.entries()) {
-    if (accCtx.refreshInterval) clearInterval(accCtx.refreshInterval);
-    await accCtx.context.close();
-  }
-  accountContexts.clear();
-  if (defaultBrowser) {
-    await defaultBrowser.close();
-    defaultBrowser = null;
-  }
-  cachedUserAgent = null;
-  cachedCookies = null;
-  lastCookiesTime = 0;
-}
-export function getCachedUserAgent(): string | null {
-  return cachedUserAgent;
-}
-export function getCachedCookies(): string | null {
-  return cachedCookies;
-}
-export function getLastCookiesTime(): number {
-  return lastCookiesTime;
-}
 export function getActivePage(email?: string): Page | null {
   if (email) return accountContexts.get(email)?.page || null;
   for (const accCtx of accountContexts.values()) {
@@ -573,29 +392,6 @@ export async function getQwenHeaders(
   return { headers: {}, chatSessionId: crypto.randomUUID(), parentMessageId: null };
 }
 
-/**
- * Force-refresh bx headers for an account by clearing cached bx headers and
- * re-navigating the browser page to re-trigger route-based header extraction.
- * This is called reactively when a CAPTCHA challenge (FAIL_SYS_USER_VALIDATE)
- * is detected from the Qwen API.
- */
-export async function forceRefreshBxHeaders(email: string): Promise<void> {
-  if (process.env.TEST_MOCK_PLAYWRIGHT) return;
-  const accCtx = accountContexts.get(email);
-  if (!accCtx) return;
-  // Clear existing bx headers so they get re-extracted on next page load
-  delete accCtx.headers['bx-umidtoken'];
-  delete accCtx.headers['bx-ua'];
-  delete accCtx.headers['user-agent'];
-  try {
-    await accCtx.page.goto('https://chat.qwen.ai/', { waitUntil: 'load', timeout: 30000 });
-    await accCtx.page.waitForTimeout(2000);
-  } catch {
-    // Navigation failure is non-fatal — caller handles this gracefully
-  }
-  logStore.log('info', 'playwright', `bx headers refreshed for ${email.split('@')[0]}`);
-}
-
 // ---------------------------------------------------------------------------
 // Browser-native fetch — routes HTTP requests through page.evaluate(fetch)
 // inside the Playwright/Chrome browser. This uses the real Chrome TLS/HTTP2
@@ -605,22 +401,6 @@ export async function forceRefreshBxHeaders(email: string): Promise<void> {
 //   - Real baxia bx-umidtoken / bx-ua headers
 //   - All session cookies with proper domain/path isolation
 // ---------------------------------------------------------------------------
-
-let browserFetchFnCounter = 0;
-
-/**
- * Base64-encode a string that may contain non-Latin1 (Unicode) characters.
- * Uses TextEncoder to produce UTF-8 bytes, then converts to Latin-1 string
- * for btoa. Safe for any Unicode input, unlike bare btoa() which throws
- * on non-Latin1 characters.
- *
- * Decode with: new TextDecoder().decode(Uint8Array.from(atob(str), c => c.charCodeAt(0)))
- */
-function b64encode(str: string): string {
-  let binary = '';
-  for (const byte of new TextEncoder().encode(str)) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
 
 /**
  * Ensure the account's browser page is at a valid SPA URL where baxia is active.
@@ -658,17 +438,6 @@ async function ensurePageAtSpaRoot(page: Page): Promise<void> {
 }
 
 /**
- * Result of a non-streaming fetch routed through the browser page.
- */
-export interface BrowserFetchResult {
-  ok: boolean;
-  status: number;
-  statusText: string;
-  headers: Record<string, string>;
-  body: string;
-}
-
-/**
  * Make a non-streaming HTTP request through the account's browser page.
  *
  * Uses page.evaluate(fetch) to get the real Chrome TLS stack, automatic
@@ -681,7 +450,7 @@ export async function performBrowserFetch(
   email: string,
   url: string,
   options: { method: string; body?: string; timeout?: number },
-): Promise<BrowserFetchResult> {
+): Promise<{ ok: boolean; status: number; statusText: string; headers: Record<string, string>; body: string }> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) {
     // In test mode, delegate to globalThis.fetch (mocked by the test).
     const resp = await fetch(url, {
@@ -699,13 +468,6 @@ export async function performBrowserFetch(
   }
 
   // CDP mode: route through the real Chrome browser (logged-in Qwen account).
-  // This bypasses WAF by using Chrome's native TLS/HTTP2 fingerprint with
-  // baxia-wrapped fetch — the only reliable way to avoid FAIL_SYS_USER_VALIDATE.
-  if (process.env.CHROME_CDP_ENDPOINT) {
-    const { browserFetchForAccount } = await import('./cdpClient.ts');
-    return browserFetchForAccount(email, url, { method: options.method, body: options.body, timeout: options.timeout || 30000 });
-  }
-
   let accCtx = accountContexts.get(email);
   if (!accCtx) {
     const existingKeys = Array.from(accountContexts.keys());
@@ -796,207 +558,4 @@ export async function performBrowserFetch(
   }
 
   return result;
-}
-
-/**
- * Make a streaming HTTP request through the account's browser page and return
- * a Node.js ReadableStream that receives SSE chunks in real-time.
- *
- * Architecture:
- *   Browser `fetch()` inside page.evaluate()
- *     -> reads Response.body.getReader() chunk by chunk
- *     -> each chunk base64-encoded and sent via page.exposeFunction()
- *     -> Node.js callback decodes and enqueues into a ReadableStream
- *
- * The browser handles all TLS, headers, cookies, and baxia instrumentation.
- * The Node.js process just receives raw SSE bytes as they arrive.
- *
- * Each stream creates a unique exposed function (`__qsb_N_timestamp`) on the
- * page. These accumulate on the page but are bounded by the number of
- * concurrent streams × accounts (< 50 for any realistic workload).
- * Page navigations (from refreshAccountCookies) clear them naturally.
- *
- * Suitable for: chat completions (SSE streaming).
- */
-export async function performBrowserStream(
-  email: string,
-  url: string,
-  body: string,
-  signal?: AbortSignal,
-): Promise<ReadableStream<Uint8Array>> {
-  if (process.env.TEST_MOCK_PLAYWRIGHT) {
-    // In test mode, delegate to globalThis.fetch (which the test has mocked).
-    // The mock returns a ReadableStream that the test controls.
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body,
-    });
-    if (!resp.ok) {
-      throw new Error(`[TEST_MOCK] Browser stream fetch returned ${resp.status}`);
-    }
-    return resp.body!;
-  }
-
-  // CDP mode: route through real Chrome's network stack with incremental streaming.
-  // Uses Runtime.addBinding + XHR onprogress to deliver SSE chunks in real time.
-  if (process.env.CHROME_CDP_ENDPOINT) {
-    const { browserStreamFetchIncrementalForAccount } = await import('./cdpClient.ts');
-    const result = await browserStreamFetchIncrementalForAccount(email, url, body);
-    if (!result.ok) {
-      const errPayload = JSON.stringify({ __httpError: true, status: result.status, body: '' });
-      return new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(errPayload));
-          controller.close();
-        },
-      });
-    }
-    return result.stream;
-  }
-
-  const accCtx = accountContexts.get(email);
-  if (!accCtx) throw new Error(`No browser context for account ${email}`);
-  const { page } = accCtx;
-  await ensurePageAtSpaRoot(page);
-  // Unique function name per stream — prevents collisions across concurrent streams
-  const fnName = `__qsb_${++browserFetchFnCounter}_${Date.now()}`;
-  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
-  let streamClosed = false;
-  const nodeStream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      streamController = controller;
-    },
-    cancel() {
-      streamClosed = true;
-    },
-  });
-  // Helper: clean up abort listener when stream ends for any reason
-  const cleanupAbort = () => {
-    if (signal) signal.removeEventListener('abort', onAbort);
-  };
-  // Bridge function: browser calls window[fnName](b64chunk)
-  // Node.js decodes base64 and enqueues the raw bytes into the ReadableStream.
-  try {
-    await page.exposeFunction(fnName, (b64: string) => {
-      if (streamClosed) return;
-      if (b64 === '__QSB_DONE__') {
-        streamClosed = true;
-        cleanupAbort();
-        try {
-          streamController?.close();
-        } catch {
-          /* already closed by cancel */
-        }
-        return;
-      }
-      if (b64 === '__QSB_ERROR__') {
-        streamClosed = true;
-        cleanupAbort();
-        try {
-          streamController?.error(new Error('Browser stream fetch failed'));
-        } catch {
-          /* already closed */
-        }
-        return;
-      }
-      try {
-        const binary = atob(b64);
-        const len = binary.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
-        if (!streamClosed) streamController?.enqueue(bytes);
-      } catch {
-        // Corrupted chunk or controller already closed — skip silently
-      }
-    });
-  } catch (err: any) {
-    streamClosed = true;
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    (streamController as ReadableStreamDefaultController<Uint8Array> | null)?.error(err);
-    throw err;
-  }
-  // Wire abort signal: when Node.js aborts, stop accepting chunks so
-  // the SSE pipeline terminates. Don't close the controller here —
-  // let __QSB_DONE__ or natural XHR completion handle the close.
-  // The consumer's cancel() handler will clean up the stream.
-  const onAbort = () => {
-    if (!streamClosed) {
-      streamClosed = true;
-      cleanupAbort();
-    }
-  };
-  if (signal) {
-    if (signal.aborted) {
-      onAbort();
-      return nodeStream;
-    }
-    signal.addEventListener('abort', onAbort, { once: true });
-  }
-  // Launch the browser fetch in the background (fire-and-forget).
-  // The fetch uses the real Chrome TLS stack, automatic sec-ch-ua headers,
-  // all cookies (credentials: 'include'), and active baxia instrumentation.
-  page
-    .evaluate(
-      async (opts: { url: string; body: string; fnName: string }) => {
-        // Use XMLHttpRequest (not fetch) because baxia wraps XHR to inject
-        // bx-umidtoken and bx-ua headers. Without these the WAF challenges
-        // certain API endpoints.
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', opts.url, true);
-        xhr.withCredentials = true;
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.setRequestHeader('Accept', 'text/event-stream');
-        xhr.responseType = 'text';
-
-        const bridge = (window as any)[opts.fnName];
-
-        // Stream SSE chunks via the bridge as they arrive
-        let lastIndex = 0;
-        xhr.onprogress = () => {
-          const chunk = xhr.responseText.slice(lastIndex);
-          if (chunk) {
-            const uint8 = new TextEncoder().encode(chunk);
-            let binary = '';
-            for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
-            bridge(btoa(binary));
-            lastIndex = xhr.responseText.length;
-          }
-        };
-
-        // On completion: send error payload for non-2xx, then signal DONE
-        xhr.onloadend = () => {
-          if (xhr.status > 0 && (xhr.status < 200 || xhr.status >= 300)) {
-            const errPayload = JSON.stringify({ __httpError: true, status: xhr.status, body: xhr.responseText || '' });
-            bridge(btoa(errPayload));
-          }
-          bridge('__QSB_DONE__');
-        };
-
-        xhr.onerror = () => {
-          bridge('__QSB_DONE__');
-        };
-
-        xhr.send(opts.body);
-
-        // Keep the page.evaluate alive until the XHR completes
-        await new Promise<void>((resolve) => {
-          const check = () => {
-            if (xhr.readyState === 4) resolve();
-            else setTimeout(check, 100);
-          };
-          check();
-        });
-      },
-      { url, body, fnName },
-    )
-    .catch((err: any) => {
-      // page.evaluate threw — browser fetch failed entirely
-      if (!streamClosed) {
-        streamClosed = true;
-        cleanupAbort();
-        streamController?.error(err);
-      }
-    });
-  return nodeStream;
 }

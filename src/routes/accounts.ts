@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import { addAccount, getAccountByEmail, getAccounts, removeAccount, setAccountDisabled } from '../services/auth.ts';
-import { getCdpStatuses } from '../services/cdpClient.ts';
 import { logStore } from '../services/logStore.ts';
 
 const accountActionRateLimit = new Map<string, number[]>();
@@ -32,13 +31,6 @@ accountsRouter.get('/', (c) => {
     startupStatus: a.startupStatus || null,
     cdp: null as any,
   }));
-  // Merge CDP status into account data
-  const cdpStatuses = getCdpStatuses();
-  const cdpMap = new Map(cdpStatuses.map((s) => [s.email, s]));
-  for (const m of masked) {
-    const cdp = cdpMap.get(m.email);
-    if (cdp) m.cdp = cdp;
-  }
   return c.json({ count: masked.length, accounts: masked });
 });
 

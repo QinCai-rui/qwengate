@@ -180,10 +180,8 @@ async function applyRequestJitter(accountEmail?: string): Promise<void> {
 }
 
 const qwenCircuitBreaker = new CircuitBreaker('qwen-api', {
-  // In CDP mode, first requests per context can take longer (baxia warmup).
-  // With 8 accounts, we need a higher threshold to avoid premature circuit open.
-  failureThreshold: process.env.CHROME_CDP_ENDPOINT ? 15 : 5,
-  resetTimeoutMs: process.env.CHROME_CDP_ENDPOINT ? 15_000 : 30_000,
+  failureThreshold: 5,
+  resetTimeoutMs: 30_000,
   halfOpenMaxAttempts: 1,
 });
 
@@ -254,9 +252,7 @@ export async function createQwenStream(
     baseDelayMs: Math.max(0, config.getInt('RETRY_BASE_DELAY_MS', 1000)),
     maxDelayMs: Math.max(0, config.getInt('RETRY_MAX_DELAY_MS', 30000)),
     backoffMultiplier: Math.max(0.1, config.getFloat('RETRY_BACKOFF_MULTIPLIER', 2)),
-    // CDP mode: no per-attempt timeout — the stream has its own idle timeout.
-    // Non-CDP mode: 30s default timeout for direct fetch.
-    attemptTimeoutMs: process.env.CHROME_CDP_ENDPOINT ? 0 : 30_000,
+    attemptTimeoutMs: 30_000,
   };
 
   const retriesEnabled = config.getBool('RETRY_ENABLED', true);

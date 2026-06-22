@@ -15,26 +15,6 @@ interface PoolEntry {
   accountEmail?: string;
 }
 
-export class SessionPoolQueueFullError extends Error {
-  constructor(current: number, max: number) {
-    super(`Session pool queue full (${current}/${max}). Try again later.`);
-    this.name = 'SessionPoolQueueFullError';
-  }
-}
-
-export class SessionPoolWaitTimeoutError extends Error {
-  constructor(timeoutMs: number) {
-    super(`Session pool wait timed out after ${timeoutMs}ms`);
-    this.name = 'SessionPoolWaitTimeoutError';
-  }
-}
-
-interface WaiterEntry {
-  resolve: (entry: PoolEntry) => void;
-  reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
-}
-
 export function formatQwenEnvelopeError(json: any): string {
   const code = json?.data?.code || json?.code || 'unknown';
   const details = json?.data?.details || json?.details || json?.message || '';
@@ -42,11 +22,8 @@ export function formatQwenEnvelopeError(json: any): string {
 }
 
 export class SessionPool {
-  private waiting: Array<WaiterEntry> = [];
   private activeSessions = new Set<string>();
   private activeCount = 0;
-  private readonly MAX_WAITING = 10;
-  private readonly WAIT_TIMEOUT_MS = 60_000;
   private releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   async initialize(): Promise<void> {
@@ -116,33 +93,6 @@ export class SessionPool {
     throw lastErr instanceof Error ? lastErr : new Error('Failed to acquire session');
   }
 
-  getWaitingCount(): number {
-    return this.waiting.length;
-  }
-
-  isQueueFull(): boolean {
-    return this.waiting.length >= this.MAX_WAITING;
-  }
-
-  /**
-   * Enqueue a waiter with timeout. Throws SessionPoolQueueFullError if queue is at capacity,
-   * or SessionPoolWaitTimeoutError if wait exceeds WAIT_TIMEOUT_MS.
-   */
-  enqueueWaiter(): Promise<PoolEntry> {
-    if (this.isQueueFull()) {
-      throw new SessionPoolQueueFullError(this.waiting.length, this.MAX_WAITING);
-    }
-    return new Promise<PoolEntry>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        const idx = this.waiting.findIndex((w) => w.timer === timer);
-        if (idx >= 0) this.waiting.splice(idx, 1);
-        reject(new SessionPoolWaitTimeoutError(this.WAIT_TIMEOUT_MS));
-      }, this.WAIT_TIMEOUT_MS);
-      if (typeof timer.unref === 'function') timer.unref();
-      this.waiting.push({ resolve, reject, timer });
-    });
-  }
-
   async release(
     chatId: string,
     _newParentId: string | null,
@@ -165,33 +115,6 @@ export class SessionPool {
       }
     }
 
-    const waiter = this.waiting.shift();
-    if (waiter) {
-      clearTimeout(waiter.timer);
-      const waiterEmail = accountEmail || (await pickAccount())?.email;
-
-      // Fetch headers once, create session with pre-fetched headers (no duplicate getBasicHeaders call)
-      (async () => {
-        try {
-          const headers = await getBasicHeaders(waiterEmail);
-          const id = await this.createSessionWithHeaders(waiterEmail, headers);
-          this.activeSessions.add(id);
-          this.activeCount++;
-          waiter.resolve({
-            chatId: id,
-            parentId: _newParentId,
-            inUse: true,
-            cachedHeaders: { cookie: headers.cookie, userAgent: headers.userAgent },
-            accountEmail: headers.email || waiterEmail,
-          });
-        } catch (err: any) {
-          console.error('[SessionPool] Failed to create session for waiter:', err.message);
-          // pickAccount() incremented inFlight — decrement on failure to prevent leak
-          if (waiterEmail) decrementInFlight(waiterEmail);
-          waiter.reject(err);
-        }
-      })();
-    }
     this.activeSessions.delete(chatId);
     if (this.activeCount > 0) this.activeCount--;
     const existingTimer = this.releaseTimers.get(chatId);
@@ -252,7 +175,7 @@ export class SessionPool {
       total: this.activeSessions.size,
       available: this.activeSessions.size - this.activeCount,
       inUse: this.activeCount,
-      waiting: this.waiting.length,
+      waiting: 0,
     };
   }
 

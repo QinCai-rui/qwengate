@@ -38,7 +38,6 @@ test('load - creates config.json with defaults when missing', () => {
   assert.equal(existsSync(path), true, 'config.json should have been created');
   const written = JSON.parse(readFileSync(path, 'utf-8'));
   assert.equal(written.PORT, DEFAULT_CONFIG.PORT);
-  assert.equal(written.BROWSER, DEFAULT_CONFIG.BROWSER);
   assert.equal(written.API_KEY, DEFAULT_CONFIG.API_KEY);
 
   try {
@@ -141,13 +140,13 @@ test('save - writes to config.json', () => {
   writeFileSync(path, JSON.stringify({}), 'utf-8');
   const svc = new ConfigService(path);
 
-  svc.set('BROWSER', 'firefox');
+  svc.set('TOOL_CALLING', 'false');
   svc.set('PORT', '77777');
   svc.save();
 
   const raw = readFileSync(path, 'utf-8');
   const parsed = JSON.parse(raw);
-  assert.equal(parsed.BROWSER, 'firefox');
+  assert.equal(parsed.TOOL_CALLING, 'false');
   assert.equal(parsed.PORT, '77777');
 
   try {
@@ -160,17 +159,17 @@ test('save - writes to config.json', () => {
 test('getAll - returns all keys', () => {
   const path = tmpFile('getall');
   // Use keys unlikely to be set as CI env vars to avoid false failures
-  writeFileSync(path, JSON.stringify({ BROWSER: 'firefox', MAX_LOGS: '99' }), 'utf-8');
+  writeFileSync(path, JSON.stringify({ TOOL_CALLING: 'false', MAX_LOGS: '99' }), 'utf-8');
   const svc = new ConfigService(path);
 
   const all = svc.getAll();
   const keys = Object.keys(all);
   assert.ok(keys.length > 0, 'should return keys');
-  assert.ok(keys.includes('BROWSER'), 'should include BROWSER');
+  assert.ok(keys.includes('TOOL_CALLING'), 'should include TOOL_CALLING');
   assert.ok(keys.includes('MAX_LOGS'), 'should include MAX_LOGS');
   // get() and getAll() check process.env first — these assertions are valid
-  // only if BROWSER and MAX_LOGS aren't set in the test environment
-  assert.equal(all.BROWSER, 'firefox');
+  // only if TOOL_CALLING and MAX_LOGS aren't set in the test environment
+  assert.equal(all.TOOL_CALLING, 'false');
   assert.equal(all.MAX_LOGS, '99');
 
   try {

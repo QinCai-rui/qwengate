@@ -6,7 +6,6 @@ process.env.TEST_MOCK_PLAYWRIGHT = 'true';
 process.env.API_KEY = 'test-key-for-testing';
 
 import { app } from '../index.tsx';
-import { closePlaywright, initPlaywright } from '../services/playwright.ts';
 
 const TEST_API_KEY = 'test-key-for-testing';
 const authHeaders = { Authorization: `Bearer ${TEST_API_KEY}` };
@@ -73,9 +72,6 @@ test('Chat Completions endpoint with qwen3.6-plus (thinking enabled)', async () 
     return originalFetch(input);
   };
 
-  // Initialize playwright for this test
-  await initPlaywright(false);
-
   try {
     const payload = {
       model: 'qwen3.6-plus',
@@ -129,7 +125,6 @@ test('Chat Completions endpoint with qwen3.6-plus (thinking enabled)', async () 
             }
           } catch {
             // Partial JSON ignored
-            // console.error("Parse error:", err);
           }
         }
       }
@@ -139,7 +134,6 @@ test('Chat Completions endpoint with qwen3.6-plus (thinking enabled)', async () 
     assert.ok(hasContent, 'Should have received streamed chunks with content');
   } finally {
     globalThis.fetch = originalFetch;
-    await closePlaywright();
   }
 });
 
@@ -163,8 +157,6 @@ test('Chat Completions returns explicit error for non-SSE upstream JSON errors',
     return originalFetch(input);
   };
 
-  await initPlaywright(false);
-
   try {
     const req = new Request('http://localhost/v1/chat/completions', {
       method: 'POST',
@@ -184,7 +176,6 @@ test('Chat Completions returns explicit error for non-SSE upstream JSON errors',
     assert.match(body.error.message, /upper limit/);
   } finally {
     globalThis.fetch = originalFetch;
-    await closePlaywright();
   }
 });
 
@@ -204,8 +195,6 @@ test('Chat Completions returns a JSON chat.completion object for non-streaming r
     }
     return originalFetch(input);
   };
-
-  await initPlaywright(false);
 
   try {
     const req = new Request('http://localhost/v1/chat/completions', {
@@ -227,7 +216,6 @@ test('Chat Completions returns a JSON chat.completion object for non-streaming r
     assert.strictEqual(body.choices[0].message.content, 'Hello');
   } finally {
     globalThis.fetch = originalFetch;
-    await closePlaywright();
   }
 });
 
@@ -292,9 +280,6 @@ test('Chat Completions endpoint - Non-streaming (stream: false)', async () => {
     return originalFetch(input);
   };
 
-  // Initialize playwright for this test
-  await initPlaywright(false);
-
   try {
     const payload = {
       model: 'qwen3.6-plus',
@@ -329,6 +314,5 @@ test('Chat Completions endpoint - Non-streaming (stream: false)', async () => {
     assert.ok(body.usage.completion_tokens >= 0);
   } finally {
     globalThis.fetch = originalFetch;
-    await closePlaywright();
   }
 });

@@ -80,11 +80,6 @@ const monitor = setInterval(async () => {
   }
 }, 5_000);
 
-// Don't keep the monitor alive if that's all that's running
-if (isBun) {
-  // Bun doesn't have unref on timers the same way, but the process stays alive due to workers
-}
-
 function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;

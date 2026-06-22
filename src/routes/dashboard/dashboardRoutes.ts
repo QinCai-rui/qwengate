@@ -6,7 +6,7 @@ import { getAccountCount, getAccountStats, getAllAccountEmails, getAvailableCoun
 import { config, isValidKey } from '../../services/configService.ts';
 import { logStore } from '../../services/logStore.ts';
 import { monitorStore } from '../../services/monitorStore.ts';
-import { getActivePage } from '../../services/playwright.ts';
+
 import { configureAccount, deleteAllChats } from '../../services/qwen.ts';
 import { sessionPool } from '../../services/sessionPool.ts';
 import { checkApiKeyAuth } from '../../utils/auth.ts';
@@ -44,11 +44,11 @@ function dashboardStaticHandler(c: any) {
 }
 
 function healthHandler(c: any) {
-  const pwOk = getActivePage() !== null;
+  const poolOk = getAvailableCount() > 0;
   return c.json(
     {
-      status: pwOk ? 'ok' : 'degraded',
-      playwright: pwOk,
+      status: poolOk ? 'ok' : 'degraded',
+      pool: poolOk,
       accounts: { total: getAccountCount(), available: getAvailableCount() },
       uptime: process.uptime(),
     },
