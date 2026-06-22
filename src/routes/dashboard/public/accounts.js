@@ -35,14 +35,20 @@ function setError(msg) {
 
 /* ── Accounts Table ── */
 function getAuthStatus(acct) {
-  if (acct.authenticated) return 'live';
+  if (acct.startupStatus === 'connecting') return 'connecting';
+  if (acct.startupStatus === 'initializing' || acct.startupStatus === 'pending') {
+    return 'pending';
+  }
   if (acct.throttled) return 'throttled';
+  if (acct.authenticated) return 'live';
   if (acct.tokenExpiresInMs != null && acct.tokenExpiresInMs < 0) return 'expired';
   return 'unknown';
 }
 
 function getAuthLabel(status) {
   if (status === 'live') return 'Authenticated';
+  if (status === 'pending') return 'Starting...';
+  if (status === 'connecting') return 'Connecting...';
   if (status === 'expired') return 'Expired';
   if (status === 'throttled') return 'Throttled';
   return 'Not authenticated';

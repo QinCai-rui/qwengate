@@ -10,7 +10,8 @@ import { chatCompletions } from './routes/chat.ts';
 import { configRouter } from './routes/config.ts';
 import { registerDashboardRoutes } from './routes/dashboard/dashboardRoutes.ts';
 import { debugNetworkApp } from './routes/debugNetwork.ts';
-import { getAccountCount, getAccountStats, getAvailableCount, initAuth } from './services/auth.ts';
+import { getAccountCount, getAccountStats, getAccounts, getAvailableCount, initAuth, setStartupStatus } from './services/auth.ts';
+import { hasAccountContext } from './services/cdpClient.ts';
 import { startBrowser, stopBrowser } from './services/autoBrowser.ts';
 import { config } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
@@ -114,7 +115,7 @@ app.use('*', async (c, next) => {
   const method = c.req.method;
   const path = c.req.path;
   const ua = c.req.header('user-agent') || 'unknown';
-  console.log(`[HTTP] ${method} ${path} UA=${ua.slice(0, 80)}`);
+  logStore.log('debug', 'http', `${method} ${path} UA=${ua.slice(0, 80)}`);
   await next();
 });
 
@@ -368,6 +369,9 @@ if (import.meta.main) {
         try {
           await initAuth();
           logStore.log('info', 'boot', '[1/5] Accounts authenticated');
+          for (const acct of getAccounts()) {
+            setStartupStatus(acct.email, 'pending');
+          }
         } catch (err: any) {
           logStore.log('warn', 'boot', `[1/5] initAuth failed: ${err.message}`);
         }
@@ -376,10 +380,11 @@ if (import.meta.main) {
         if (process.env.CHROME_CDP_ENDPOINT) {
           try {
             const { initAllAccountContexts } = await import('./services/cdpClient.ts');
-            const { readFileSync } = await import('node:fs');
-            const { projectPath } = await import('./utils/paths.ts');
-            const raw = readFileSync(projectPath('.qwen', 'accounts.json'), 'utf-8');
-            const acctData: Array<{ email: string; profileCookies?: string }> = JSON.parse(raw);
+            // Use in-memory accounts — profileCookies were loaded from browser profiles during initAuth
+            const acctData = getAccounts().map((a) => ({
+              email: a.email,
+              profileCookies: a.profileCookies,
+            }));
             await initAllAccountContexts(acctData);
             logStore.log('info', 'boot', `[2/5] CDP contexts initialized for ${acctData.length} accounts`);
           } catch (err: any) {
@@ -390,8 +395,7 @@ if (import.meta.main) {
         // ── Phase 2c: Configure accounts AFTER CDP contexts are ready ──
         logStore.log('info', 'boot', '[3/5] Configuring accounts...');
         try {
-          const { getAccounts } = await import('./services/accountManager.ts');
-          const acctList = getAccounts().filter((a) => a.state?.token);
+          const acctList = getAccounts().filter((a) => a.state?.token && hasAccountContext(a.email));
           await Promise.allSettled(
             acctList.map(async (acct) => {
               try {
@@ -402,6 +406,9 @@ if (import.meta.main) {
             }),
           );
           logStore.log('info', 'boot', `[3/5] Accounts configured`);
+          for (const acct of getAccounts()) {
+            if (acct.state?.token) setStartupStatus(acct.email, 'ready');
+          }
         } catch (err: any) {
           logStore.log('warn', 'boot', `[3/5] Configure failed: ${err.message}`);
         }

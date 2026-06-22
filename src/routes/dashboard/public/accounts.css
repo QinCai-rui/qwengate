@@ -176,6 +176,14 @@
 .auth-dot.throttled {
   background: var(--warning);
 }
+.auth-dot.pending {
+  background: var(--text-secondary);
+  box-shadow: 0 0 4px rgba(136, 136, 136, 0.3);
+}
+.auth-dot.connecting {
+  background: #eab308;
+  box-shadow: 0 0 4px rgba(234, 179, 8, 0.5);
+}
 .auth-dot.unknown {
   background: var(--border);
 }

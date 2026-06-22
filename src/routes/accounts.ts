@@ -29,6 +29,7 @@ accountsRouter.get('/', (c) => {
     throttledUnlockAt: a.throttledUntil > Date.now() ? new Date(a.throttledUntil).toISOString() : null,
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
+    startupStatus: a.startupStatus || null,
   }));
   // Merge CDP status into account data
   const cdpStatuses = getCdpStatuses();

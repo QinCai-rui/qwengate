@@ -65,7 +65,6 @@ interface PersistedAccountData {
   email: string;
   password: string;
   throttledUntil?: number;
-  profileCookies?: string;
 }
 export function parseAccountsFromEnv(): Array<{ email: string; password: string }> {
   const result: Array<{ email: string; password: string }> = [];
@@ -195,13 +194,12 @@ export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
     .filter((a) => a.password)
     .map((a) => ({
       email: a.email,
-      password: encryptPassword(a.password),
+      password: a.password, // plaintext
       ...(a.throttledUntil > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
-      ...(a.profileCookies ? { profileCookies: a.profileCookies } : {}),
     }));
   writeFileSync(ACCOUNTS_FILE, JSON.stringify(data, null, 2), 'utf-8');
 }
-export function loadAccountsFromFile(): Array<{ email: string; password: string; throttledUntil?: number; profileCookies?: string }> {
+export function loadAccountsFromFile(): Array<{ email: string; password: string; throttledUntil?: number }> {
   try {
     if (!existsSync(ACCOUNTS_FILE)) {
       return [];
@@ -213,7 +211,6 @@ export function loadAccountsFromFile(): Array<{ email: string; password: string;
         email: d.email,
         password: decryptPassword(d.password),
         throttledUntil: d.throttledUntil,
-        profileCookies: d.profileCookies,
       }));
   } catch (err: any) {
     logStore.log('error', 'auth', `Failed to load accounts file: ${err.message}`);
@@ -243,7 +240,11 @@ export async function addAccount(email: string, password: string): Promise<{ log
 
   // Step 1: Create and authorize the browser profile
   const { openBrowserProfile } = await import('./browserProfiles.ts');
-  const profileResult = await openBrowserProfile(normalizedEmail, password, { headless: true });
+  let profileResult = await openBrowserProfile(normalizedEmail, password, { headless: true });
+  if (profileResult === 'captcha') {
+    logStore.log('info', 'account', `Captcha for ${normalizedEmail} — opening headed browser...`);
+    profileResult = await openBrowserProfile(normalizedEmail, password, { headless: false });
+  }
 
   if (profileResult === 'success') {
     // Step 2: Extract token from the now-authenticated profile
@@ -544,10 +545,15 @@ export function getAccounts(): readonly AccountEntry[] {
 }
 export async function getToken(): Promise<string | null> {
   const acct = await pickAccount();
-  return acct?.state?.token || null;
+  if (acct) {
+    decrementInFlight(acct.email);
+    return acct.state?.token || null;
+  }
+  return null;
 }
 export async function getTokenWithAccount(email?: string): Promise<{ token: string; email: string } | null> {
   let acct: AccountEntry | null;
+  let picked = false;
   if (email) {
     acct = getAccountByEmail(email);
     if (acct && !isAvailable(acct) && acct.state) {
@@ -555,8 +561,13 @@ export async function getTokenWithAccount(email?: string): Promise<{ token: stri
     }
   } else {
     acct = await pickAccount();
+    picked = true;
   }
-  if (!acct?.state?.token) return null;
+  if (!acct?.state?.token) {
+    if (picked && acct) decrementInFlight(acct.email);
+    return null;
+  }
   acct.lastUsed = Date.now();
+  if (picked) decrementInFlight(acct.email);
   return { token: acct.state.token, email: acct.email };
 }
