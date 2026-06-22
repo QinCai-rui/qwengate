@@ -13,7 +13,6 @@ import { checkApiKeyAuth } from '../../utils/auth.ts';
 import { projectPath } from '../../utils/paths.ts';
 import { APP_VERSION } from '../../utils/version.ts';
 import { accountsHtml } from './accounts.ts';
-import { logsHtml } from './logs.ts';
 import { monitorHtml } from './monitor.ts';
 import { networkHtml } from './network.ts';
 import { overviewHtml } from './overview.ts';
@@ -249,7 +248,8 @@ function logStreamHandler(c: any) {
 }
 
 function logJsonHandler(c: any) {
-  const entries = logStore.getRecent(50);
+  const limit = parseInt(c.req.query('limit') || '50', 10);
+  const entries = logStore.getRecent(Math.max(1, Math.min(limit, 500)));
   const serialized = entries.map((e) => {
     const toolCalls = (e.parsedToolCalls || []).map((tc) => {
       let args: unknown = tc.args;
@@ -289,7 +289,6 @@ function requireApiKey(c: any, next: () => Promise<void>) {
 
 export function registerDashboardRoutes(app: Hono): void {
   app.get('/dashboard', serveHtml(overviewHtml));
-  app.get('/dashboard/logs', serveHtml(logsHtml));
   app.get('/dashboard/accounts', serveHtml(accountsHtml));
   app.get('/dashboard/network', serveHtml(networkHtml));
   app.get('/dashboard/settings', serveHtml(settingsHtml));
@@ -337,7 +336,23 @@ export function registerDashboardRoutes(app: Hono): void {
   app.get('/metrics/model-health', async (c, next) => requireApiKey(c, next), modelHealthHandler);
   app.get('/metrics/monitor', async (c, next) => requireApiKey(c, next), monitorHandler);
 
-  app.get('/log', (c) => c.redirect('/dashboard/logs'));
+  app.get('/log', (c) => c.redirect('/dashboard'));
+
+  app.patch(
+    '/api/accounts/:email',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const body = await c.req.json();
+        const { setAccountDisabled } = await import('../../services/accountManager.ts');
+        setAccountDisabled(c.req.param('email'), body.disabled === true);
+        return c.json({ ok: true });
+      } catch (err: any) {
+        return c.json({ error: err.message }, 404);
+      }
+    },
+  );
+
   app.get('/log/json', async (c, next) => requireApiKey(c, next), logJsonHandler);
   app.get('/log/stream', async (c, next) => requireApiKey(c, next), logStreamHandler);
   app.get(

@@ -24,4 +24,6 @@ export interface AccountEntry {
   profileCookies?: string;
   /** Startup lifecycle — 'pending' (added), 'initializing' (boot in progress), 'ready' (fully initialized) */
   startupStatus?: 'pending' | 'initializing' | 'connecting' | 'ready';
+  /** If true, account is excluded from request routing */
+  disabled?: boolean;
 }

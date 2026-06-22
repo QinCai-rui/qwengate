@@ -103,14 +103,12 @@ export interface QwenStreamResult {
   qwenLogFile?: string;
 }
 
-const QWEN_FETCH_TIMEOUT_MS = config.getInt('QWEN_FETCH_TIMEOUT_MS', 30000);
-
 // Cached timezone for request headers
 const cachedTimezone = 'America/Sao_Paulo';
 
 export function createFetchTimeout(): { controller: AbortController; cleanup: () => void } {
   const controller = new AbortController();
-  const timeout = QWEN_FETCH_TIMEOUT_MS;
+  const timeout = config.getInt('QWEN_FETCH_TIMEOUT_MS', 30000);
   if (timeout > 0) {
     const timer = setTimeout(() => controller.abort(new Error('Request timed out')), timeout);
     return { controller, cleanup: () => clearTimeout(timer) };
@@ -412,17 +410,9 @@ export async function createQwenStream(
             'qwen',
             `[Qwen] BOT DETECTION for ${currentAccountEmail}: FAIL_SYS_USER_VALIDATE — throttling account 5min`,
           );
-          // Throttle this account and throw to trigger retry with different account
           if (currentAccountEmail) {
             throttleAccount(currentAccountEmail, 5 * 60 * 1000); // 5 minutes
           }
-          const mockResponse = new Response(firstText, {
-            status: 200,
-            statusText: 'OK',
-            headers: { 'content-type': 'application/json' },
-          });
-          await handleErrorResponse(mockResponse, debugEntry.id);
-          // handleErrorResponse always throws, so we never reach here
         }
       } catch (parseErr) {
         // If it's a known error type from handleErrorResponse, rethrow it

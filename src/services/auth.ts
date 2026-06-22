@@ -49,12 +49,17 @@ export {
   rebuildEmailIndex,
   reloadAccounts,
   removeAccount,
+  setAccountDisabled,
   throttleAccount,
 } from './accountManager.ts';
 export { ensureAccountFresh, needsRefresh, tryRefreshToken } from './tokenRefresh.ts';
 
-export const AUTH_TOKEN_MAX_AGE_MS = config.getInt('AUTH_TOKEN_MAX_AGE_MS', 28800000);
-export const AUTH_REFRESH_BEFORE_MS = config.getInt('AUTH_REFRESH_BEFORE_MS', 300000);
+export function getAuthTokenMaxAgeMs(): number {
+  return config.getInt('AUTH_TOKEN_MAX_AGE_MS', 28800000);
+}
+export function getAuthRefreshBeforeMs(): number {
+  return config.getInt('AUTH_REFRESH_BEFORE_MS', 300000);
+}
 const TOKEN_DIR = join(process.cwd(), '.qwen', 'tokens');
 
 export async function checkPlaywrightSession(): Promise<boolean> {
@@ -79,7 +84,9 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
   const discovered = discoverSavedAccounts();
 
   // Merge persisted accounts (which may include throttledUntil and profileCookies) with discovered accounts
-  const merged: Array<{ email: string; password: string; throttledUntil?: number; profileCookies?: string }> = [...discovered];
+  const merged: Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean; profileCookies?: string }> = [
+    ...discovered,
+  ];
   for (const p of persisted) {
     const existing = merged.find((a) => a.email.toLowerCase().trim() === p.email.toLowerCase().trim());
     if (existing) {
@@ -89,6 +96,9 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       // Carry over throttledUntil from persisted data
       if (p.throttledUntil) {
         existing.throttledUntil = p.throttledUntil;
+      }
+      if (p.disabled !== undefined) {
+        existing.disabled = p.disabled;
       }
     } else if (p.password) {
       merged.push(p);
@@ -120,6 +130,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       inFlight: 0,
       totalRequests: 0,
       profileCookies: a.profileCookies,
+      disabled: (a as any).disabled ?? false,
       startupStatus: 'initializing',
     });
   }
@@ -317,7 +328,7 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
 
       if (authCookie?.value) {
         const payload = decodeJwt(authCookie.value);
-        const expiresAt = payload?.exp ? payload.exp * 1000 : Date.now() + AUTH_TOKEN_MAX_AGE_MS;
+        const expiresAt = payload?.exp ? payload.exp * 1000 : Date.now() + getAuthTokenMaxAgeMs();
         if (expiresAt > Date.now()) {
           const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
           const state: AuthState = {
@@ -372,7 +383,7 @@ export async function saveCookies(email: string, token: string, refreshToken?: s
       if (payload?.exp && typeof payload.exp === 'number') {
         jwtExpiresAt = payload.exp * 1000;
       } else {
-        jwtExpiresAt = Date.now() + AUTH_TOKEN_MAX_AGE_MS;
+        jwtExpiresAt = Date.now() + getAuthTokenMaxAgeMs();
       }
     }
 

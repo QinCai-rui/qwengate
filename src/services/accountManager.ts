@@ -9,7 +9,7 @@ import os from 'os';
 import path from 'path';
 import type { AccountEntry } from '../types/auth.ts';
 import { projectPath } from '../utils/paths.ts';
-import { getCdpStatuses } from './cdpClient.ts';
+import { getCdpStatuses, hasAccountContext } from './cdpClient.ts';
 import { config } from './configService.ts';
 import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
@@ -19,6 +19,7 @@ import { configureAccount } from './qwenModels.ts';
 export const accounts: AccountEntry[] = [];
 
 const ACCOUNTS_FILE = projectPath('.qwen', 'accounts.json');
+const FALLBACK_ACCOUNTS_FILE = projectPath('.qwen', 'accounts.jsonc');
 const QWEN_DIR = projectPath('.qwen');
 
 const OLD_ACCOUNTS_FILE = projectPath('qwen_profile', 'accounts.json');
@@ -33,9 +34,8 @@ function getProfileDirForEmail(email: string): string {
 
 export function migrateFromOldPaths(): void {
   try {
-    if (!existsSync(OLD_ACCOUNTS_FILE) || existsSync(ACCOUNTS_FILE)) {
-      return;
-    }
+    if (!existsSync(OLD_ACCOUNTS_FILE)) return;
+    if (existsSync(ACCOUNTS_FILE) || existsSync(FALLBACK_ACCOUNTS_FILE)) return;
 
     logStore.log('info', 'auth', 'Migrating data from qwen_profile/ to .qwen/ ...');
 
@@ -46,7 +46,7 @@ export function migrateFromOldPaths(): void {
 
     const accountsData = readFileSync(OLD_ACCOUNTS_FILE, 'utf-8');
     writeFileSync(ACCOUNTS_FILE, accountsData, 'utf-8');
-    logStore.log('info', 'auth', 'Migrated accounts.json');
+    logStore.log('info', 'auth', 'Migrated accounts.json from qwen_profile/ to .qwen/');
     logStore.log('info', 'auth', 'Note: old token files are ignored — tokens are now read from browser profiles.');
     logStore.log('info', 'auth', 'Migration complete. Old files preserved.');
   } catch (err: any) {
@@ -61,10 +61,16 @@ export interface CookieData {
   savedAt: number;
   expiresAt: number;
 }
+/** Strip // and /* * / JSONC comments before JSON.parse */
+function stripJsoncComments(text: string): string {
+  return text.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
 interface PersistedAccountData {
   email: string;
   password: string;
   throttledUntil?: number;
+  disabled?: boolean;
 }
 export function parseAccountsFromEnv(): Array<{ email: string; password: string }> {
   const result: Array<{ email: string; password: string }> = [];
@@ -196,26 +202,31 @@ export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
       email: a.email,
       password: a.password, // plaintext
       ...(a.throttledUntil > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
+      ...(a.disabled !== undefined ? { disabled: a.disabled } : {}),
     }));
   writeFileSync(ACCOUNTS_FILE, JSON.stringify(data, null, 2), 'utf-8');
 }
-export function loadAccountsFromFile(): Array<{ email: string; password: string; throttledUntil?: number }> {
-  try {
-    if (!existsSync(ACCOUNTS_FILE)) {
-      return [];
+export function loadAccountsFromFile(): Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean }> {
+  const tryLoad = (filePath: string): Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean }> | null => {
+    try {
+      if (!existsSync(filePath)) return null;
+      const raw = readFileSync(filePath, 'utf-8');
+      const data: PersistedAccountData[] = JSON.parse(stripJsoncComments(raw));
+      return data
+        .filter((d) => d.email && d.password)
+        .map((d) => ({
+          email: d.email,
+          password: decryptPassword(d.password),
+          throttledUntil: d.throttledUntil,
+          disabled: d.disabled ?? false,
+        }));
+    } catch (err: any) {
+      logStore.log('error', 'auth', `Failed to load ${filePath}: ${err.message}`);
+      return null;
     }
-    const data: PersistedAccountData[] = JSON.parse(readFileSync(ACCOUNTS_FILE, 'utf-8'));
-    return data
-      .filter((d) => d.email && d.password)
-      .map((d) => ({
-        email: d.email,
-        password: decryptPassword(d.password),
-        throttledUntil: d.throttledUntil,
-      }));
-  } catch (err: any) {
-    logStore.log('error', 'auth', `Failed to load accounts file: ${err.message}`);
-    return [];
-  }
+  };
+
+  return tryLoad(ACCOUNTS_FILE) ?? tryLoad(FALLBACK_ACCOUNTS_FILE) ?? [];
 }
 export async function addAccount(email: string, password: string): Promise<{ loginSucceeded: boolean; loginError?: string }> {
   const normalizedEmail = email.toLowerCase().trim();
@@ -233,6 +244,7 @@ export async function addAccount(email: string, password: string): Promise<{ log
     loginAttempt: 0,
     inFlight: 0,
     totalRequests: 0,
+    disabled: false,
   };
   accounts.push(entry);
   rebuildEmailIndex();
@@ -318,6 +330,7 @@ export async function reloadAccounts(): Promise<void> {
         loginAttempt: 0,
         inFlight: 0,
         totalRequests: 0,
+        disabled: false,
       };
       const { loadCookiesFromProfile } = await import('./auth.ts');
       const profileState = await loadCookiesFromProfile(email);
@@ -403,11 +416,11 @@ export function resetWatcherState(): void {
     watcherRetryTimer = null;
   }
 }
-const DEFAULT_THROTTLE_MS = config.getInt('RATE_LIMIT_COOLDOWN_MS', 120000);
-
 export function isAvailable(acct: AccountEntry): boolean {
+  if (acct.disabled) return false;
   if (!acct.state) return false;
   if (acct.throttledUntil > Date.now()) return false;
+  if (process.env.CHROME_CDP_ENDPOINT && !hasAccountContext(acct.email)) return false;
   return true;
 }
 export async function pickAccount(excludeEmail?: string): Promise<AccountEntry | null> {
@@ -481,10 +494,16 @@ export function hasInFlight(email: string): boolean {
 export function getAccountByEmail(email: string): AccountEntry | null {
   return emailIndex.get(email.toLowerCase().trim()) || null;
 }
+export function setAccountDisabled(email: string, disabled: boolean): void {
+  const acct = getAccountByEmail(email);
+  if (!acct) throw new Error(`Account not found: ${email}`);
+  acct.disabled = disabled;
+  saveAccountsToFile(accounts);
+}
 export function throttleAccount(email: string, durationMs?: number): void {
   const acct = getAccountByEmail(email);
   if (!acct) return;
-  const cooldown = durationMs || DEFAULT_THROTTLE_MS;
+  const cooldown = durationMs || config.getInt('RATE_LIMIT_COOLDOWN_MS', 120000);
   acct.throttledUntil = Date.now() + cooldown;
   const unlockTime = new Date(acct.throttledUntil).toISOString();
   const hours = Math.ceil(cooldown / 3600000);
@@ -501,6 +520,7 @@ export function getAccountStats(): Array<{
   email: string;
   authenticated: boolean;
   throttled: boolean;
+  disabled: boolean;
   throttledRemainingMs: number;
   throttledUnlockAt: string | null;
   tokenExpiresInMs: number;
@@ -524,6 +544,7 @@ export function getAccountStats(): Array<{
     email: a.email,
     authenticated: a.state !== null,
     throttled: a.throttledUntil > now,
+    disabled: a.disabled ?? false,
     throttledRemainingMs: Math.max(0, a.throttledUntil - now),
     throttledUnlockAt: a.throttledUntil > now ? new Date(a.throttledUntil).toISOString() : null,
     tokenExpiresInMs: a.state ? Math.max(0, a.state.expiresAt - now) : 0,

@@ -1,25 +1,24 @@
 /**
- * Per-account CDP client: Chrome browser contexts for baxia header capture,
- * Node.js fetch for all API calls.
+ * Per-account CDP client: routes API calls through a single Chrome browser
+ * with isolated browser contexts per Qwen account.
  *
  * Architecture:
  *   - ONE Chrome process on port 26404 (browser-level WS)
  *   - N browser contexts, one per account, each with its own page
- *   - Chrome CDP is used ONLY for: context creation, cookie injection,
- *     stealth scripts, baxia loading, and header capture
- *   - ALL API requests use Node.js fetch() with cached baxia headers
- *   - No browser CDP evaluate for fetch — eliminates large body hangs
+ *   - Each page has independent baxia, cookies, and window.fetch
+ *   - CDP messages routed by sessionId (Target.attachToTarget flatten: true)
+ *   - Multiple concurrent requests supported (different accounts = different pages)
  *
  * Usage:
  *   1. startBrowser() → Chrome on port 26404
  *   2. initBrowserConnection() → connect browser-level WS
  *   3. initAccountContext(email, profileCookies) → create context + navigate
- *   4. browserFetchForAccount(email, url, opts) → non-streaming (Node.js fetch)
- *   5. browserStreamFetchIncrementalForAccount(email, url, body) → streaming (Node.js fetch)
+ *   4. browserFetchForAccount(email, url, opts) → non-streaming
+ *   5. browserStreamFetchIncrementalForAccount(email, url, body) → streaming
+ *
+ * IMPORTANT: baxia wraps window.fetch (not XMLHttpRequest).
+ * All API calls MUST use fetch() from the page context.
  */
-
-import { setStartupStatus, throttleAccount } from './auth.ts';
-import { logStore } from './logStore.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,7 +54,8 @@ export interface AccountCdpState {
   callIdCounter: number;
   streamBindings: Map<string, (chunk: string) => void>;
   cachedBxHeaders: Record<string, string>;
-  profileCookies?: string;
+  profileCookies: string;
+  initialized: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,29 +76,6 @@ const browserQueue = new Map<number, PendingCall>();
 const accountStates = new Map<string, AccountCdpState>();
 const sessionToEmail = new Map<string, string>(); // sessionId → email
 
-// Fetch domain interception state (for large body routing through Chrome's network stack)
-interface FetchInterceptEntry {
-  markerId: string;
-  email: string;
-  // Phase 1: Request stage — resolves when Fetch.requestPaused fires for Request
-  requestResolve: (v: { requestId: string }) => void;
-  requestReject: (e: any) => void;
-  requestSettled: boolean;
-  requestTimeout: ReturnType<typeof setTimeout>;
-  // Populated after Request stage fires
-  requestId: string;
-  requestHeaders: Record<string, string>;
-  // Phase 2: Response stage — resolves when Fetch.requestPaused fires for Response
-  responseResolve: (v: { statusCode: number; statusText: string; headers: Record<string, string> }) => void;
-  responseReject: (e: any) => void;
-  responseSettled: boolean;
-  responseTimeout: ReturnType<typeof setTimeout>;
-}
-
-const fetchInterceptByMarker = new Map<string, FetchInterceptEntry>();
-const fetchInterceptByRequestId = new Map<string, FetchInterceptEntry>();
-const LARGE_BODY_THRESHOLD = 50_000; // 50KB — above this, route through Chrome intercept
-
 // Default account for backward-compatible functions
 let defaultAccountEmail: string | null = null;
 
@@ -116,7 +93,6 @@ async function connectBrowserWs(): Promise<void> {
   if (browserConnected && browserWs) return;
 
   const wsUrl = await getBrowserWsUrl();
-  logStore.log('debug', 'cdp', `Connecting to browser WS: ${wsUrl}`);
 
   return new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
@@ -129,7 +105,6 @@ async function connectBrowserWs(): Promise<void> {
       clearTimeout(timeout);
       browserWs = ws;
       browserConnected = true;
-      logStore.log('debug', 'cdp', 'Browser WS connected');
       resolve();
     };
 
@@ -155,59 +130,8 @@ async function connectBrowserWs(): Promise<void> {
             if (state) {
               const text = msg.params?.args?.map((a: any) => a.value ?? a.description ?? '').join(' ') ?? '';
               if (text.includes('[CDP-BROWSER]')) {
-                logStore.log('debug', 'cdp', `[CDP-CONSOLE][${state}] ${text}`);
               }
             }
-          }
-
-          // Fetch.requestPaused — Chrome Fetch domain interception for large body routing
-          if (msg.method === 'Fetch.requestPaused' && state) {
-            const params = msg.params;
-
-            if (!params.responseStatusCode) {
-              // ── Request stage ──
-              const marker = params.request?.headers?.['X-CDP-Marker'];
-              if (marker) {
-                // Our intercepted request — resolve the pending promise
-                const entry = fetchInterceptByMarker.get(marker);
-                if (entry && !entry.requestSettled) {
-                  entry.requestSettled = true;
-                  entry.requestId = params.requestId;
-                  entry.requestHeaders = params.request?.headers || {};
-                  clearTimeout(entry.requestTimeout);
-                  fetchInterceptByRequestId.set(params.requestId, entry);
-                  entry.requestResolve({ requestId: params.requestId });
-                  logStore.log('debug', 'cdp', `[CDP-Fetch][${entry.email}] Request intercepted, requestId=${params.requestId}`);
-                }
-              } else {
-                // Not our intercept — continue unmodified so other requests don't hang
-                sendToAccount(state, 'Fetch.continueRequest', { requestId: params.requestId }).catch(() => {});
-              }
-            } else {
-              // ── Response stage ──
-              const entry = fetchInterceptByRequestId.get(params.requestId);
-              if (entry && !entry.responseSettled) {
-                entry.responseSettled = true;
-                clearTimeout(entry.responseTimeout);
-                // Convert responseHeaders (array of {name,value}) to Record
-                const respHeaders: Record<string, string> = {};
-                if (Array.isArray(params.responseHeaders)) {
-                  for (const h of params.responseHeaders) {
-                    respHeaders[h.name] = h.value;
-                  }
-                }
-                entry.responseResolve({
-                  statusCode: params.responseStatusCode,
-                  statusText: params.responseStatusText || '',
-                  headers: respHeaders,
-                });
-                logStore.log('debug', 'cdp', `[CDP-Fetch][${entry.email}] Response intercepted, status=${params.responseStatusCode}`);
-              } else {
-                // Not our intercept — continue response unmodified
-                sendToAccount(state, 'Fetch.continueResponse', { requestId: params.requestId }).catch(() => {});
-              }
-            }
-            return;
           }
 
           // Response to a command (has id)
@@ -223,29 +147,22 @@ async function connectBrowserWs(): Promise<void> {
             return;
           }
 
-          // Other events with sessionId — capture request headers for replay on large bodies
+          // Other events with sessionId — capture ALL request headers for replay on large bodies
           if (msg.method === 'Network.requestWillBeSent' && state && msg.params?.request?.url?.includes('/api/v2/')) {
             const hdrs = msg.params.request.headers || {};
-            // ONLY update cached headers if this capture has bx-ua (prevents overwriting good headers with bad ones)
-            if (hdrs['bx-ua']) {
-              state.cachedBxHeaders = {
-                'bx-umidtoken': hdrs['bx-umidtoken'] || '',
-                'bx-ua': hdrs['bx-ua'] || '',
-                'bx-v': hdrs['bx-v'] || '',
-                cookie: hdrs['cookie'] || '',
-                'user-agent': hdrs['user-agent'] || '',
-                'sec-ch-ua': hdrs['sec-ch-ua'] || '',
-                'sec-ch-ua-mobile': hdrs['sec-ch-ua-mobile'] || '',
-                'sec-ch-ua-platform': hdrs['sec-ch-ua-platform'] || '',
-                origin: hdrs['origin'] || '',
-                referer: hdrs['referer'] || '',
-              };
-              logStore.log(
-                'debug',
-                'cdp',
-                `Captured ${Object.keys(state.cachedBxHeaders).length} headers for ${state.email} (hasCookie: ${!!hdrs['cookie']}, hasBxUa: ${!!hdrs['bx-ua']})`,
-              );
-            }
+            // Capture ALL headers for replay on large bodies
+            state.cachedBxHeaders = {
+              'bx-umidtoken': hdrs['bx-umidtoken'] || '',
+              'bx-ua': hdrs['bx-ua'] || '',
+              'bx-v': hdrs['bx-v'] || '',
+              cookie: hdrs['cookie'] || '',
+              'user-agent': hdrs['user-agent'] || '',
+              'sec-ch-ua': hdrs['sec-ch-ua'] || '',
+              'sec-ch-ua-mobile': hdrs['sec-ch-ua-mobile'] || '',
+              'sec-ch-ua-platform': hdrs['sec-ch-ua-platform'] || '',
+              origin: hdrs['origin'] || '',
+              referer: hdrs['referer'] || '',
+            };
           }
           return;
         }
@@ -384,15 +301,12 @@ function evaluateInAccount<T>(email: string, expression: string, awaitPromise = 
  * Create an isolated browser context for an account, inject cookies,
  * navigate to chat.qwen.ai, and wait for baxia to initialize.
  */
-export async function initAccountContext(email: string, profileCookies?: string): Promise<void> {
+export async function initAccountContext(email: string, profileCookies: string): Promise<void> {
   await connectBrowserWs();
-
-  logStore.log('debug', 'cdp', `Creating context for ${email}...`);
 
   // 1. Create browser context
   const ctxResult = await browserEvaluate<{ browserContextId: string }>('Target.createBrowserContext', {});
   const contextId = ctxResult.browserContextId;
-  logStore.log('debug', 'cdp', `  contextId=${contextId}`);
 
   // 2. Create target (page) in that context
   const tgtResult = await browserEvaluate<{ targetId: string }>('Target.createTarget', {
@@ -400,7 +314,6 @@ export async function initAccountContext(email: string, profileCookies?: string)
     browserContextId: contextId,
   });
   const targetId = tgtResult.targetId;
-  logStore.log('debug', 'cdp', `  targetId=${targetId}`);
 
   // 3. Attach to target with flatten: true → get sessionId
   const attachResult = await browserEvaluate<{ sessionId: string }>('Target.attachToTarget', {
@@ -408,7 +321,6 @@ export async function initAccountContext(email: string, profileCookies?: string)
     flatten: true,
   });
   const sessionId = attachResult.sessionId;
-  logStore.log('debug', 'cdp', `  sessionId=${sessionId}`);
 
   // 4. Create account state
   const state: AccountCdpState = {
@@ -421,24 +333,17 @@ export async function initAccountContext(email: string, profileCookies?: string)
     streamBindings: new Map(),
     cachedBxHeaders: {},
     profileCookies,
+    initialized: false,
   };
   accountStates.set(email, state);
   sessionToEmail.set(sessionId, email);
 
   if (!defaultAccountEmail) defaultAccountEmail = email;
 
-  // 5. Enable Network + Page + Runtime + Fetch domains for this session
+  // 5. Enable Network + Page + Runtime domains for this session
   await sendToAccount(state, 'Network.enable', {});
   await sendToAccount(state, 'Page.enable', {});
   await sendToAccount(state, 'Runtime.enable', {});
-  // Enable Fetch domain for large body interception — intercepts chat completions at Request and Response stages
-  await sendToAccount(state, 'Fetch.enable', {
-    patterns: [
-      { urlPattern: '*chat.qwen.ai/api/v2/chat/completions*', requestStage: 'Request' },
-      { urlPattern: '*chat.qwen.ai/api/v2/chat/completions*', requestStage: 'Response' },
-    ],
-  });
-  logStore.log('debug', 'cdp', `Network + Page + Runtime + Fetch enabled for ${email}`);
 
   // 5b. Inject stealth scripts BEFORE page load to evade headless detection
   const stealthScript = `
@@ -491,7 +396,6 @@ export async function initAccountContext(email: string, profileCookies?: string)
     };
   `;
   await sendToAccount(state, 'Page.addScriptToEvaluateOnNewDocument', { source: stealthScript });
-  logStore.log('debug', 'cdp', `  Stealth scripts injected for ${email}`);
 
   // 6. Inject cookies from profileCookies
   if (profileCookies) {
@@ -514,12 +418,10 @@ export async function initAccountContext(email: string, profileCookies?: string)
         sameSite: 'Lax',
       });
     }
-    logStore.log('debug', 'cdp', `  Injected ${injected} cookies for ${email}`);
   }
 
   // 7. Navigate to chat.qwen.ai to load SPA + baxia
   await sendToAccount(state, 'Page.navigate', { url: 'https://chat.qwen.ai/' });
-  logStore.log('debug', 'cdp', `  Navigating ${email} to chat.qwen.ai...`);
 
   // 8. Wait for SPA to load + baxia to initialize (poll with backoff)
   let baxiaReady = false;
@@ -533,7 +435,6 @@ export async function initAccountContext(email: string, profileCookies?: string)
       );
       if (check.fetchIsWrapped) {
         baxiaReady = true;
-        logStore.log('debug', 'cdp', `  baxia ready for ${email} after ${waitMs + 2000}ms`);
         break;
       }
     } catch {
@@ -541,7 +442,7 @@ export async function initAccountContext(email: string, profileCookies?: string)
     }
   }
   if (!baxiaReady) {
-    logStore.log('debug', 'cdp', `[CDP]   baxia not ready for ${email} after 15s — proceeding anyway`);
+    console.warn(`[CDP]   baxia not ready for ${email} after 15s — proceeding anyway`);
   }
 
   // 9. Verify baxia
@@ -551,9 +452,8 @@ export async function initAccountContext(email: string, profileCookies?: string)
       '({hasBaxia:!!window.__baxia__,fetchIsWrapped:!fetch.toString().includes("native")})',
       false,
     );
-    logStore.log('debug', 'cdp', `  baxia for ${email}: ${status.hasBaxia} | fetch wrapped: ${status.fetchIsWrapped}`);
   } catch (err: any) {
-    logStore.log('debug', 'cdp', `[CDP]   baxia check failed for ${email}: ${err.message}`);
+    console.warn(`[CDP]   baxia check failed for ${email}: ${err.message}`);
   }
 
   // 10. Enable Network tracking to capture bx headers
@@ -561,7 +461,7 @@ export async function initAccountContext(email: string, profileCookies?: string)
   triggerBxHeaderCaptureForAccount(state);
   await Bun.sleep(1500);
 
-  logStore.log('debug', 'cdp', `Account context ready: ${email} (sessionId=${sessionId})`);
+  state.initialized = true;
 }
 
 /**
@@ -629,7 +529,6 @@ function triggerBxHeaderCaptureForAccount(state: AccountCdpState): void {
 export async function refreshBaxiaForAccount(email: string): Promise<void> {
   const state = accountStates.get(email);
   if (!state) return;
-  logStore.log('debug', 'cdp', `Refreshing baxia for ${email}...`);
   try {
     await sendToAccount(state, 'Page.navigate', { url: 'https://chat.qwen.ai/' });
     // Wait for baxia to re-initialize
@@ -642,7 +541,6 @@ export async function refreshBaxiaForAccount(email: string): Promise<void> {
           false,
         );
         if (check.fetchIsWrapped) {
-          logStore.log('debug', 'cdp', `  baxia refreshed for ${email} after ${waitMs + 2000}ms`);
           triggerBxHeaderCaptureForAccount(state);
           return;
         }
@@ -650,406 +548,150 @@ export async function refreshBaxiaForAccount(email: string): Promise<void> {
         /* not ready */
       }
     }
-    logStore.log('debug', 'cdp', `[CDP]   baxia refresh incomplete for ${email} after 10s`);
+    console.warn(`[CDP]   baxia refresh incomplete for ${email} after 10s`);
   } catch (err: any) {
-    logStore.log('debug', 'cdp', `[CDP]   baxia refresh failed for ${email}: ${err.message}`);
+    console.warn(`[CDP]   baxia refresh failed for ${email}: ${err.message}`);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Helper: harvest fresh baxia headers via a small browser request
+// Non-streaming fetch
 // ---------------------------------------------------------------------------
 
 /**
- * Harvest fresh baxia headers by making a small browser request.
- * This generates fresh bx-ua/bx-umidtoken tokens that can be used with Node.js fetch.
- * Returns after headers are captured (or after maxWaitMs).
- */
-async function harvestFreshHeaders(state: AccountCdpState, maxWaitMs = 8000): Promise<void> {
-  // Save existing headers to detect when new ones arrive
-  const oldBxUa = state.cachedBxHeaders?.['bx-ua'] || '';
-
-  // Fire a small browser request to trigger baxia header generation
-  triggerBxHeaderCaptureForAccount(state);
-
-  // Wait until we get headers with a DIFFERENT bx-ua value (or timeout)
-  const start = Date.now();
-  while (Date.now() - start < maxWaitMs) {
-    const current = state.cachedBxHeaders?.['bx-ua'] || '';
-    if (current && current !== oldBxUa) return; // Fresh headers captured
-    await Bun.sleep(200);
-  }
-
-  // Even if headers didn't change, they may still be valid
-  if (state.cachedBxHeaders?.['bx-ua']) return;
-
-  logStore.log('debug', 'cdp', `[CDP][${state.email}] harvestFreshHeaders: no bx-ua after ${maxWaitMs}ms`);
-}
-
-// ---------------------------------------------------------------------------
-// Helper: wait for baxia headers to be captured
-// ---------------------------------------------------------------------------
-
-async function triggerBxHeaderCaptureAndWait(state: AccountCdpState, maxWaitMs = 5000): Promise<void> {
-  triggerBxHeaderCaptureForAccount(state);
-  const start = Date.now();
-  while (Date.now() - start < maxWaitMs) {
-    if (state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) return;
-    await Bun.sleep(200);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Non-streaming fetch via Node.js
-// ---------------------------------------------------------------------------
-
-/**
- * Make a non-streaming API call using Node.js fetch with cached baxia headers.
- * Completely bypasses browser CDP — no size limits, no baxia wrapper hangs.
- */
-export async function nodeFetchForAccount(
-  email: string,
-  url: string,
-  body: string,
-  options?: { method?: string; timeout?: number },
-): Promise<CdpResponse> {
-  const state = accountStates.get(email);
-  if (!state) throw new Error(`No CDP context for account ${email}`);
-
-  const cachedHeaders = state.cachedBxHeaders;
-  if (!cachedHeaders || !cachedHeaders['bx-ua']) {
-    throw new Error('No cached baxia headers — need a successful small request first');
-  }
-
-  const requestId = crypto.randomUUID();
-  logStore.log('debug', 'cdp', `NodeFetch ${email} Non-streaming request, body=${body.length} chars`);
-
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-    source: 'web',
-    'x-request-id': requestId,
-    'x-accel-buffering': 'no',
-    timezone: new Date().toString(),
-    version: '0.2.66',
-    'bx-umidtoken': cachedHeaders['bx-umidtoken'],
-    'bx-ua': cachedHeaders['bx-ua'],
-    'bx-v': cachedHeaders['bx-v'],
-    'user-agent': cachedHeaders['user-agent'],
-    'sec-ch-ua': cachedHeaders['sec-ch-ua'],
-    'sec-ch-ua-mobile': cachedHeaders['sec-ch-ua-mobile'],
-    'sec-ch-ua-platform': cachedHeaders['sec-ch-ua-platform'],
-    origin: 'https://chat.qwen.ai',
-    referer: 'https://chat.qwen.ai/',
-  };
-
-  if (state.profileCookies) {
-    headers['cookie'] = state.profileCookies;
-  }
-
-  const controller = new AbortController();
-  const timeout = options?.timeout ?? 30_000;
-  const timer = setTimeout(() => controller.abort(), timeout);
-
-  try {
-    const resp = await fetch(url, {
-      method: (options?.method || 'POST') as any,
-      headers,
-      body,
-      signal: controller.signal,
-    });
-
-    clearTimeout(timer);
-    logStore.log('debug', 'cdp', `NodeFetch ${email} Response: ${resp.status}`);
-
-    const text = await resp.text();
-    const respHeaders: Record<string, string> = {};
-    resp.headers.forEach((v, k) => {
-      respHeaders[k] = v;
-    });
-    return { ok: resp.ok, status: resp.status, statusText: resp.statusText, body: text, headers: respHeaders };
-  } catch (err) {
-    clearTimeout(timer);
-    throw err;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Chrome Fetch domain intercept (large body routing)
-// ---------------------------------------------------------------------------
-
-/**
- * HTTP status text map for common codes.
- */
-function httpStatusText(code: number): string {
-  const map: Record<number, string> = {
-    200: 'OK',
-    201: 'Created',
-    204: 'No Content',
-    301: 'Moved Permanently',
-    302: 'Found',
-    304: 'Not Modified',
-    400: 'Bad Request',
-    401: 'Unauthorized',
-    403: 'Forbidden',
-    404: 'Not Found',
-    429: 'Too Many Requests',
-    500: 'Internal Server Error',
-    502: 'Bad Gateway',
-    503: 'Service Unavailable',
-  };
-  return map[code] || 'Unknown';
-}
-
-/**
- * Route a large POST body through Chrome's network stack via CDP Fetch domain interception.
- *
- * Flow:
- *   1. Fire a small trigger window.fetch() with a unique X-CDP-Marker header
- *   2. Fetch.requestPaused fires at Request stage (baxia headers already injected)
- *   3. Fetch.continueRequest replaces the small body with the actual large body
- *   4. Fetch.requestPaused fires at Response stage (gives us status code + headers)
- *   5. Fetch.takeResponseBodyAsStream + IO.read for streaming response body
- *
- * This preserves baxia-injected headers AND uses Chrome's TLS fingerprint.
- */
-async function fetchViaChromeIntercept(
-  email: string,
-  url: string,
-  body: string,
-  options?: { timeout?: number },
-): Promise<{
-  ok: boolean;
-  status: number;
-  statusText: string;
-  headers: Record<string, string>;
-  stream: ReadableStream<Uint8Array>;
-}> {
-  const state = accountStates.get(email);
-  if (!state) throw new Error(`No CDP context for account ${email}`);
-
-  const markerId = crypto.randomUUID();
-  const timeoutMs = options?.timeout ?? 90_000;
-  const t0 = Date.now();
-
-  // ── Create promises for both interception phases ──
-  let requestResolve!: (v: { requestId: string }) => void;
-  let requestReject!: (e: any) => void;
-  let responseResolve!: (v: { statusCode: number; statusText: string; headers: Record<string, string> }) => void;
-  let responseReject!: (e: any) => void;
-
-  const requestPromise = new Promise<{ requestId: string }>((resolve, reject) => {
-    requestResolve = resolve;
-    requestReject = reject;
-  });
-  const responsePromise = new Promise<{ statusCode: number; statusText: string; headers: Record<string, string> }>((resolve, reject) => {
-    responseResolve = resolve;
-    responseReject = reject;
-  });
-
-  const entry: FetchInterceptEntry = {
-    markerId,
-    email,
-    requestResolve,
-    requestReject,
-    requestSettled: false,
-    requestTimeout: setTimeout(() => {
-      if (!entry.requestSettled) {
-        entry.requestSettled = true;
-        requestReject(new Error(`Fetch intercept request stage timed out for ${email} after ${timeoutMs}ms`));
-      }
-    }, timeoutMs),
-    requestId: '',
-    requestHeaders: {},
-    responseResolve,
-    responseReject,
-    responseSettled: false,
-    responseTimeout: setTimeout(() => {
-      if (!entry.responseSettled) {
-        entry.responseSettled = true;
-        responseReject(new Error(`Fetch intercept response stage timed out for ${email} after ${timeoutMs}ms`));
-      }
-    }, timeoutMs),
-  };
-
-  fetchInterceptByMarker.set(markerId, entry);
-
-  try {
-    logStore.log('debug', 'cdp', `[CDP-Fetch][${email}] Starting Chrome intercept, body=${body.length} chars`);
-
-    // ── Step 1: Fire trigger fetch via window.fetch (baxia wraps it, adds headers) ──
-    const triggerExpr = `
-      fetch("${url}", {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "text/event-stream",
-          "source": "web",
-          "X-CDP-Marker": "${markerId}"
-        },
-        body: "{}"
-      }).catch(() => {})
-    `.trim();
-
-    const evalId = ++state.callIdCounter;
-    browserWs!.send(
-      JSON.stringify({
-        id: evalId,
-        sessionId: state.sessionId,
-        method: 'Runtime.evaluate',
-        params: { expression: triggerExpr, returnByValue: true, awaitPromise: false },
-      }),
-    );
-    state.queue.set(evalId, { resolve: () => {}, reject: () => {}, settled: false });
-
-    // ── Step 2: Wait for Request stage interception ──
-    const { requestId } = await requestPromise;
-    logStore.log('debug', 'cdp', `[CDP-Fetch][${email}] Request intercepted in ${Date.now() - t0}ms`);
-
-    // ── Step 3: Continue request with the actual large body ──
-    // Rebuild headers from the intercepted request, removing marker and unsafe headers.
-    // CDP's Fetch.continueRequest rejects "unsafe headers" like Content-Length, Host,
-    // Transfer-Encoding, etc. — Chrome computes these automatically from the body.
-    // See: https://chromedevtools.github.io/devtools-protocol/tot/Fetch/#method-continueRequest
-    const headerEntries: Array<{ name: string; value: string }> = [];
-    for (const [name, value] of Object.entries(entry.requestHeaders)) {
-      const lower = name.toLowerCase();
-      if (lower === 'x-cdp-marker') continue; // Remove our marker
-      if (lower === 'content-length' || lower === 'host' || lower === 'transfer-encoding' || lower === 'connection') continue; // Unsafe — Chrome manages
-      headerEntries.push({ name, value });
-    }
-
-    // CDP Fetch.continueRequest requires postData as base64 (per protocol spec: "Encoded as a base64 string when passed over JSON")
-    // Chrome automatically computes Content-Length from the base64-decoded postData.
-    await sendToAccount(state, 'Fetch.continueRequest', {
-      requestId,
-      postData: Buffer.from(body).toString('base64'),
-      headers: headerEntries,
-    });
-
-    // ── Step 4: Wait for Response stage interception ──
-    const { statusCode, statusText, headers: respHeaders } = await responsePromise;
-    logStore.log('debug', 'cdp', `[CDP-Fetch][${email}] Response intercepted: ${statusCode} in ${Date.now() - t0}ms`);
-
-    // ── Step 5: Take response body as a stream ──
-    const streamResult: any = await sendToAccount(state, 'Fetch.takeResponseBodyAsStream', { requestId });
-    const cdpStreamHandle = streamResult.stream;
-
-    // ── Step 6: Continue response so body flows through the stream ──
-    await sendToAccount(state, 'Fetch.continueResponse', { requestId });
-
-    // ── Step 7: Read IO stream → Web ReadableStream ──
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        const readLoop = async () => {
-          try {
-            while (true) {
-              const chunk: any = await sendToAccount(state, 'IO.read', {
-                handle: cdpStreamHandle,
-                size: 65536,
-              });
-
-              if (chunk.base64Encoded) {
-                const bytes = Uint8Array.from(atob(chunk.data), (c) => c.charCodeAt(0));
-                controller.enqueue(bytes);
-              } else {
-                controller.enqueue(new TextEncoder().encode(chunk.data));
-              }
-
-              if (chunk.eof) {
-                controller.close();
-                break;
-              }
-            }
-          } catch (err) {
-            try {
-              controller.error(err);
-            } catch {
-              /* already closed */
-            }
-          }
-        };
-        readLoop();
-      },
-    });
-
-    return {
-      ok: statusCode >= 200 && statusCode < 300,
-      status: statusCode,
-      statusText: statusText || httpStatusText(statusCode),
-      headers: respHeaders,
-      stream,
-    };
-  } finally {
-    // Clean up interception state
-    fetchInterceptByMarker.delete(markerId);
-    if (entry.requestId) {
-      fetchInterceptByRequestId.delete(entry.requestId);
-    }
-    clearTimeout(entry.requestTimeout);
-    clearTimeout(entry.responseTimeout);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Non-streaming fetch (public API)
-// ---------------------------------------------------------------------------
-
-/**
- * Make a non-streaming API call through a specific account.
- * All requests use Node.js fetch with cached baxia headers — no browser CDP evaluate.
+ * Make a non-streaming API call through a specific account's browser page.
+ * Uses window.fetch() so baxia injects bx-umidtoken/bx-ua headers.
  */
 export async function browserFetchForAccount(
   email: string,
   url: string,
   options: { method?: string; body?: string; timeout?: number } = {},
 ): Promise<CdpResponse> {
-  const state = accountStates.get(email);
-  if (!state) throw new Error(`No CDP context for ${email} — account not initialized`);
-  const { method = 'GET', body = '', timeout = 30000 } = options;
+  const state = accountStates.get(email)!;
 
-  // Ensure we have baxia headers
-  if (!state.cachedBxHeaders || !state.cachedBxHeaders['bx-ua']) {
-    logStore.log('debug', 'cdp', `[CDP][${email}] No cached baxia headers, attempting browser fetch to populate...`);
-    await triggerBxHeaderCaptureAndWait(state);
-    if (!state.cachedBxHeaders || !state.cachedBxHeaders['bx-ua']) {
-      throw new Error(`No baxia headers for ${email} — cannot make request`);
+  const { method = 'GET', body, timeout = 30000 } = options;
+
+  // For large bodies with cached baxia headers, use Node.js fetch to bypass browser hang
+  const LARGE_BODY_THRESHOLD = 50_000; // 50KB
+  if (body && body.length > LARGE_BODY_THRESHOLD && state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
+    const requestId = crypto.randomUUID();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      source: 'web',
+      'x-request-id': requestId,
+      'x-accel-buffering': 'no',
+      timezone: new Date().toString(),
+      version: '0.2.66',
+      // Replay cached baxia headers
+      'bx-umidtoken': state.cachedBxHeaders['bx-umidtoken'],
+      'bx-ua': state.cachedBxHeaders['bx-ua'],
+      'bx-v': state.cachedBxHeaders['bx-v'],
+      'user-agent': state.cachedBxHeaders['user-agent'],
+      'sec-ch-ua': state.cachedBxHeaders['sec-ch-ua'],
+      'sec-ch-ua-mobile': state.cachedBxHeaders['sec-ch-ua-mobile'],
+      'sec-ch-ua-platform': state.cachedBxHeaders['sec-ch-ua-platform'],
+      origin: 'https://chat.qwen.ai',
+      referer: 'https://chat.qwen.ai/',
+    };
+    // Use profileCookies (CDP never captures the cookie header)
+    if (state.profileCookies) {
+      headers['cookie'] = state.profileCookies;
     }
-  }
-
-  // For large bodies, route through Chrome Fetch domain intercept
-  if (body.length > LARGE_BODY_THRESHOLD && method.toUpperCase() === 'POST') {
     try {
-      const result = await fetchViaChromeIntercept(email, url, body, { timeout });
-      const responseBody = await new Response(result.stream).text();
-      return {
-        ok: result.ok,
-        status: result.status,
-        statusText: result.statusText,
-        body: responseBody,
-        headers: result.headers,
-      };
+      const resp = await fetch(url, { method: method || 'POST', headers, body });
+      const text = await resp.text();
+      const respHeaders: Record<string, string> = {};
+      resp.headers.forEach((v, k) => {
+        respHeaders[k] = v;
+      });
+      return { ok: resp.ok, status: resp.status, statusText: resp.statusText, body: text, headers: respHeaders };
     } catch (err) {
-      logStore.log(
-        'debug',
-        'cdp',
-        `[CDP-Fetch][${email}] Chrome intercept failed for non-streaming, falling back to node fetch: ${(err as Error).message}`,
-      );
-      // Fall through to node fetch below
+      console.warn(`[CDP][${email}] Node.js fetch failed (${(err as Error).message}), falling back to browser fetch`);
+      // Fall through to browser fetch
     }
   }
 
-  // Default: Node.js fetch with cached baxia headers
-  return nodeFetchForAccount(email, url, body, { method, timeout });
+  // For large bodies, store in browser global first (same fix as streaming path)
+  const BODY_THRESHOLD = 10_000;
+  const bodyGlobalName = `__cdp_fetch_body_${Date.now()}`;
+  const useTwoPhase = body && body.length > BODY_THRESHOLD;
+
+  if (useTwoPhase) {
+    const storeId = ++state.callIdCounter;
+    const storeExpression = `window[${JSON.stringify(bodyGlobalName)}] = ${JSON.stringify(body)}; 'ok'`;
+    browserWs!.send(
+      JSON.stringify({
+        id: storeId,
+        sessionId: state.sessionId,
+        method: 'Runtime.evaluate',
+        params: { expression: storeExpression, returnByValue: true },
+      }),
+    );
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Body storage timeout')), 15_000);
+      state.queue.set(storeId, {
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+        settled: false,
+      });
+    });
+  }
+
+  const bodyRef = useTwoPhase ? `window[${JSON.stringify(bodyGlobalName)}]` : JSON.stringify(body);
+  const bodyClause = useTwoPhase ? `body: ${bodyRef},` : body ? `body: ${bodyRef},` : '';
+  const expression = `(async () => {
+    try {
+      const requestId = crypto.randomUUID();
+      const resp = await fetch(${JSON.stringify(url)}, {
+        method: ${JSON.stringify(method)},
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'source': 'web',
+          'x-request-id': requestId,
+          'x-accel-buffering': 'no',
+          'timezone': new Date().toString(),
+          'version': '0.2.66',
+        },
+        ${bodyClause}
+      });
+      const headers = {};
+      resp.headers.forEach((v, k) => { headers[k] = v; });
+      if (window[${JSON.stringify(bodyGlobalName)}]) delete window[${JSON.stringify(bodyGlobalName)}];
+      return { ok: resp.ok, status: resp.status, statusText: resp.statusText, body: await resp.text(), headers };
+    } catch(e) {
+      if (window[${JSON.stringify(bodyGlobalName)}]) delete window[${JSON.stringify(bodyGlobalName)}];
+      return { ok: false, status: 0, statusText: e.message || 'NetworkError', body: '', headers: {} };
+    }
+  })()`;
+  return evaluateInAccount<CdpResponse>(email, expression, true, timeout);
 }
 
 // ---------------------------------------------------------------------------
-// Streaming fetch via Node.js
+// Streaming fetch (incremental)
 // ---------------------------------------------------------------------------
 
 /**
- * For streaming request bodies, browser's window.fetch() hangs via CDP
+ * Incrementally stream an API response through a specific account's browser page.
+ * Uses Runtime.addBinding + window.fetch() + ReadableStream.getReader() to pipe
+ * SSE chunks back in real time.
+ *
+ * Returns { ok, status, headers, stream } where stream delivers SSE text incrementally.
+ */
+// ---------------------------------------------------------------------------
+// Node.js fetch bypass for large bodies
+// ---------------------------------------------------------------------------
+
+/**
+ * For large request bodies (>50KB), browser's window.fetch() hangs via CDP
  * because baxia's fetch wrapper stalls on large POST body processing.
  * This function uses Node.js fetch() directly with cached baxia headers,
  * bypassing the browser entirely.
@@ -1072,8 +714,6 @@ export async function nodeFetchStreamForAccount(
   }
 
   const requestId = crypto.randomUUID();
-
-  logStore.log('debug', 'cdp', `NodeFetch ${email} Starting node fetch, body=${body.length} chars`);
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -1113,20 +753,10 @@ export async function nodeFetchStreamForAccount(
     });
 
     clearTimeout(timer);
-    logStore.log('debug', 'cdp', `NodeFetch ${email} Response: ${resp.status}, body: ${resp.headers.get('content-length')}`);
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');
       throw new Error(`HTTP ${resp.status}: ${errText.substring(0, 500)}`);
-    }
-
-    // Early baxia bot detection: Qwen returns 200 with JSON body when detected
-    const ct = resp.headers.get('content-type') || '';
-    if (ct.includes('application/json') && !ct.includes('text/event-stream')) {
-      const errBody = await resp.text().catch(() => '');
-      logStore.log('debug', 'cdp', `[NodeFetch][${email}] Bot detection — JSON response instead of SSE`);
-      throttleAccount(email, 5 * 60 * 1000);
-      throw new Error(`FAIL_SYS_USER_VALIDATE: Bot detection for ${email} — response was JSON not SSE`);
     }
 
     // Convert Node.js ReadableStream to Web ReadableStream
@@ -1163,194 +793,6 @@ export async function nodeFetchStreamForAccount(
   }
 }
 
-/**
- * Stream an API response via browser window.fetch() through CDP.
- *
- * Bypasses the stale baxia header problem: Node.js fetch replays cached bx-ua/bx-umidtoken
- * headers which triggers FAIL_SYS_USER_VALIDATE on large payloads (>130KB).
- * The browser's baxia window.fetch() wrapper generates fresh headers for every request.
- *
- * Uses Runtime.addBinding + Runtime.evaluate(fetch) with awaitPromise: false (fire-and-forget).
- * Chunks arrive via Runtime.bindingCalled events routed through state.streamBindings.
- */
-export async function browserStreamFetchViaBrowser(
-  email: string,
-  url: string,
-  body: string,
-  options?: { referer?: string; timeout?: number },
-): Promise<{ ok: boolean; status: number; statusText: string; headers: Record<string, string>; stream: ReadableStream<Uint8Array> }> {
-  const state = accountStates.get(email);
-  if (!state) throw new Error(`No CDP context for account ${email}`);
-
-  const bindingId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const bindingName = `__cdp_stream_${bindingId}`;
-  const bodyGlobal = `__cdp_body_${bindingId}`;
-  const t0 = Date.now();
-  let firstChunkTime = 0;
-
-  logStore.log(
-    'debug',
-    'cdp',
-    `[CDP][${email}] browserStreamFetchViaBrowser: url=${url}, body=${body.length} chars, binding=${bindingName}`,
-  );
-
-  // Register binding so Runtime.bindingCalled events route to our handler
-  await sendToAccount(state, 'Runtime.addBinding', { name: bindingName });
-
-  // Create the ReadableStream that will receive chunks via binding callbacks
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      let controllerClosed = false;
-
-      state.streamBindings.set(bindingName, (payload: string) => {
-        // Guard: don't operate on a closed controller
-        if (controllerClosed) return;
-
-        if (payload === '__QSB_DONE__') {
-          try {
-            controller.close();
-          } catch {
-            /* already closed — cancellation race */
-          }
-          controllerClosed = true;
-          state.streamBindings.delete(bindingName);
-          // Clean up browser global body reference
-          evaluateInAccount(email, `delete window["${bodyGlobal}"]`, false, 5000).catch(() => {});
-          logStore.log('debug', 'cdp', `[CDP][${email}] browserStreamFetchViaBrowser: stream DONE in ${Date.now() - t0}ms`);
-          return;
-        }
-
-        if (payload === '__QSB_ERROR__') {
-          try {
-            controller.error(new Error('Browser fetch returned error'));
-          } catch {
-            /* already closed */
-          }
-          controllerClosed = true;
-          state.streamBindings.delete(bindingName);
-          evaluateInAccount(email, `delete window["${bodyGlobal}"]`, false, 5000).catch(() => {});
-          logStore.log('debug', 'cdp', `[CDP][${email}] browserStreamFetchViaBrowser: stream ERROR after ${Date.now() - t0}ms`);
-          return;
-        }
-
-        // Decode base64 chunk and enqueue bytes
-        try {
-          const bytes = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
-          controller.enqueue(bytes);
-          if (!firstChunkTime) {
-            firstChunkTime = Date.now();
-            logStore.log('debug', 'cdp', `[CDP][${email}] browserStreamFetchViaBrowser: first chunk in ${firstChunkTime - t0}ms`);
-          }
-        } catch (err) {
-          console.error(`[CDP][${email}] browserStreamFetchViaBrowser: chunk decode error:`, err);
-        }
-      });
-    },
-    cancel() {
-      // Remove binding on cancellation
-      state.streamBindings.delete(bindingName);
-      evaluateInAccount(email, `delete window["${bodyGlobal}"]`, false, 5000).catch(() => {});
-    },
-  });
-
-  // Two-phase body storage: bodies >10KB go in browser global to avoid CDP expression size limits
-  const useGlobal = body.length > 10_000;
-  if (useGlobal) {
-    // Store body in browser window global via evaluate
-    const escaped = JSON.stringify(body);
-    await evaluateInAccount(email, `window["${bodyGlobal}"] = ${escaped}`, false, 10000);
-    logStore.log('debug', 'cdp', `[CDP][${email}] browserStreamFetchViaBrowser: stored ${body.length} char body in browser global`);
-  }
-
-  // Build the fetch expression — references the global body or embeds inline
-  const bodyRef = useGlobal ? `window["${bodyGlobal}"]` : JSON.stringify(body);
-
-  const expression = `
-    (async () => {
-      const bridge = window["${bindingName}"];
-      if (!bridge) { console.error("[CDP-BROWSER] Bridge binding ${bindingName} not found"); return; }
-      try {
-        const requestId = crypto.randomUUID();
-        const resp = await window.fetch("${url}", {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-            "source": "web",
-            "x-request-id": requestId,
-            "x-accel-buffering": "no",
-            "timezone": new Date().toString(),
-            "version": "0.2.66"
-          },
-          body: ${bodyRef}
-        });
-        if (!resp.ok) {
-          const errText = await resp.text().catch(() => "");
-          bridge("__QSB_ERROR__");
-          return;
-        }
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          bridge(btoa(String.fromCharCode(...value)));
-        }
-        bridge("__QSB_DONE__");
-      } catch (err) {
-        console.error("[CDP-BROWSER] Fetch error:", err.message || err);
-        bridge("__QSB_ERROR__");
-      }
-    })();
-  `.trim();
-
-  // Fire-and-forget: Runtime.evaluate with awaitPromise: false
-  // The async IIFE continues running in the browser event loop after CDP returns
-  const id = ++state.callIdCounter;
-  state.queue.set(id, {
-    resolve: (result) => {
-      if (result?.exceptionDetails) {
-        console.error(`[CDP][${email}] Browser fetch exception:`, result.exceptionDetails);
-      }
-    },
-    reject: (err) => {
-      console.error(`[CDP][${email}] Browser fetch error:`, err.message);
-    },
-    settled: false,
-  });
-
-  browserWs!.send(
-    JSON.stringify({
-      id,
-      sessionId: state.sessionId,
-      method: 'Runtime.evaluate',
-      params: {
-        expression,
-        returnByValue: true,
-        awaitPromise: false,
-      },
-    }),
-  );
-
-  // Auto-cleanup after 30s
-  setTimeout(() => state.queue.delete(id), 30_000);
-
-  logStore.log('debug', 'cdp', `[CDP][${email}] browserStreamFetchViaBrowser: evaluate sent, awaiting chunks via binding`);
-
-  return {
-    ok: true,
-    status: 200,
-    statusText: 'OK (browser fetch)',
-    headers: {},
-    stream,
-  };
-}
-
-/**
- * Incrementally stream an API response through a specific account.
- * All streaming uses Node.js fetch with cached baxia headers — no browser CDP evaluate.
- */
 export async function browserStreamFetchIncrementalForAccount(
   email: string,
   url: string,
@@ -1360,54 +802,330 @@ export async function browserStreamFetchIncrementalForAccount(
   const state = accountStates.get(email);
   if (!state) throw new Error(`No CDP context for account ${email}`);
 
-  // Step 1: Harvest fresh baxia headers (small browser request -> captures fresh bx-ua/bx-umidtoken)
-  await harvestFreshHeaders(state);
-
-  // Step 2: Route through Chrome Fetch domain intercept — uses Chrome's real TLS
-  // fingerprint which bypasses baxia WAF. Qwen's chat completion endpoint always
-  // detects Node.js TLS even with valid baxia headers, so we always go via Chrome.
-  if (state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
-    try {
-      return await fetchViaChromeIntercept(email, url, body, { timeout: options?.timeout });
-    } catch (err) {
-      logStore.log('debug', 'cdp', `[CDP-Fetch][${email}] Chrome intercept failed, falling back to node fetch: ${(err as Error).message}`);
-      // Fall through to node fetch below
-    }
-  }
-
-  // Step 3: Node.js fetch fallback (no baxia headers or Chrome intercept failed)
-  if (state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
+  // For large bodies with cached baxia headers, use Node.js fetch to bypass browser hang
+  const LARGE_BODY_THRESHOLD = 50_000; // 50KB
+  if (body.length > LARGE_BODY_THRESHOLD && state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
     try {
       return await nodeFetchStreamForAccount(email, url, body, options);
     } catch (err) {
-      const msg = (err as Error).message;
-      // If bot detection, try Chrome intercept as last resort
-      if (msg.includes('FAIL_SYS_USER_VALIDATE')) {
-        logStore.log('debug', 'cdp', `[CDP][${email}] Bot detection via node fetch, retrying Chrome intercept...`);
-        state.cachedBxHeaders = {};
-        try {
-          await harvestFreshHeaders(state);
-          return await fetchViaChromeIntercept(email, url, body, { timeout: options?.timeout });
-        } catch (retryErr) {
-          logStore.log('debug', 'cdp', `[CDP-Fetch][${email}] Chrome intercept retry also failed: ${(retryErr as Error).message}`);
-          throw err;
-        }
-      }
-      throw err;
+      console.warn(`[CDP][${email}] Node.js fetch failed (${(err as Error).message}), falling back to browser fetch`);
+      // Fall through to browser fetch
     }
   }
 
-  // Step 4: If no headers after harvest, try refreshing baxia then harvest once more
-  logStore.log('debug', 'cdp', `[CDP][${email}] No baxia headers after initial harvest, refreshing baxia...`);
-  await refreshBaxiaForAccount(email);
-  await harvestFreshHeaders(state);
-  if (state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
-    return await nodeFetchStreamForAccount(email, url, body, options);
+  const referer = options?.referer || 'https://chat.qwen.ai/';
+  const timeout = options?.timeout || 60_000;
+  const bindingName = `__cdp_sb_${++state.callIdCounter}_${Date.now()}`;
+  const startTime = Date.now();
+
+  await connectBrowserWs();
+
+  // Register binding: browser calls window[bindingName](b64chunk)
+  const addBindingId = ++state.callIdCounter;
+  browserWs!.send(
+    JSON.stringify({
+      id: addBindingId,
+      sessionId: state.sessionId,
+      method: 'Runtime.addBinding',
+      params: { name: bindingName },
+    }),
+  );
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Runtime.addBinding timeout')), 5000);
+    state.queue.set(addBindingId, {
+      resolve: () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+      settled: false,
+    });
+  });
+
+  let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+  let streamClosed = false;
+
+  const nodeStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      streamController = controller;
+    },
+    cancel() {
+      streamClosed = true;
+      removeBindingForAccount(state, bindingName);
+    },
+  });
+
+  // Wire the binding to the stream controller
+  let firstChunkTime = 0;
+  let chunkCount = 0;
+  state.streamBindings.set(bindingName, (payload: string) => {
+    if (streamClosed) return;
+    if (payload === '__QSB_DONE__') {
+      streamClosed = true;
+      try {
+        streamController?.close();
+      } catch {
+        /* already closed */
+      }
+      removeBindingForAccount(state, bindingName);
+      // Clean up browser global for large bodies
+      if (useTwoPhase) {
+        try {
+          browserWs!.send(
+            JSON.stringify({
+              id: ++state.callIdCounter,
+              sessionId: state.sessionId,
+              method: 'Runtime.evaluate',
+              params: { expression: `delete window[${JSON.stringify(bodyGlobalName)}]; 'ok'`, returnByValue: true, timeout: 5000 },
+            }),
+          );
+        } catch {
+          /* best effort */
+        }
+      }
+      return;
+    }
+    if (payload === '__QSB_ERROR__') {
+      console.error(`[CDP] stream ERROR: ${Date.now() - startTime}ms, ${chunkCount} chunks, email=${email}`);
+      streamClosed = true;
+      try {
+        streamController?.error(new Error('Browser stream fetch failed'));
+      } catch {
+        /* already closed */
+      }
+      removeBindingForAccount(state, bindingName);
+      // Clean up browser global for large bodies
+      if (useTwoPhase) {
+        try {
+          browserWs!.send(
+            JSON.stringify({
+              id: ++state.callIdCounter,
+              sessionId: state.sessionId,
+              method: 'Runtime.evaluate',
+              params: { expression: `delete window[${JSON.stringify(bodyGlobalName)}]; 'ok'`, returnByValue: true, timeout: 5000 },
+            }),
+          );
+        } catch {
+          /* best effort */
+        }
+      }
+      return;
+    }
+    if (!firstChunkTime) {
+      firstChunkTime = Date.now();
+    }
+    chunkCount++;
+    try {
+      const binary = atob(payload);
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+      if (!streamClosed) streamController?.enqueue(bytes);
+    } catch {
+      // Corrupted chunk or controller already closed — skip silently
+    }
+  });
+
+  // --- LARGE BODY HANDLING ---
+  // For large request bodies (e.g. Qwen Code with 100KB+ system prompt + tools),
+  // embedding the body directly in the Runtime.evaluate expression causes Chrome
+  // to hang — the V8 parser stalls on 260KB+ string literals. Instead, we store
+  // the body in a browser global FIRST via a simple assignment, then reference it
+  // in a tiny fetch expression. This splits the CDP message into two: a simple
+  // string storage (no parsing overhead) and a small fetch call.
+  const BODY_THRESHOLD = 10_000; // 10KB — above this, use two-phase approach
+  const bodyGlobalName = `__cdp_body_${state.callIdCounter + 1}`;
+  const useTwoPhase = body.length > BODY_THRESHOLD;
+
+  if (useTwoPhase) {
+    const storeStart = Date.now();
+    // Phase 1: Store body in browser global (simple assignment, no baxia involvement)
+    const storeId = ++state.callIdCounter;
+    const storeExpression = `window[${JSON.stringify(bodyGlobalName)}] = ${JSON.stringify(body)}; 'ok'`;
+    browserWs!.send(
+      JSON.stringify({
+        id: storeId,
+        sessionId: state.sessionId,
+        method: 'Runtime.evaluate',
+        params: { expression: storeExpression, returnByValue: true },
+      }),
+    );
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Body storage timeout')), 15_000);
+      state.queue.set(storeId, {
+        resolve: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+        settled: false,
+      });
+    });
   }
 
-  // Step 4: Last resort — browser fetch
-  logStore.log('debug', 'cdp', `[CDP][${email}] Still no baxia headers, trying browser fetch...`);
-  return browserStreamFetchViaBrowser(email, url, body, options);
+  // Launch fetch in the account's page using window.fetch()
+  // so baxia's wrapper intercepts and injects bx-umidtoken/bx-ua headers.
+  //
+  // KEY: We do NOT use awaitPromise:true on Runtime.evaluate.
+  // With awaitPromise:true, CDP blocks until the IIFE resolves. If window.fetch()
+  // hangs (baxia stalling on large bodies), the entire CDP evaluate hangs forever
+  // and our timeout doesn't fire reliably. Instead, we start the fetch as
+  // fire-and-forget — the IIFE runs in the browser's microtask queue and streams
+  // data via the binding. CDP returns immediately.
+  const evaluateId = ++state.callIdCounter;
+  const bodyRef = useTwoPhase ? `window[${JSON.stringify(bodyGlobalName)}]` : JSON.stringify(body);
+  const fetchExpression = `(async () => {
+  const t0 = Date.now();
+  const bridge = window[${JSON.stringify(bindingName)}];
+  
+  try {
+    const body = ${bodyRef};
+    
+    const requestId = crypto.randomUUID();
+    const startTime = new Date().toISOString();
+    
+    const fetchStart = Date.now();
+    
+    const resp = await window.fetch(${JSON.stringify(url)}, {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+        'source': 'web',
+        'x-request-id': requestId,
+        'x-accel-buffering': 'no',
+        'timezone': new Date().toString(),
+        'version': '0.2.66',
+        'Referer': ${JSON.stringify(referer)},
+      },
+      body: body,
+    });
+    
+    
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      bridge(btoa(JSON.stringify({ __httpError: true, status: resp.status, body: errText.substring(0, 2000) })));
+      bridge('__QSB_DONE__');
+      return;
+    }
+    
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let chunkCount = 0;
+    let totalBytes = 0;
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value && value.length > 0) {
+        const text = decoder.decode(value, { stream: true });
+        if (text) {
+          const uint8 = new TextEncoder().encode(text);
+          let binary = '';
+          for (let i = 0; i < uint8.length; i++) binary += String.fromCharCode(uint8[i]);
+          bridge(btoa(binary));
+          chunkCount++;
+          totalBytes += text.length;
+          if (chunkCount <= 3 || chunkCount % 20 === 0) {
+          }
+        }
+      }
+    }
+    
+    bridge('__QSB_DONE__');
+  } catch (e) {
+    bridge('__QSB_ERROR__');
+  }
+})();`;
+
+  // Fire-and-forget: no awaitPromise — CDP returns immediately.
+  // The IIFE runs in the browser and streams data via the binding.
+  // If the IIFE throws, it's unhandled — but the binding __QSB_ERROR__ is called.
+  // Track in queue to catch fire-and-forget errors (no V8 timeout — watchdog handles lifecycle).
+  state.queue.set(evaluateId, {
+    resolve: (result) => {
+      if (result?.exceptionDetails) {
+        console.error(`[CDP:${email}] Fire-and-forget exception:`, JSON.stringify(result.exceptionDetails).slice(0, 500));
+      }
+    },
+    reject: (err) => {
+      console.error(`[CDP:${email}] Fire-and-forget error:`, err.message);
+    },
+    settled: false,
+  });
+  // Auto-cleanup after 30s
+  setTimeout(() => {
+    const entry = state.queue.get(evaluateId);
+    if (entry && !entry.settled) state.queue.delete(evaluateId);
+  }, 30_000);
+  browserWs!.send(
+    JSON.stringify({
+      id: evaluateId,
+      sessionId: state.sessionId,
+      method: 'Runtime.evaluate',
+      params: { expression: fetchExpression, returnByValue: false, awaitPromise: false },
+    }),
+  );
+
+  // Node.js-side watchdog: if no data arrives within the timeout, force-close.
+  // This catches baxia hangs, network failures, or any case where the browser-side
+  // code never calls __QSB_DONE__ or __QSB_ERROR__.
+  // For large bodies, Qwen API may take longer to respond — use generous timeout.
+  const isLargeBody = body.length > 50_000;
+  const watchdogMs = isLargeBody ? 180_000 : 90_000; // 3min for large, 90s for normal
+  const watchdog = setTimeout(() => {
+    if (!streamClosed) {
+      console.error(`[CDP] WATCHDOG: no data for ${watchdogMs / 1000}s, email=${email} bodyLen=${body.length} — forcing close`);
+      streamClosed = true;
+      try {
+        streamController?.error(new Error(`Stream watchdog: no data for ${watchdogMs / 1000}s`));
+      } catch {
+        /* already closed */
+      }
+      removeBindingForAccount(state, bindingName);
+    }
+  }, watchdogMs);
+
+  // Clear watchdog when stream ends naturally (via __QSB_DONE__ or __QSB_ERROR__)
+  const sc = streamController as any;
+  if (sc) {
+    const origClose = sc.close.bind(sc);
+    const origError = sc.error.bind(sc);
+    sc.close = (...args: any[]) => {
+      clearTimeout(watchdog);
+      return origClose(...args);
+    };
+    sc.error = (...args: any[]) => {
+      clearTimeout(watchdog);
+      return origError(...args);
+    };
+  }
+
+  return { ok: true, status: -1, statusText: '', headers: {}, stream: nodeStream };
+}
+
+// ---------------------------------------------------------------------------
+
+function removeBindingForAccount(state: AccountCdpState, name: string): void {
+  state.streamBindings.delete(name);
+  if (!browserWs || !browserConnected) return;
+  const id = ++state.callIdCounter;
+  browserWs.send(
+    JSON.stringify({
+      id,
+      sessionId: state.sessionId,
+      method: 'Runtime.removeBinding',
+      params: { name },
+    }),
+  );
+  state.queue.set(id, { resolve: () => {}, reject: () => {}, settled: false });
 }
 
 // ---------------------------------------------------------------------------
@@ -1445,9 +1163,9 @@ export async function browserStreamFetchIncremental(
   return browserStreamFetchIncrementalForAccount(getDefaultAccount(), url, body, options);
 }
 
-/** Check if an account context exists. */
+/** Check if an account context exists and is fully initialized. */
 export function hasAccountContext(email: string): boolean {
-  return accountStates.has(email);
+  return accountStates.get(email)?.initialized === true;
 }
 
 /** Get all initialized account emails. */
@@ -1488,42 +1206,34 @@ export function getCdpStatuses(): CdpAccountStatus[] {
  */
 export async function initAllAccountContexts(accounts: Array<{ email: string; profileCookies?: string }>): Promise<void> {
   await connectBrowserWs();
-  logStore.log('debug', 'cdp', `Initializing ${accounts.length} account contexts...`);
 
-  for (const acct of accounts) {
+  const filtered = accounts.filter((acct) => {
     if (!acct.profileCookies) {
-      logStore.log('debug', 'cdp', `Waiting for auth for ${acct.email} — no profile cookies yet`);
-      continue;
+      console.warn(`[CDP] Skipping ${acct.email} — no profileCookies`);
+      return false;
     }
-    try {
-      setStartupStatus(acct.email, 'connecting');
-      await initAccountContext(acct.email, acct.profileCookies);
-    } catch (err: any) {
-      console.error(`[CDP] Failed to init context for ${acct.email}: ${err.message}`);
-    }
-  }
+    return true;
+  });
 
-  logStore.log('debug', 'cdp', `Account contexts ready: ${getAccountEmails().join(', ')}`);
+  // Run 2 accounts at a time to avoid overwhelming the browser
+  const concurrency = 2;
+  for (let i = 0; i < filtered.length; i += concurrency) {
+    const batch = filtered.slice(i, i + concurrency);
+    await Promise.allSettled(
+      batch.map((acct) =>
+        initAccountContext(acct.email, acct.profileCookies!).catch((err: any) => {
+          console.error(`[CDP] Failed to init context for ${acct.email}: ${err.message}`);
+        }),
+      ),
+    );
+  }
 }
 
 /**
  * Stop all account contexts and disconnect.
  */
 export function stopAllAccounts(): void {
-  // Clean up Fetch domain interception state
-  fetchInterceptByMarker.clear();
-  fetchInterceptByRequestId.clear();
-
-  // Disable Fetch domain for each account (fire-and-forget)
   for (const [, state] of accountStates) {
-    if (browserWs && browserConnected) {
-      try {
-        const id = ++state.callIdCounter;
-        browserWs.send(JSON.stringify({ id, sessionId: state.sessionId, method: 'Fetch.disable', params: {} }));
-      } catch {
-        /* already closing */
-      }
-    }
     state.streamBindings.clear();
     state.queue.clear();
   }

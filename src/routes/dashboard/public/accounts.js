@@ -131,6 +131,18 @@ function renderAccountsTable(accts) {
       '<td style="font-family:var(--mono);font-size:0.75rem">' +
       fmtTTL(a.tokenExpiresInMs) +
       '</td>' +
+      '<td>' +
+      '<span class="toggle-trigger" onclick="handleToggleDisabled(event,\'' +
+      escHtml(a.email) +
+      "'," +
+      a.disabled +
+      ')">' +
+      '<span class="toggle-track' +
+      (a.disabled ? ' active' : '') +
+      '">' +
+      '<span class="toggle-thumb"></span>' +
+      '</span></span>' +
+      '</td>' +
       '<td><div class="action-cell">' +
       '<button class="account-btn small danger" data-email="' +
       escHtml(a.email) +
@@ -297,6 +309,26 @@ function pollAuth(email, maxAttempts) {
     }
   }, 2000);
   activePollTimers[email] = timer;
+}
+
+/* ── Toggle Disabled ── */
+async function handleToggleDisabled(event, email, currentlyDisabled) {
+  event.stopPropagation();
+  var newDisabled = !currentlyDisabled;
+  var res = await fetch('/api/accounts/' + encodeURIComponent(email), {
+    method: 'PATCH',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+    body: JSON.stringify({ disabled: newDisabled }),
+  });
+  if (res.ok) {
+    showToast(email + ' ' + (newDisabled ? 'disabled' : 'enabled'), 'success');
+    loadAccounts();
+  } else {
+    var err = await res.json().catch(function () {
+      return { error: 'Failed' };
+    });
+    showToast(err.error || 'Failed to toggle', 'error');
+  }
 }
 
 /* ── Init ── */

@@ -66,14 +66,27 @@ export class SessionPool {
 
     const maxAttempts = email ? 1 : Math.max(1, getAllAccountEmails().length);
     let lastErr: unknown;
+    const ACQUIRE_TIMEOUT = 30_000; // ponytail: overall timeout to prevent hanging session creation
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const resolvedEmail = email || (await pickAccount())?.email;
 
       try {
         // Fetch headers once, pass to createSessionWithHeaders (no duplicate getBasicHeaders call)
-        const headers = await getBasicHeaders(resolvedEmail);
-        const chatId = await this.createSessionWithHeaders(resolvedEmail, headers);
+        const result = await Promise.race([
+          (async () => {
+            const headers = await getBasicHeaders(resolvedEmail);
+            const chatId = await this.createSessionWithHeaders(resolvedEmail, headers);
+            return { headers, chatId };
+          })(),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error(`Session acquire timed out for ${resolvedEmail || '?'} after ${ACQUIRE_TIMEOUT}ms`)),
+              ACQUIRE_TIMEOUT,
+            ),
+          ),
+        ]);
+        const { headers, chatId } = result;
         const entry: PoolEntry = {
           chatId,
           parentId: null,
