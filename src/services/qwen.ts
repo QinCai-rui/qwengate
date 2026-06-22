@@ -4,7 +4,6 @@ import { decrementInFlight, getTokenWithAccount, pickAccount, throttleAccount } 
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
 import { completeEntry, createNetworkEntry, errorEntry, recordResponse, recordStreamChunk } from './networkDebug.ts';
-import { getQwenHeaders } from './playwright.ts';
 import { logQwenRequest, logQwenResponse } from './qwenLogger.ts';
 import { browserlessFetch } from './browserlessFetch.ts';
 
