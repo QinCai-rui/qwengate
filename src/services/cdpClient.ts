@@ -1350,9 +1350,10 @@ export async function browserStreamFetchIncrementalForAccount(
   // Step 1: Harvest fresh baxia headers (small browser request -> captures fresh bx-ua/bx-umidtoken)
   await harvestFreshHeaders(state);
 
-  // Step 2: For large bodies, route through Chrome Fetch domain intercept
-  // This uses Chrome's TLS fingerprint which bypasses baxia WAF rejection on large payloads
-  if (body.length > LARGE_BODY_THRESHOLD && state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
+  // Step 2: Route through Chrome Fetch domain intercept — uses Chrome's real TLS
+  // fingerprint which bypasses baxia WAF. Qwen's chat completion endpoint always
+  // detects Node.js TLS even with valid baxia headers, so we always go via Chrome.
+  if (state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
     try {
       return await fetchViaChromeIntercept(email, url, body, { timeout: options?.timeout });
     } catch (err) {
@@ -1361,34 +1362,29 @@ export async function browserStreamFetchIncrementalForAccount(
     }
   }
 
-  // Step 3: Use Node.js fetch with fresh headers (handles body sizes <= threshold, no baxia wrapper hang)
+  // Step 3: Node.js fetch fallback (no baxia headers or Chrome intercept failed)
   if (state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
     try {
       return await nodeFetchStreamForAccount(email, url, body, options);
     } catch (err) {
       const msg = (err as Error).message;
-      // If bot detection on large body, retry via Chrome intercept before giving up
-      if (msg.includes('FAIL_SYS_USER_VALIDATE') && body.length > LARGE_BODY_THRESHOLD) {
-        console.warn(`[CDP][${email}] Bot detection on large body via node fetch, retrying Chrome intercept...`);
-        state.cachedBxHeaders = {}; // Clear stale headers so next harvest works
+      // If bot detection, try Chrome intercept as last resort
+      if (msg.includes('FAIL_SYS_USER_VALIDATE')) {
+        console.warn(`[CDP][${email}] Bot detection via node fetch, retrying Chrome intercept...`);
+        state.cachedBxHeaders = {};
         try {
           await harvestFreshHeaders(state);
           return await fetchViaChromeIntercept(email, url, body, { timeout: options?.timeout });
         } catch (retryErr) {
           console.warn(`[CDP-Fetch][${email}] Chrome intercept retry also failed: ${(retryErr as Error).message}`);
-          throw err; // Throw original error
+          throw err;
         }
-      }
-      // If bot detection on small body, just propagate — chat.ts retry will pick a DIFFERENT account
-      if (msg.includes('FAIL_SYS_USER_VALIDATE')) {
-        console.warn(`[CDP][${email}] Bot detection on body — propagating to retry with different account`);
-        state.cachedBxHeaders = {}; // Clear stale headers so next harvest works
       }
       throw err;
     }
   }
 
-  // Step 3: If no headers after harvest, try refreshing baxia then harvest once more
+  // Step 4: If no headers after harvest, try refreshing baxia then harvest once more
   console.warn(`[CDP][${email}] No baxia headers after initial harvest, refreshing baxia...`);
   await refreshBaxiaForAccount(email);
   await harvestFreshHeaders(state);
