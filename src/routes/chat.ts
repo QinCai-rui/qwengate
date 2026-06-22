@@ -213,6 +213,51 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
     }
     let { stream, abortController: qwenAbortController } = streamResult;
 
+    // First-chunk timeout: Qwen sometimes sends HTTP headers but never body data (silent hang).
+    // Wait up to 60s for the first byte. If none arrives, release this session and try next account.
+    const FIRST_CHUNK_MS = 60_000;
+    const streamReader = stream.getReader();
+    let firstChunk: any;
+    let firstChunkTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      firstChunk = await Promise.race([
+        streamReader.read(),
+        new Promise<never>((_, reject) => {
+          firstChunkTimer = setTimeout(
+            () => reject(new Error(`No first chunk from ${resolvedEmail} within ${FIRST_CHUNK_MS / 1000}s`)),
+            FIRST_CHUNK_MS,
+          );
+        }),
+      ]);
+    } catch (timeoutErr) {
+      clearTimeout(firstChunkTimer);
+      streamReader.cancel().catch(() => {});
+      qwenAbortController?.abort();
+      sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
+      lastFailedEmail = resolvedEmail;
+      lastError = timeoutErr as Error;
+      continue;
+    }
+    clearTimeout(firstChunkTimer);
+
+    // Reconstruct stream with the first chunk prepended, then pipe remaining data through.
+    // This lets us keep the first chunk (already read) while allowing async consumption.
+    stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        if (!firstChunk.done && firstChunk.value) controller.enqueue(firstChunk.value);
+        try {
+          while (true) {
+            const { done, value } = await streamReader.read();
+            if (done) break;
+            controller.enqueue(value);
+          }
+          controller.close();
+        } catch (err) {
+          controller.error(err);
+        }
+      },
+    });
+
     // Build finalPrompt for logStore debug logging only
     const finalPrompt = sessionMessages
       .map((m: any) => {
