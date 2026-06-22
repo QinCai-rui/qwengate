@@ -8,7 +8,6 @@ import { buildChunkEvent, buildUsage, makeChoice, writeEvent, writeReasoningEven
 
 /** Shared TextDecoder — stateless, safe to reuse across streams */
 export const sharedDecoder = new TextDecoder();
-const IDLE_TIMEOUT_MS = Math.max(10_000, config.getInt('STREAM_IDLE_TIMEOUT_MS', 60000));
 
 export interface StreamLoopResult {
   buffer: string;
@@ -41,10 +40,17 @@ export async function runStreamLoop(
       readResult = await Promise.race([
         reader.read(),
         new Promise<any>((_, reject) => {
-          idleTimer = setTimeout(() => {
-            idleTimedOut = true;
-            reject(new Error(`Upstream stream idle timeout — no data for ${IDLE_TIMEOUT_MS / 1000}s`));
-          }, IDLE_TIMEOUT_MS);
+          idleTimer = setTimeout(
+            () => {
+              idleTimedOut = true;
+              reject(
+                new Error(
+                  `Upstream stream idle timeout — no data for ${Math.max(10_000, config.getInt('STREAM_IDLE_TIMEOUT_MS', 60000)) / 1000}s`,
+                ),
+              );
+            },
+            Math.max(10_000, config.getInt('STREAM_IDLE_TIMEOUT_MS', 60000)),
+          );
         }),
       ]);
     } catch (timeoutErr) {

@@ -53,6 +53,7 @@ ${sidebarHtml('accounts')}
                 <th>Total Reqs</th>
                 <th>Throttle</th>
                 <th>Token TTL</th>
+                <th>Disabled</th>
                 <th>Actions</th>
               </tr>
             </thead>

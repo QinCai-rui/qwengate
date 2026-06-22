@@ -348,3 +348,37 @@
     padding: 12px;
   }
 }
+/* Toggle switch for disabled column */
+.toggle-trigger {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.toggle-track {
+  width: 36px;
+  height: 20px;
+  background: var(--border);
+  border-radius: 10px;
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+  display: inline-block;
+}
+.toggle-track.active {
+  background: var(--success, #22c55e);
+}
+.toggle-thumb {
+  width: 16px;
+  height: 16px;
+  background: white;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.toggle-track.active .toggle-thumb {
+  transform: translateX(16px);
+}

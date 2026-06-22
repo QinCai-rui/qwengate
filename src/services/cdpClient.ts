@@ -92,7 +92,6 @@ async function connectBrowserWs(): Promise<void> {
   if (browserConnected && browserWs) return;
 
   const wsUrl = await getBrowserWsUrl();
-  console.log(`[CDP] Connecting to browser WS: ${wsUrl}`);
 
   return new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(wsUrl);
@@ -105,7 +104,6 @@ async function connectBrowserWs(): Promise<void> {
       clearTimeout(timeout);
       browserWs = ws;
       browserConnected = true;
-      console.log('[CDP] Browser WS connected');
       resolve();
     };
 
@@ -131,7 +129,6 @@ async function connectBrowserWs(): Promise<void> {
             if (state) {
               const text = msg.params?.args?.map((a: any) => a.value ?? a.description ?? '').join(' ') ?? '';
               if (text.includes('[CDP-BROWSER]')) {
-                console.log(`[CDP-CONSOLE][${state}] ${text}`);
               }
             }
           }
@@ -165,9 +162,6 @@ async function connectBrowserWs(): Promise<void> {
               origin: hdrs['origin'] || '',
               referer: hdrs['referer'] || '',
             };
-            console.log(
-              `[CDP] Captured ${Object.keys(state.cachedBxHeaders).length} headers for ${state.email} (hasCookie: ${!!hdrs['cookie']}, hasBxUa: ${!!hdrs['bx-ua']})`,
-            );
           }
           return;
         }
@@ -309,12 +303,9 @@ function evaluateInAccount<T>(email: string, expression: string, awaitPromise = 
 export async function initAccountContext(email: string, profileCookies: string): Promise<void> {
   await connectBrowserWs();
 
-  console.log(`[CDP] Creating context for ${email}...`);
-
   // 1. Create browser context
   const ctxResult = await browserEvaluate<{ browserContextId: string }>('Target.createBrowserContext', {});
   const contextId = ctxResult.browserContextId;
-  console.log(`[CDP]   contextId=${contextId}`);
 
   // 2. Create target (page) in that context
   const tgtResult = await browserEvaluate<{ targetId: string }>('Target.createTarget', {
@@ -322,7 +313,6 @@ export async function initAccountContext(email: string, profileCookies: string):
     browserContextId: contextId,
   });
   const targetId = tgtResult.targetId;
-  console.log(`[CDP]   targetId=${targetId}`);
 
   // 3. Attach to target with flatten: true → get sessionId
   const attachResult = await browserEvaluate<{ sessionId: string }>('Target.attachToTarget', {
@@ -330,7 +320,6 @@ export async function initAccountContext(email: string, profileCookies: string):
     flatten: true,
   });
   const sessionId = attachResult.sessionId;
-  console.log(`[CDP]   sessionId=${sessionId}`);
 
   // 4. Create account state
   const state: AccountCdpState = {
@@ -353,7 +342,6 @@ export async function initAccountContext(email: string, profileCookies: string):
   await sendToAccount(state, 'Network.enable', {});
   await sendToAccount(state, 'Page.enable', {});
   await sendToAccount(state, 'Runtime.enable', {});
-  console.log(`[CDP]   Network + Page + Runtime enabled for ${email}`);
 
   // 5b. Inject stealth scripts BEFORE page load to evade headless detection
   const stealthScript = `
@@ -406,7 +394,6 @@ export async function initAccountContext(email: string, profileCookies: string):
     };
   `;
   await sendToAccount(state, 'Page.addScriptToEvaluateOnNewDocument', { source: stealthScript });
-  console.log(`[CDP]   Stealth scripts injected for ${email}`);
 
   // 6. Inject cookies from profileCookies
   if (profileCookies) {
@@ -429,12 +416,10 @@ export async function initAccountContext(email: string, profileCookies: string):
         sameSite: 'Lax',
       });
     }
-    console.log(`[CDP]   Injected ${injected} cookies for ${email}`);
   }
 
   // 7. Navigate to chat.qwen.ai to load SPA + baxia
   await sendToAccount(state, 'Page.navigate', { url: 'https://chat.qwen.ai/' });
-  console.log(`[CDP]   Navigating ${email} to chat.qwen.ai...`);
 
   // 8. Wait for SPA to load + baxia to initialize (poll with backoff)
   let baxiaReady = false;
@@ -448,7 +433,6 @@ export async function initAccountContext(email: string, profileCookies: string):
       );
       if (check.fetchIsWrapped) {
         baxiaReady = true;
-        console.log(`[CDP]   baxia ready for ${email} after ${waitMs + 2000}ms`);
         break;
       }
     } catch {
@@ -466,7 +450,6 @@ export async function initAccountContext(email: string, profileCookies: string):
       '({hasBaxia:!!window.__baxia__,fetchIsWrapped:!fetch.toString().includes("native")})',
       false,
     );
-    console.log(`[CDP]   baxia for ${email}: ${status.hasBaxia} | fetch wrapped: ${status.fetchIsWrapped}`);
   } catch (err: any) {
     console.warn(`[CDP]   baxia check failed for ${email}: ${err.message}`);
   }
@@ -475,8 +458,6 @@ export async function initAccountContext(email: string, profileCookies: string):
   // Network.enable already called above, trigger a fire-and-forget fetch
   triggerBxHeaderCaptureForAccount(state);
   await Bun.sleep(1500);
-
-  console.log(`[CDP] Account context ready: ${email} (sessionId=${sessionId})`);
 }
 
 /**
@@ -544,7 +525,6 @@ function triggerBxHeaderCaptureForAccount(state: AccountCdpState): void {
 export async function refreshBaxiaForAccount(email: string): Promise<void> {
   const state = accountStates.get(email);
   if (!state) return;
-  console.log(`[CDP] Refreshing baxia for ${email}...`);
   try {
     await sendToAccount(state, 'Page.navigate', { url: 'https://chat.qwen.ai/' });
     // Wait for baxia to re-initialize
@@ -557,7 +537,6 @@ export async function refreshBaxiaForAccount(email: string): Promise<void> {
           false,
         );
         if (check.fetchIsWrapped) {
-          console.log(`[CDP]   baxia refreshed for ${email} after ${waitMs + 2000}ms`);
           triggerBxHeaderCaptureForAccount(state);
           return;
         }
@@ -591,7 +570,6 @@ export async function browserFetchForAccount(
   // For large bodies with cached baxia headers, use Node.js fetch to bypass browser hang
   const LARGE_BODY_THRESHOLD = 50_000; // 50KB
   if (body && body.length > LARGE_BODY_THRESHOLD && state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
-    console.log(`[CDP][${email}] Large body non-streaming (${body.length} chars) — using Node.js fetch with cached baxia headers`);
     const requestId = crypto.randomUUID();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -733,8 +711,6 @@ export async function nodeFetchStreamForAccount(
 
   const requestId = crypto.randomUUID();
 
-  console.log(`[NodeFetch][${email}] Starting node fetch, body=${body.length} chars`);
-
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'text/event-stream',
@@ -773,7 +749,6 @@ export async function nodeFetchStreamForAccount(
     });
 
     clearTimeout(timer);
-    console.log(`[NodeFetch][${email}] Response: ${resp.status}, body: ${resp.headers.get('content-length')}`);
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');
@@ -826,7 +801,6 @@ export async function browserStreamFetchIncrementalForAccount(
   // For large bodies with cached baxia headers, use Node.js fetch to bypass browser hang
   const LARGE_BODY_THRESHOLD = 50_000; // 50KB
   if (body.length > LARGE_BODY_THRESHOLD && state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
-    console.log(`[CDP][${email}] Large body (${body.length} chars) — using Node.js fetch with cached baxia headers`);
     try {
       return await nodeFetchStreamForAccount(email, url, body, options);
     } catch (err) {
@@ -839,7 +813,6 @@ export async function browserStreamFetchIncrementalForAccount(
   const timeout = options?.timeout || 60_000;
   const bindingName = `__cdp_sb_${++state.callIdCounter}_${Date.now()}`;
   const startTime = Date.now();
-  console.log(`[CDP] streamFetch start: email=${email} url=${url.slice(0, 80)} binding=${bindingName} bodyLen=${body.length}`);
 
   await connectBrowserWs();
 
@@ -887,7 +860,6 @@ export async function browserStreamFetchIncrementalForAccount(
   state.streamBindings.set(bindingName, (payload: string) => {
     if (streamClosed) return;
     if (payload === '__QSB_DONE__') {
-      console.log(`[CDP] stream DONE: ${Date.now() - startTime}ms total, ${chunkCount} chunks, email=${email}`);
       streamClosed = true;
       try {
         streamController?.close();
@@ -940,7 +912,6 @@ export async function browserStreamFetchIncrementalForAccount(
     }
     if (!firstChunkTime) {
       firstChunkTime = Date.now();
-      console.log(`[CDP] first chunk: ${firstChunkTime - startTime}ms, email=${email}`);
     }
     chunkCount++;
     try {
@@ -967,8 +938,6 @@ export async function browserStreamFetchIncrementalForAccount(
 
   if (useTwoPhase) {
     const storeStart = Date.now();
-    console.log(`[CDP] Storing ${body.length} chars in ${bodyGlobalName} for ${email}`);
-    console.log(`[CDP] Large body (${(body.length / 1024).toFixed(0)}KB) — using two-phase storage for email=${email}`);
     // Phase 1: Store body in browser global (simple assignment, no baxia involvement)
     const storeId = ++state.callIdCounter;
     const storeExpression = `window[${JSON.stringify(bodyGlobalName)}] = ${JSON.stringify(body)}; 'ok'`;
@@ -994,7 +963,6 @@ export async function browserStreamFetchIncrementalForAccount(
         settled: false,
       });
     });
-    console.log(`[CDP] Body stored in ${Date.now() - storeStart}ms`);
   }
 
   // Launch fetch in the account's page using window.fetch()
@@ -1011,16 +979,13 @@ export async function browserStreamFetchIncrementalForAccount(
   const fetchExpression = `(async () => {
   const t0 = Date.now();
   const bridge = window[${JSON.stringify(bindingName)}];
-  console.log('[CDP-BROWSER] IIFE started, bridge=' + typeof bridge + ', bodyRef=' + typeof (${bodyRef}));
   
   try {
     const body = ${bodyRef};
-    console.log('[CDP-BROWSER] body loaded: ' + (body ? body.length + ' chars' : 'null/undefined'));
     
     const requestId = crypto.randomUUID();
     const startTime = new Date().toISOString();
     
-    console.log('[CDP-BROWSER] calling window.fetch()...');
     const fetchStart = Date.now();
     
     const resp = await window.fetch(${JSON.stringify(url)}, {
@@ -1039,17 +1004,14 @@ export async function browserStreamFetchIncrementalForAccount(
       body: body,
     });
     
-    console.log('[CDP-BROWSER] fetch resolved in ' + (Date.now() - fetchStart) + 'ms, status=' + resp.status);
     
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');
-      console.log('[CDP-BROWSER] HTTP error: ' + resp.status + ', body=' + errText.substring(0, 200));
       bridge(btoa(JSON.stringify({ __httpError: true, status: resp.status, body: errText.substring(0, 2000) })));
       bridge('__QSB_DONE__');
       return;
     }
     
-    console.log('[CDP-BROWSER] getting reader...');
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let chunkCount = 0;
@@ -1068,16 +1030,13 @@ export async function browserStreamFetchIncrementalForAccount(
           chunkCount++;
           totalBytes += text.length;
           if (chunkCount <= 3 || chunkCount % 20 === 0) {
-            console.log('[CDP-BROWSER] chunk #' + chunkCount + ': ' + text.length + ' chars (total: ' + totalBytes + ')');
           }
         }
       }
     }
     
-    console.log('[CDP-BROWSER] stream done: ' + chunkCount + ' chunks, ' + totalBytes + ' total bytes, in ' + (Date.now() - fetchStart) + 'ms');
     bridge('__QSB_DONE__');
   } catch (e) {
-    console.log('[CDP-BROWSER] ERROR in ' + (Date.now() - t0) + 'ms: ' + (e.message || e));
     bridge('__QSB_ERROR__');
   }
 })();`;
@@ -1243,7 +1202,6 @@ export function getCdpStatuses(): CdpAccountStatus[] {
  */
 export async function initAllAccountContexts(accounts: Array<{ email: string; profileCookies?: string }>): Promise<void> {
   await connectBrowserWs();
-  console.log(`[CDP] Initializing ${accounts.length} account contexts...`);
 
   for (const acct of accounts) {
     if (!acct.profileCookies) {
@@ -1256,8 +1214,6 @@ export async function initAllAccountContexts(accounts: Array<{ email: string; pr
       console.error(`[CDP] Failed to init context for ${acct.email}: ${err.message}`);
     }
   }
-
-  console.log(`[CDP] Account contexts ready: ${getAccountEmails().join(', ')}`);
 }
 
 /**

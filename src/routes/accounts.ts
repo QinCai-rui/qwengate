@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { addAccount, getAccountByEmail, getAccounts, removeAccount } from '../services/auth.ts';
+import { addAccount, getAccountByEmail, getAccounts, removeAccount, setAccountDisabled } from '../services/auth.ts';
 import { getCdpStatuses } from '../services/cdpClient.ts';
 import { logStore } from '../services/logStore.ts';
 
@@ -70,6 +70,30 @@ accountsRouter.post('/', async (c) => {
     }
     console.error('[Accounts] POST failed:', err.message);
     return c.json({ error: { message: 'Failed to add account' } }, 500);
+  }
+});
+
+/**
+ * PATCH /api/accounts/:email
+ * Update account properties (e.g. disabled)
+ */
+accountsRouter.patch('/:email', async (c) => {
+  try {
+    if (!checkRateLimit('accounts')) {
+      return c.json({ error: 'Rate limit exceeded' }, 429);
+    }
+    const email = decodeURIComponent(c.req.param('email'));
+    const body = await c.req.json();
+    if (typeof body.disabled === 'boolean') {
+      setAccountDisabled(email, body.disabled);
+    }
+    return c.json({ success: true, email, disabled: body.disabled });
+  } catch (err: any) {
+    if (err.message.includes('not found')) {
+      return c.json({ error: { message: err.message } }, 404);
+    }
+    console.error('[Accounts] PATCH failed:', err.message);
+    return c.json({ error: { message: 'Failed to update account' } }, 500);
   }
 });
 

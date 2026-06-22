@@ -5,14 +5,14 @@
  */
 
 import type { AccountEntry } from '../types/auth.ts';
-import { AUTH_REFRESH_BEFORE_MS, AUTH_TOKEN_MAX_AGE_MS, saveCookies } from './auth.ts';
+import { getAuthRefreshBeforeMs, getAuthTokenMaxAgeMs, saveCookies } from './auth.ts';
 import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
 import { performBrowserFetch, refreshViaProfile } from './playwright.ts';
 
 export function needsRefresh(acct: AccountEntry): boolean {
   if (!acct.state) return true;
-  return acct.state.expiresAt - AUTH_REFRESH_BEFORE_MS < Date.now();
+  return acct.state.expiresAt - getAuthRefreshBeforeMs() < Date.now();
 }
 
 const QWEN_CHAT_URL = 'https://chat.qwen.ai';
@@ -32,7 +32,7 @@ export async function tryRefreshToken(acct: AccountEntry): Promise<boolean> {
       if (data.data?.token) {
         acct.state = {
           token: data.data.token,
-          expiresAt: Date.now() + AUTH_TOKEN_MAX_AGE_MS,
+          expiresAt: Date.now() + getAuthTokenMaxAgeMs(),
           refreshToken: data.data.refresh_token || acct.state.refreshToken,
         };
         await saveCookies(acct.email, acct.state.token, acct.state.refreshToken, acct.state.expiresAt);

@@ -336,6 +336,22 @@ export function registerDashboardRoutes(app: Hono): void {
   app.get('/metrics/monitor', async (c, next) => requireApiKey(c, next), monitorHandler);
 
   app.get('/log', (c) => c.redirect('/dashboard'));
+
+  app.patch(
+    '/api/accounts/:email',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const body = await c.req.json();
+        const { setAccountDisabled } = await import('../../services/accountManager.ts');
+        setAccountDisabled(c.req.param('email'), body.disabled === true);
+        return c.json({ ok: true });
+      } catch (err: any) {
+        return c.json({ error: err.message }, 404);
+      }
+    },
+  );
+
   app.get('/log/json', async (c, next) => requireApiKey(c, next), logJsonHandler);
   app.get('/log/stream', async (c, next) => requireApiKey(c, next), logStreamHandler);
   app.get(

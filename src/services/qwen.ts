@@ -103,14 +103,12 @@ export interface QwenStreamResult {
   qwenLogFile?: string;
 }
 
-const QWEN_FETCH_TIMEOUT_MS = config.getInt('QWEN_FETCH_TIMEOUT_MS', 30000);
-
 // Cached timezone for request headers
 const cachedTimezone = 'America/Sao_Paulo';
 
 export function createFetchTimeout(): { controller: AbortController; cleanup: () => void } {
   const controller = new AbortController();
-  const timeout = QWEN_FETCH_TIMEOUT_MS;
+  const timeout = config.getInt('QWEN_FETCH_TIMEOUT_MS', 30000);
   if (timeout > 0) {
     const timer = setTimeout(() => controller.abort(new Error('Request timed out')), timeout);
     return { controller, cleanup: () => clearTimeout(timer) };

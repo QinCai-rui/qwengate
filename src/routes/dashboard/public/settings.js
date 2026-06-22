@@ -1,23 +1,13 @@
 var settingsData = {};
+var originalData = {};
 
 var SETTINGS_SECTIONS = [
   {
     title: 'Server',
     desc: 'Port, security, and browser engine settings.',
     fields: [
-      { key: 'PORT', label: 'PORT', type: 'number' },
+      { key: 'PORT', label: 'PORT', type: 'number', restartRequired: true },
       { key: 'API_KEY', label: 'API_KEY', type: 'password' },
-      {
-        key: 'BROWSER',
-        label: 'BROWSER',
-        type: 'select',
-        options: [
-          { value: 'chromium', label: 'Chromium' },
-          { value: 'firefox', label: 'Firefox' },
-          { value: 'chrome', label: 'Chrome' },
-          { value: 'edge', label: 'Edge' },
-        ],
-      },
     ],
   },
   {
@@ -63,7 +53,7 @@ var SETTINGS_SECTIONS = [
       { key: 'RETRY_BASE_DELAY_MS', label: 'RETRY_BASE_DELAY_MS', type: 'number' },
       { key: 'RETRY_MAX_DELAY_MS', label: 'RETRY_MAX_DELAY_MS', type: 'number' },
       { key: 'RETRY_BACKOFF_MULTIPLIER', label: 'RETRY_BACKOFF_MULTIPLIER', type: 'number', step: '0.1' },
-      { key: 'OPEN_DASHBOARD_ON_START', label: 'OPEN_DASHBOARD_ON_START', type: 'checkbox' },
+      { key: 'OPEN_DASHBOARD_ON_START', label: 'OPEN_DASHBOARD_ON_START', type: 'checkbox', restartRequired: true },
     ],
   },
   {
@@ -129,6 +119,9 @@ async function handleDeleteAllChats() {
 }
 
 function renderSettingsField(field, val) {
+  var restartBadge = field.restartRequired
+    ? '<span class="restart-badge" title="This setting only takes effect after a server restart">Restart required</span>'
+    : '';
   if (field.type === 'action') {
     return (
       '<div class="settings-field" style="grid-column:span 2">' +
@@ -146,17 +139,22 @@ function renderSettingsField(field, val) {
     );
   }
   if (field.type === 'checkbox') {
-    var checked = val === 'true' ? ' checked' : '';
+    var checked = val === 'true';
+    var trackClass = checked ? ' toggle-track active' : ' toggle-track';
     return (
-      '<label class="settings-checkbox">' +
-      '<input type="checkbox" data-key="' +
+      '<div class="settings-toggle" data-key="' +
       field.key +
-      '"' +
-      checked +
-      ' onchange="onCheckboxChange(this)">' +
-      '<span>' +
+      '" onclick="onToggleClick(this)">' +
+      '<span class="' +
+      trackClass +
+      '">' +
+      '<span class="toggle-thumb"></span>' +
+      '</span>' +
+      '<span class="toggle-label">' +
       escHtml(field.label) +
-      '</span></label>'
+      '</span>' +
+      (field.restartRequired ? '<span class="restart-badge-wrap" id="rb-' + field.key + '">' + restartBadge + '</span>' : '') +
+      '</div>'
     );
   }
   if (field.key === 'CUSTOM_INSTRUCTION') {
@@ -165,6 +163,7 @@ function renderSettingsField(field, val) {
       '<label for="cfg-CUSTOM_INSTRUCTION">' +
       escHtml(field.label) +
       '</label>' +
+      (field.restartRequired ? '<span class="restart-badge-wrap" id="rb-' + field.key + '">' + restartBadge + '</span>' : '') +
       '<textarea id="cfg-CUSTOM_INSTRUCTION" data-key="CUSTOM_INSTRUCTION" rows="4" oninput="onFieldChange(this)">' +
       escHtml(val) +
       '</textarea></div>'
@@ -184,6 +183,7 @@ function renderSettingsField(field, val) {
       '">' +
       escHtml(field.label) +
       '</label>' +
+      (field.restartRequired ? '<span class="restart-badge-wrap" id="rb-' + field.key + '">' + restartBadge + '</span>' : '') +
       '<select id="cfg-' +
       field.key +
       '" data-key="' +
@@ -202,6 +202,7 @@ function renderSettingsField(field, val) {
     '">' +
     escHtml(field.label) +
     '</label>' +
+    (field.restartRequired ? '<span class="restart-badge-wrap" id="rb-' + field.key + '">' + restartBadge + '</span>' : '') +
     '<input type="' +
     inputType +
     '" id="cfg-' +
@@ -217,12 +218,36 @@ function renderSettingsField(field, val) {
 }
 
 /* ── Change tracking ── */
+/* ponytail: toggle is a div with inline onclick, no hidden checkbox/label confusion */
+function onToggleClick(container) {
+  var key = container.getAttribute('data-key');
+  var track = container.querySelector('.toggle-track');
+  settingsData[key] = track.classList.contains('active') ? 'false' : 'true';
+  track.classList.toggle('active');
+  updateRestartBadge(key);
+}
 function onFieldChange(el) {
   settingsData[el.getAttribute('data-key')] = el.value;
+  updateRestartBadge(el.getAttribute('data-key'));
 }
-function onCheckboxChange(el) {
-  var key = el.getAttribute('data-key');
-  settingsData[key] = el.checked ? 'true' : '';
+
+/* ── Restart badge: only show when value changed AND field requires restart ── */
+function updateRestartBadge(key) {
+  var wrap = document.getElementById('rb-' + key);
+  if (!wrap) return;
+  var badge = wrap.querySelector('.restart-badge');
+  var changed = String(settingsData[key]) !== String(originalData[key]);
+  if (changed) {
+    if (!badge) {
+      var el = document.createElement('span');
+      el.className = 'restart-badge';
+      el.title = 'This setting only takes effect after a server restart';
+      el.textContent = 'Restart required';
+      wrap.appendChild(el);
+    }
+  } else {
+    if (badge) badge.remove();
+  }
 }
 
 /* ── Load ── */
@@ -233,9 +258,12 @@ async function loadSettings() {
       var data = await res.json();
       if (data && data.config) {
         settingsData = {};
+        originalData = {};
         var keys = Object.keys(data.config);
         for (var i = 0; i < keys.length; i++) {
-          settingsData[keys[i]] = data.config[keys[i]];
+          var v = data.config[keys[i]];
+          settingsData[keys[i]] = v;
+          originalData[keys[i]] = v;
         }
       }
     }
@@ -243,6 +271,17 @@ async function loadSettings() {
     console.error('Settings load error:', e);
   }
   renderSettingsForm();
+  // Hide restart badges for fields where value hasn't changed
+  setTimeout(function () {
+    for (var s = 0; s < SETTINGS_SECTIONS.length; s++) {
+      var section = SETTINGS_SECTIONS[s];
+      for (var f = 0; f < section.fields.length; f++) {
+        if (section.fields[f].restartRequired) {
+          updateRestartBadge(section.fields[f].key);
+        }
+      }
+    }
+  }, 0);
 }
 
 /* ── Save ── */
