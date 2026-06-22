@@ -158,6 +158,12 @@ async function ensureAcwTcCookie(headers: Record<string, string>): Promise<void>
  * ```
  */
 export async function browserlessFetch(url: string, options: BrowserlessFetchOptions = {}): Promise<Response> {
+  // ponytail: test mode uses globalThis.fetch so tests can mock it. Same pattern as playwright.ts.
+  if (process.env.TEST_MOCK_PLAYWRIGHT) {
+    const { method = 'GET', headers = {}, body } = options;
+    return globalThis.fetch(url, { method, headers, body });
+  }
+
   // ponytail: wreq-js Response is compatible for our use (status, body, headers, json, text)
   // but missing `bytes()` from the global Response type. This cast is safe for our usage.
   const { method = 'GET', headers = {}, body, accountEmail, signal, browser: browserProfile = 'chrome_142', os = 'linux' } = options;

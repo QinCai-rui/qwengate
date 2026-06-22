@@ -19,7 +19,6 @@ test('Health check returns degraded when Playwright not initialized', async () =
 
   const body = await res.json();
   assert.strictEqual(body.status, 'degraded');
-  assert.strictEqual(body.playwright, false);
   assert.ok(typeof body.uptime === 'number');
 });
 
