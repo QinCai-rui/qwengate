@@ -1,4 +1,5 @@
 import { config } from '../services/configService.ts';
+import { logStore } from '../services/logStore.ts';
 
 /**
  * Retry utility with configurable max attempts, exponential backoff,
@@ -160,7 +161,7 @@ export class CircuitBreaker {
             this.failureCount++;
             if (this.failureCount >= this.failureThreshold) {
               this.state = 'open';
-              console.warn(`[CircuitBreaker:${this.name}] closed → open (${this.failureCount} consecutive failures)`);
+              logStore.log('debug', 'retry', `[CircuitBreaker:${this.name}] closed → open (${this.failureCount} consecutive failures)`);
             }
           }
           resolve();
@@ -347,7 +348,9 @@ export async function withRetry<T>(fn: () => Promise<T>, config?: RetryConfig): 
 
       const errorName = error instanceof Error ? error.name : typeof error;
       const errorMsg = error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200);
-      console.warn(
+      logStore.log(
+        'debug',
+        'retry',
         `[Retry] attempt ${attempt + 1}/${cfg.maxRetries + 1} failed (${httpStatus || errorName}: ${errorMsg}), retrying in ${Math.round(actualDelay)}ms...`,
       );
       await sleep(actualDelay);

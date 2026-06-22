@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { Context } from 'hono';
-import { pickAccount, decrementInFlight, incrementInFlight } from '../services/auth.ts';
+import { pickAccount, decrementInFlight, throttleAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
@@ -28,18 +28,6 @@ export {
 } from './chatHelpers.ts';
 
 const MAX_MESSAGE_SIZE = 10_000_000; // 10MB — large payloads are uploaded as files via Qwen's file API
-
-// ponytail: per-process Map, not shared across cluster workers.
-// Upgrade to a shared store (Redis) if multi-worker conversation pinning is needed.
-const conversationAccount = new Map<string, string>();
-const MAX_CONVERSATIONS = 1000;
-
-function conversationKey(messages: any[]): string {
-  const first = messages[0];
-  if (!first) return '';
-  const raw = typeof first.content === 'string' ? first.content.substring(0, 500) : JSON.stringify(first);
-  return crypto.createHash('sha256').update(raw).digest('hex').substring(0, 16);
-}
 
 async function parseRequestBody(c: Context) {
   const rawBody = await c.req.json();
@@ -116,7 +104,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
           const file = await uploadLargeTextAsFile(uploadAccount.email, systemContent, 'system-prompt.md');
           fileAttachments.push(file);
         } catch (err: any) {
-          console.warn('[Chat] Failed to upload system prompt file:', err.message || err);
+          logStore.log('debug', 'chat', '[Chat] Failed to upload system prompt file: ' + (err.message || err));
         }
       }
       if (toolResultsContent) {
@@ -124,7 +112,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
           const file = await uploadLargeTextAsFile(uploadAccount.email, toolResultsContent, 'tool-result.md');
           fileAttachments.push(file);
         } catch (err: any) {
-          console.warn('[Chat] Failed to upload tool results file:', err.message || err);
+          logStore.log('debug', 'chat', '[Chat] Failed to upload tool results file: ' + (err.message || err));
         }
       }
     }
@@ -140,23 +128,12 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
   const MAX_ACCOUNT_RETRIES = 5;
   let lastError: any;
 
-  // Pin conversation to the same account so messages don't spread across multiple Qwen accounts
-  const convKey = conversationKey(messages);
-  const pinnedEmail = convKey ? conversationAccount.get(convKey) : undefined;
-
   for (let attempt = 0; attempt < MAX_ACCOUNT_RETRIES; attempt++) {
-    let accountEmail: string | undefined;
-    if (pinnedEmail && attempt === 0) {
-      // Use the pinned account for conversation affinity
-      accountEmail = pinnedEmail;
-      incrementInFlight(pinnedEmail);
-    } else {
-      const selectedAccount = await pickAccount(lastFailedEmail);
-      accountEmail = selectedAccount?.email;
-      if (!selectedAccount && attempt > 0) {
-        // On retry: if still no accounts, all are throttled — stop retrying
-        throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
-      }
+    const selectedAccount = await pickAccount(lastFailedEmail);
+    const accountEmail = selectedAccount?.email;
+    if (!selectedAccount && attempt > 0) {
+      // On retry: if still no accounts, all are throttled — stop retrying
+      throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
     }
 
     let sessionResult;
@@ -166,9 +143,6 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       lastFailedEmail = accountEmail;
       lastError = err;
       if (accountEmail) decrementInFlight(accountEmail);
-      if (convKey && pinnedEmail && accountEmail === pinnedEmail) {
-        conversationAccount.delete(convKey); // Don't retry a broken pin
-      }
       continue; // Try next account
     }
     const { session, qwenMessages: sessionMessages, nextParentId, sessionHeaders, resolvedEmail } = sessionResult;
@@ -177,15 +151,6 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
     logStore.updateEntry(logId, (entry) => {
       entry.accountEmail = resolvedEmail;
     });
-
-    // Pin this conversation to this account so future requests reuse it
-    if (convKey && resolvedEmail) {
-      conversationAccount.set(convKey, resolvedEmail);
-      if (conversationAccount.size > MAX_CONVERSATIONS) {
-        const key = conversationAccount.keys().next().value;
-        if (key) conversationAccount.delete(key);
-      }
-    }
 
     let routedModel;
     let streamResult;
@@ -205,20 +170,45 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       // Release the acquired session to prevent pool exhaustion + inFlight leak
       sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
 
-      console.log(`[Chat] Request failed on ${resolvedEmail}: ${err.message || err} (attempt ${attempt + 1}/${MAX_ACCOUNT_RETRIES})`);
+      logStore.log(
+        'debug',
+        'chat',
+        `[Chat] Request failed on ${resolvedEmail}: ${err.message || err} (attempt ${attempt + 1}/${MAX_ACCOUNT_RETRIES})`,
+      );
 
       // If rate limited, try next account — Qwen didn't process the request yet
       if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
         lastFailedEmail = resolvedEmail;
         lastError = err;
-        if (convKey && resolvedEmail && conversationAccount.get(convKey) === resolvedEmail) {
-          conversationAccount.delete(convKey); // Unpin rate-limited account
-        }
         continue;
       }
-      // CAPTCHA / FAIL_SYS_USER_VALIDATE means Qwen already received the request on this account.
-      // Retrying on another account would send the same messages to Qwen again (duplicate processing).
-      // Return the error — the user can retry manually.
+      // Bot detection / CAPTCHA: Qwen rejected BEFORE processing (safe to retry on another account).
+      // Throttle the detected account so pickAccount won't pick it again.
+      if (
+        (err.message || '').includes('FAIL_SYS_USER_VALIDATE') ||
+        (err.message || '').includes('CAPTCHA') ||
+        err instanceof RetryableQwenStreamError
+      ) {
+        lastFailedEmail = resolvedEmail;
+        lastError = err;
+        if (resolvedEmail) throttleAccount(resolvedEmail, 5 * 60 * 1000);
+        continue;
+      }
+      // Timeout / slow response: Qwen didn't respond in time — skip to next account without penalty
+      if (
+        err.name === 'AbortError' ||
+        (err.message || '').includes('timed out') ||
+        (err.message || '').includes('timeout') ||
+        (err.message || '').includes('ETIMEDOUT') ||
+        err.upstreamStatus === 408 ||
+        err.upstreamStatus === 504
+      ) {
+        lastFailedEmail = resolvedEmail;
+        lastError = err;
+        continue;
+      }
+      // All other errors (network, session): Qwen may have processed the request.
+      // Don't throttle — let the user retry manually.
       throw err;
     }
     let { stream, abortController: qwenAbortController } = streamResult;
@@ -238,7 +228,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       };
     });
 
-    console.log(`[Chat] Request routed to ${resolvedEmail} — stream ready (attempt ${attempt + 1})`);
+    logStore.log('debug', 'chat', `[Chat] Request routed to ${resolvedEmail} — stream ready (attempt ${attempt + 1})`);
 
     return {
       sessionMessages,
@@ -275,7 +265,9 @@ export async function chatCompletions(c: Context) {
   try {
     const parsed = await parseRequestBody(c);
     const { body, isStream, toolCalling, cleanOutput, messages, contextCheck } = parsed;
-    console.log(
+    logStore.log(
+      'debug',
+      'chat',
       `[Chat] Request: model=${body.model} stream=${isStream} msgs=${messages.length} tools=${body.tools?.length || 0} msgSizes=[${messages.map((m: any) => `${m.role}:${typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content).length}`).join(',')}]`,
     );
     logStore.createEntry(logId, body.model, isStream);
@@ -378,5 +370,4 @@ export async function chatCompletions(c: Context) {
       status,
     );
   }
-  if (uploadAccount) decrementInFlight(uploadAccount.email);
 }

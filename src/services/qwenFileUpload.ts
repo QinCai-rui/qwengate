@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { performBrowserFetch } from './playwright.ts';
 import { QWEN_API_BASE } from './qwen.ts';
+import { logStore } from './logStore.ts';
 
 /**
  * Character limit enforced by Qwen on message content.
@@ -126,11 +127,15 @@ async function uploadToOss(sts: StsTokenResponse, fileContent: Buffer, contentTy
     objectKey = objectKey.substring(bucketPrefix.length);
   }
 
-  console.log(`[FileUpload] OSS upload — endpoint=${sts.endpoint}, bucket=${sts.bucketname}, key=${key}, objectKey=${objectKey}`);
+  logStore.log(
+    'debug',
+    'upload',
+    `[FileUpload] OSS upload — endpoint=${sts.endpoint}, bucket=${sts.bucketname}, key=${key}, objectKey=${objectKey}`,
+  );
 
   const canonicalRequest = buildOssCanonicalRequest('PUT', contentType, date, sts.security_token, sts.bucketname, objectKey);
 
-  console.log(`[FileUpload] OSS canonical request:\n${canonicalRequest}`);
+  logStore.log('debug', 'upload', `[FileUpload] OSS canonical request:\n${canonicalRequest}`);
 
   const signature = hmacSha1Base64(sts.access_key_secret, canonicalRequest);
 
@@ -141,7 +146,7 @@ async function uploadToOss(sts: StsTokenResponse, fileContent: Buffer, contentTy
   }
   const uploadUrl = `${endpoint}/${objectKey}`;
 
-  console.log(`[FileUpload] OSS upload URL: ${uploadUrl}`);
+  logStore.log('debug', 'upload', `[FileUpload] OSS upload URL: ${uploadUrl}`);
 
   const authHeader = `OSS ${sts.access_key_id}:${signature}`;
 
@@ -153,7 +158,7 @@ async function uploadToOss(sts: StsTokenResponse, fileContent: Buffer, contentTy
       Authorization: authHeader,
       'x-oss-security-token': sts.security_token,
     },
-    body: fileContent,
+    body: fileContent as any,
   });
 
   if (!response.ok) {
@@ -276,25 +281,27 @@ export async function uploadLargeTextAsFile(email: string, text: string, fileNam
   const fileSize = content.length;
   const contentType = 'text/plain';
 
-  console.log(`[FileUpload] Uploading ${fileSize} bytes (${text.length} chars) as "${fileName}" for ${email}`);
+  logStore.log('debug', 'upload', `[FileUpload] Uploading ${fileSize} bytes (${text.length} chars) as "${fileName}" for ${email}`);
 
   // Step 1: Get STS credentials
   const sts = await getstsToken(email, fileName, fileSize);
-  console.log(
+  logStore.log(
+    'debug',
+    'upload',
     `[FileUpload] Got STS token — bucket=${sts.bucketname}, file_id=${sts.file_id}, file_url=${sts.file_url}, endpoint=${sts.endpoint}, file_path=${sts.file_path}`,
   );
 
   // Step 2: Upload to OSS
   const fileUrl = await uploadToOss(sts, Buffer.from(content), contentType);
-  console.log(`[FileUpload] Uploaded to OSS — url=${fileUrl.substring(0, 80)}...`);
+  logStore.log('debug', 'upload', `[FileUpload] Uploaded to OSS — url=${fileUrl.substring(0, 80)}...`);
 
   // Step 3: Trigger parsing
   await parseFile(email, sts.file_id);
-  console.log(`[FileUpload] Parse triggered for ${sts.file_id}`);
+  logStore.log('debug', 'upload', `[FileUpload] Parse triggered for ${sts.file_id}`);
 
   // Step 4: Poll until parsed
   await pollParseStatus(email, sts.file_id);
-  console.log(`[FileUpload] Parse complete for ${sts.file_id}`);
+  logStore.log('debug', 'upload', `[FileUpload] Parse complete for ${sts.file_id}`);
 
   return buildQwenFileAttachment(sts, fileName, fileSize, contentType);
 }

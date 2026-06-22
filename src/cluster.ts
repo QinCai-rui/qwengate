@@ -9,6 +9,7 @@
 
 import { availableParallelism, cpus } from 'node:os';
 import { isBun } from './utils/env.ts';
+import { logStore } from './services/logStore.ts';
 
 if (!isBun) {
   console.error('[cluster] Cluster mode requires Bun runtime. Install Bun: https://bun.sh');
@@ -16,7 +17,7 @@ if (!isBun) {
 }
 
 const numWorkers = availableParallelism?.() ?? cpus().length;
-console.log(`\x1b[31m[cluster]\x1b[0m Starting ${numWorkers} workers...`);
+logStore.log('debug', 'cluster', `\x1b[31m[cluster]\x1b[0m Starting ${numWorkers} workers...`);
 
 interface Worker {
   process: ReturnType<typeof Bun.spawn>;
@@ -41,7 +42,7 @@ function spawnWorker(id: number): Worker {
   const worker: Worker = { process: proc, id, restarts: 0 };
   workers[id] = worker;
 
-  console.log(`\x1b[32m[cluster]\x1b[0m Worker ${id + 1} started (PID: ${proc.pid})`);
+  logStore.log('debug', 'cluster', `\x1b[32m[cluster]\x1b[0m Worker ${id + 1} started (PID: ${proc.pid})`);
   return worker;
 }
 
@@ -61,7 +62,11 @@ const monitor = setInterval(async () => {
     try {
       const exited = worker.process.exitCode;
       if (exited !== null) {
-        console.warn(`\x1b[33m[cluster]\x1b[0m Worker ${i + 1} (PID: ${worker.process.pid}) exited (code: ${exited}), restarting...`);
+        logStore.log(
+          'debug',
+          'cluster',
+          `\x1b[33m[cluster]\x1b[0m Worker ${i + 1} (PID: ${worker.process.pid}) exited (code: ${exited}), restarting...`,
+        );
         const newWorker = spawnWorker(i);
         newWorker.restarts = worker.restarts + 1;
 
@@ -84,7 +89,7 @@ function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
 
-  console.log(`\n\x1b[33m[cluster]\x1b[0m Shutting down all workers...`);
+  logStore.log('debug', 'cluster', `\n\x1b[33m[cluster]\x1b[0m Shutting down all workers...`);
   clearInterval(monitor);
 
   for (const worker of workers) {

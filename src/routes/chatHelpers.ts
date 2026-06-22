@@ -103,7 +103,7 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
     } else if (msg.role === 'assistant') {
       let assistantContent = contentStr || '';
       const reasoning = msg.reasoning_content;
-      if (reasoning) assistantContent = `${reasoning}\n\n${assistantContent}`;
+      if (reasoning) assistantContent = `<thinking>\n${reasoning}\n</thinking>\n\n${assistantContent}`;
 
       if (msg.tool_calls && Array.isArray(msg.tool_calls)) {
         for (const tc of msg.tool_calls) {
