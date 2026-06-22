@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { ConfigService, DEFAULT_CONFIG } from './configService.ts';
+import { logStore } from './logStore.ts';
 
 function tmpFile(prefix: string): string {
   return resolve(tmpdir(), `qwen-config-test-${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`);
@@ -225,15 +226,15 @@ test('validate - warns on negative PORT values', () => {
   const svc = new ConfigService(path);
 
   const warnings: string[] = [];
-  const origWarn = console.warn;
-  console.warn = (msg: string) => {
+  const origLog = logStore.log.bind(logStore);
+  logStore.log = (_level: string, _category: string, msg: string) => {
     warnings.push(msg);
   };
   try {
     svc.validate();
     assert.ok(warnings.some((w) => w.includes('PORT') && w.includes('invalid')));
   } finally {
-    console.warn = origWarn;
+    logStore.log = origLog;
   }
 
   try {
@@ -248,15 +249,15 @@ test('load - warns on unknown config keys', () => {
   writeFileSync(path, JSON.stringify({ PORT: '26405', FOOBAR: 'baz' }), 'utf-8');
 
   const warnings: string[] = [];
-  const origWarn = console.warn;
-  console.warn = (msg: string) => {
+  const origLog = logStore.log.bind(logStore);
+  logStore.log = (_level: string, _category: string, msg: string) => {
     warnings.push(msg);
   };
   try {
     new ConfigService(path);
     assert.ok(warnings.some((w) => w.includes('Unknown key') && w.includes('FOOBAR')));
   } finally {
-    console.warn = origWarn;
+    logStore.log = origLog;
   }
 
   try {

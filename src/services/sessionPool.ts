@@ -214,13 +214,13 @@ export class SessionPool {
         timeout: 10000,
       });
       if (!result.ok) {
-        console.warn(`[SessionPool] Delete returned ${result.status} for ${chatId.substring(0, 8)}...`);
+        logStore.log('debug', 'pool', `[SessionPool] Delete returned ${result.status} for ${chatId.substring(0, 8)}...`);
       }
     } catch (err: any) {
       if (err.name === 'AbortError') {
-        console.warn(`[SessionPool] Delete timeout for ${chatId.substring(0, 8)}...`);
+        logStore.log('debug', 'pool', `[SessionPool] Delete timeout for ${chatId.substring(0, 8)}...`);
       } else {
-        console.warn(`[SessionPool] Delete failed for ${chatId.substring(0, 8)}...: ${err.message}`);
+        logStore.log('debug', 'pool', `[SessionPool] Delete failed for ${chatId.substring(0, 8)}...: ${err.message}`);
       }
     }
   }

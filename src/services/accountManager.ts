@@ -447,7 +447,9 @@ export async function pickAccount(excludeEmail?: string): Promise<AccountEntry |
       }
     }
     const picked = candidates[bestIdx];
-    console.log(
+    logStore.log(
+      'debug',
+      'auth',
       `[Account] Picked ${picked.email} — inFlight=${picked.inFlight} totalReqs=${picked.totalRequests} lastUsed=${picked.lastUsed ? Date.now() - picked.lastUsed + 'ms ago' : 'never'}${excludeEmail ? ` (excluded: ${excludeEmail})` : ''}`,
     );
     picked.lastUsed = Date.now();

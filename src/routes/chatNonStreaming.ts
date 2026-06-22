@@ -262,7 +262,7 @@ function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
   }));
   const loopCheck = detectParallelToolLoop(parsedForLoopCheck);
   if (!loopCheck.ok) {
-    console.warn(`  [🔄 PARALLEL LOOP] ${loopCheck.errors[0]}`);
+    logStore.log('debug', 'chat', `[🔄 PARALLEL LOOP] ${loopCheck.errors[0]}`);
     state.correctionPrompts.push(loopCheck.correctionPrompt);
     logStore.addError(logId, `Parallel loop: ${loopCheck.errors[0]}`);
     // Filter out duplicate tool calls from the response

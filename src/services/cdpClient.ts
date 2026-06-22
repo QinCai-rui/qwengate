@@ -18,7 +18,7 @@
  *   5. browserStreamFetchIncrementalForAccount(email, url, body) → streaming (Node.js fetch)
  */
 
-import { setStartupStatus } from './auth.ts';
+import { setStartupStatus, throttleAccount } from './auth.ts';
 import { logStore } from './logStore.ts';
 
 // ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ async function connectBrowserWs(): Promise<void> {
             if (state) {
               const text = msg.params?.args?.map((a: any) => a.value ?? a.description ?? '').join(' ') ?? '';
               if (text.includes('[CDP-BROWSER]')) {
-                console.log(`[CDP-CONSOLE][${state}] ${text}`);
+                logStore.log('debug', 'cdp', `[CDP-CONSOLE][${state}] ${text}`);
               }
             }
           }
@@ -177,7 +177,7 @@ async function connectBrowserWs(): Promise<void> {
                   clearTimeout(entry.requestTimeout);
                   fetchInterceptByRequestId.set(params.requestId, entry);
                   entry.requestResolve({ requestId: params.requestId });
-                  console.log(`[CDP-Fetch][${entry.email}] Request intercepted, requestId=${params.requestId}`);
+                  logStore.log('debug', 'cdp', `[CDP-Fetch][${entry.email}] Request intercepted, requestId=${params.requestId}`);
                 }
               } else {
                 // Not our intercept — continue unmodified so other requests don't hang
@@ -201,7 +201,7 @@ async function connectBrowserWs(): Promise<void> {
                   statusText: params.responseStatusText || '',
                   headers: respHeaders,
                 });
-                console.log(`[CDP-Fetch][${entry.email}] Response intercepted, status=${params.responseStatusCode}`);
+                logStore.log('debug', 'cdp', `[CDP-Fetch][${entry.email}] Response intercepted, status=${params.responseStatusCode}`);
               } else {
                 // Not our intercept — continue response unmodified
                 sendToAccount(state, 'Fetch.continueResponse', { requestId: params.requestId }).catch(() => {});
@@ -541,7 +541,7 @@ export async function initAccountContext(email: string, profileCookies?: string)
     }
   }
   if (!baxiaReady) {
-    console.warn(`[CDP]   baxia not ready for ${email} after 15s — proceeding anyway`);
+    logStore.log('debug', 'cdp', `[CDP]   baxia not ready for ${email} after 15s — proceeding anyway`);
   }
 
   // 9. Verify baxia
@@ -553,7 +553,7 @@ export async function initAccountContext(email: string, profileCookies?: string)
     );
     logStore.log('debug', 'cdp', `  baxia for ${email}: ${status.hasBaxia} | fetch wrapped: ${status.fetchIsWrapped}`);
   } catch (err: any) {
-    console.warn(`[CDP]   baxia check failed for ${email}: ${err.message}`);
+    logStore.log('debug', 'cdp', `[CDP]   baxia check failed for ${email}: ${err.message}`);
   }
 
   // 10. Enable Network tracking to capture bx headers
@@ -650,9 +650,9 @@ export async function refreshBaxiaForAccount(email: string): Promise<void> {
         /* not ready */
       }
     }
-    console.warn(`[CDP]   baxia refresh incomplete for ${email} after 10s`);
+    logStore.log('debug', 'cdp', `[CDP]   baxia refresh incomplete for ${email} after 10s`);
   } catch (err: any) {
-    console.warn(`[CDP]   baxia refresh failed for ${email}: ${err.message}`);
+    logStore.log('debug', 'cdp', `[CDP]   baxia refresh failed for ${email}: ${err.message}`);
   }
 }
 
@@ -683,7 +683,7 @@ async function harvestFreshHeaders(state: AccountCdpState, maxWaitMs = 8000): Pr
   // Even if headers didn't change, they may still be valid
   if (state.cachedBxHeaders?.['bx-ua']) return;
 
-  console.warn(`[CDP][${state.email}] harvestFreshHeaders: no bx-ua after ${maxWaitMs}ms`);
+  logStore.log('debug', 'cdp', `[CDP][${state.email}] harvestFreshHeaders: no bx-ua after ${maxWaitMs}ms`);
 }
 
 // ---------------------------------------------------------------------------
@@ -875,7 +875,7 @@ async function fetchViaChromeIntercept(
   fetchInterceptByMarker.set(markerId, entry);
 
   try {
-    console.log(`[CDP-Fetch][${email}] Starting Chrome intercept, body=${body.length} chars`);
+    logStore.log('debug', 'cdp', `[CDP-Fetch][${email}] Starting Chrome intercept, body=${body.length} chars`);
 
     // ── Step 1: Fire trigger fetch via window.fetch (baxia wraps it, adds headers) ──
     const triggerExpr = `
@@ -905,7 +905,7 @@ async function fetchViaChromeIntercept(
 
     // ── Step 2: Wait for Request stage interception ──
     const { requestId } = await requestPromise;
-    console.log(`[CDP-Fetch][${email}] Request intercepted in ${Date.now() - t0}ms`);
+    logStore.log('debug', 'cdp', `[CDP-Fetch][${email}] Request intercepted in ${Date.now() - t0}ms`);
 
     // ── Step 3: Continue request with the actual large body ──
     // Rebuild headers from the intercepted request, removing marker and unsafe headers.
@@ -930,7 +930,7 @@ async function fetchViaChromeIntercept(
 
     // ── Step 4: Wait for Response stage interception ──
     const { statusCode, statusText, headers: respHeaders } = await responsePromise;
-    console.log(`[CDP-Fetch][${email}] Response intercepted: ${statusCode} in ${Date.now() - t0}ms`);
+    logStore.log('debug', 'cdp', `[CDP-Fetch][${email}] Response intercepted: ${statusCode} in ${Date.now() - t0}ms`);
 
     // ── Step 5: Take response body as a stream ──
     const streamResult: any = await sendToAccount(state, 'Fetch.takeResponseBodyAsStream', { requestId });
@@ -1011,7 +1011,7 @@ export async function browserFetchForAccount(
 
   // Ensure we have baxia headers
   if (!state.cachedBxHeaders || !state.cachedBxHeaders['bx-ua']) {
-    console.warn(`[CDP][${email}] No cached baxia headers, attempting browser fetch to populate...`);
+    logStore.log('debug', 'cdp', `[CDP][${email}] No cached baxia headers, attempting browser fetch to populate...`);
     await triggerBxHeaderCaptureAndWait(state);
     if (!state.cachedBxHeaders || !state.cachedBxHeaders['bx-ua']) {
       throw new Error(`No baxia headers for ${email} — cannot make request`);
@@ -1031,7 +1031,9 @@ export async function browserFetchForAccount(
         headers: result.headers,
       };
     } catch (err) {
-      console.warn(
+      logStore.log(
+        'debug',
+        'cdp',
         `[CDP-Fetch][${email}] Chrome intercept failed for non-streaming, falling back to node fetch: ${(err as Error).message}`,
       );
       // Fall through to node fetch below
@@ -1122,7 +1124,8 @@ export async function nodeFetchStreamForAccount(
     const ct = resp.headers.get('content-type') || '';
     if (ct.includes('application/json') && !ct.includes('text/event-stream')) {
       const errBody = await resp.text().catch(() => '');
-      console.warn(`[NodeFetch][${email}] Bot detection — JSON response instead of SSE`);
+      logStore.log('debug', 'cdp', `[NodeFetch][${email}] Bot detection — JSON response instead of SSE`);
+      throttleAccount(email, 5 * 60 * 1000);
       throw new Error(`FAIL_SYS_USER_VALIDATE: Bot detection for ${email} — response was JSON not SSE`);
     }
 
@@ -1185,7 +1188,11 @@ export async function browserStreamFetchViaBrowser(
   const t0 = Date.now();
   let firstChunkTime = 0;
 
-  console.log(`[CDP][${email}] browserStreamFetchViaBrowser: url=${url}, body=${body.length} chars, binding=${bindingName}`);
+  logStore.log(
+    'debug',
+    'cdp',
+    `[CDP][${email}] browserStreamFetchViaBrowser: url=${url}, body=${body.length} chars, binding=${bindingName}`,
+  );
 
   // Register binding so Runtime.bindingCalled events route to our handler
   await sendToAccount(state, 'Runtime.addBinding', { name: bindingName });
@@ -1209,7 +1216,7 @@ export async function browserStreamFetchViaBrowser(
           state.streamBindings.delete(bindingName);
           // Clean up browser global body reference
           evaluateInAccount(email, `delete window["${bodyGlobal}"]`, false, 5000).catch(() => {});
-          console.log(`[CDP][${email}] browserStreamFetchViaBrowser: stream DONE in ${Date.now() - t0}ms`);
+          logStore.log('debug', 'cdp', `[CDP][${email}] browserStreamFetchViaBrowser: stream DONE in ${Date.now() - t0}ms`);
           return;
         }
 
@@ -1222,7 +1229,7 @@ export async function browserStreamFetchViaBrowser(
           controllerClosed = true;
           state.streamBindings.delete(bindingName);
           evaluateInAccount(email, `delete window["${bodyGlobal}"]`, false, 5000).catch(() => {});
-          console.warn(`[CDP][${email}] browserStreamFetchViaBrowser: stream ERROR after ${Date.now() - t0}ms`);
+          logStore.log('debug', 'cdp', `[CDP][${email}] browserStreamFetchViaBrowser: stream ERROR after ${Date.now() - t0}ms`);
           return;
         }
 
@@ -1232,7 +1239,7 @@ export async function browserStreamFetchViaBrowser(
           controller.enqueue(bytes);
           if (!firstChunkTime) {
             firstChunkTime = Date.now();
-            console.log(`[CDP][${email}] browserStreamFetchViaBrowser: first chunk in ${firstChunkTime - t0}ms`);
+            logStore.log('debug', 'cdp', `[CDP][${email}] browserStreamFetchViaBrowser: first chunk in ${firstChunkTime - t0}ms`);
           }
         } catch (err) {
           console.error(`[CDP][${email}] browserStreamFetchViaBrowser: chunk decode error:`, err);
@@ -1252,7 +1259,7 @@ export async function browserStreamFetchViaBrowser(
     // Store body in browser window global via evaluate
     const escaped = JSON.stringify(body);
     await evaluateInAccount(email, `window["${bodyGlobal}"] = ${escaped}`, false, 10000);
-    console.log(`[CDP][${email}] browserStreamFetchViaBrowser: stored ${body.length} char body in browser global`);
+    logStore.log('debug', 'cdp', `[CDP][${email}] browserStreamFetchViaBrowser: stored ${body.length} char body in browser global`);
   }
 
   // Build the fetch expression — references the global body or embeds inline
@@ -1329,7 +1336,7 @@ export async function browserStreamFetchViaBrowser(
   // Auto-cleanup after 30s
   setTimeout(() => state.queue.delete(id), 30_000);
 
-  console.log(`[CDP][${email}] browserStreamFetchViaBrowser: evaluate sent, awaiting chunks via binding`);
+  logStore.log('debug', 'cdp', `[CDP][${email}] browserStreamFetchViaBrowser: evaluate sent, awaiting chunks via binding`);
 
   return {
     ok: true,
@@ -1363,7 +1370,7 @@ export async function browserStreamFetchIncrementalForAccount(
     try {
       return await fetchViaChromeIntercept(email, url, body, { timeout: options?.timeout });
     } catch (err) {
-      console.warn(`[CDP-Fetch][${email}] Chrome intercept failed, falling back to node fetch: ${(err as Error).message}`);
+      logStore.log('debug', 'cdp', `[CDP-Fetch][${email}] Chrome intercept failed, falling back to node fetch: ${(err as Error).message}`);
       // Fall through to node fetch below
     }
   }
@@ -1376,13 +1383,13 @@ export async function browserStreamFetchIncrementalForAccount(
       const msg = (err as Error).message;
       // If bot detection, try Chrome intercept as last resort
       if (msg.includes('FAIL_SYS_USER_VALIDATE')) {
-        console.warn(`[CDP][${email}] Bot detection via node fetch, retrying Chrome intercept...`);
+        logStore.log('debug', 'cdp', `[CDP][${email}] Bot detection via node fetch, retrying Chrome intercept...`);
         state.cachedBxHeaders = {};
         try {
           await harvestFreshHeaders(state);
           return await fetchViaChromeIntercept(email, url, body, { timeout: options?.timeout });
         } catch (retryErr) {
-          console.warn(`[CDP-Fetch][${email}] Chrome intercept retry also failed: ${(retryErr as Error).message}`);
+          logStore.log('debug', 'cdp', `[CDP-Fetch][${email}] Chrome intercept retry also failed: ${(retryErr as Error).message}`);
           throw err;
         }
       }
@@ -1391,7 +1398,7 @@ export async function browserStreamFetchIncrementalForAccount(
   }
 
   // Step 4: If no headers after harvest, try refreshing baxia then harvest once more
-  console.warn(`[CDP][${email}] No baxia headers after initial harvest, refreshing baxia...`);
+  logStore.log('debug', 'cdp', `[CDP][${email}] No baxia headers after initial harvest, refreshing baxia...`);
   await refreshBaxiaForAccount(email);
   await harvestFreshHeaders(state);
   if (state.cachedBxHeaders && state.cachedBxHeaders['bx-ua']) {
@@ -1399,7 +1406,7 @@ export async function browserStreamFetchIncrementalForAccount(
   }
 
   // Step 4: Last resort — browser fetch
-  console.warn(`[CDP][${email}] Still no baxia headers, trying browser fetch...`);
+  logStore.log('debug', 'cdp', `[CDP][${email}] Still no baxia headers, trying browser fetch...`);
   return browserStreamFetchViaBrowser(email, url, body, options);
 }
 

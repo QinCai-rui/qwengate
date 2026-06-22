@@ -1,6 +1,7 @@
 /**
  * Cleanup and amplification check helpers for streaming chat responses.
  */
+import { logStore as serviceLogStore } from '../services/logStore.ts';
 import type { AmplificationGuardState } from './chatHelpers.ts';
 
 /**
@@ -14,7 +15,9 @@ export function checkFinalAmplification(
 ) {
   const finalRatio = ampState.rawInputBytes > 0 ? Math.round((ampState.emittedOutputBytes / ampState.rawInputBytes) * 100) / 100 : 0;
   if (finalRatio > 2) {
-    console.warn(
+    serviceLogStore.log(
+      'debug',
+      'chat',
       `[Chat] High amplification ratio: ${finalRatio}x ` +
         `(rawIn=${ampState.rawInputBytes}B, out=${ampState.emittedOutputBytes}B) account=${resolvedEmail}`,
     );

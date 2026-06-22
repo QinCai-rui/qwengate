@@ -325,7 +325,11 @@ export function processToolCallsThroughGuard(toolCalls: any[], toolCallsOut: any
   const effectiveMax = maxToolCalls ?? 8;
 
   if (toolCalls.length > effectiveMax) {
-    console.warn(`  [🛑 TOOL LIMIT${label ? ' ' + label : ''}] Truncating ${toolCalls.length} tool calls to first ${effectiveMax}`);
+    logStore.log(
+      'debug',
+      'chat',
+      `  [🛑 TOOL LIMIT${label ? ' ' + label : ''}] Truncating ${toolCalls.length} tool calls to first ${effectiveMax}`,
+    );
     toolCalls = toolCalls.slice(0, effectiveMax);
   }
 
@@ -337,12 +341,16 @@ export function processToolCallsThroughGuard(toolCalls: any[], toolCallsOut: any
     }
     const spamCheck = toolSpamGuard.check(tc.name, tc.arguments);
     if (!spamCheck.ok) {
-      console.warn(`  [🛑 TOOL SPAM${label ? ' ' + label : ''}] ${tc.name}: repeated call blocked`);
+      logStore.log('debug', 'chat', `  [🛑 TOOL SPAM${label ? ' ' + label : ''}] ${tc.name}: repeated call blocked`);
       correctionPrompts.push(spamCheck.correctionPrompt);
       continue;
     }
     if (toolCallsOut.length >= maxToolCalls) {
-      console.warn(`  [🛑 TOOL LIMIT${label ? ' ' + label : ''}] Hit ${maxToolCalls} tool calls per turn, dropping excess`);
+      logStore.log(
+        'debug',
+        'chat',
+        `  [🛑 TOOL LIMIT${label ? ' ' + label : ''}] Hit ${maxToolCalls} tool calls per turn, dropping excess`,
+      );
       correctionPrompts.push(
         `[TOOL CALL LIMIT] Reached maximum of ${maxToolCalls} tool calls per turn. Analyze existing results and respond to the user.`,
       );

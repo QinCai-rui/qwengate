@@ -317,7 +317,7 @@ if (import.meta.main) {
       } catch (err: any) {
         if (err.code === 'EADDRINUSE') {
           const fallbackPort = port + 1;
-          console.warn(`Port ${port} in use, trying ${fallbackPort}...`);
+          logStore.log('debug', 'server', `Port ${port} in use, trying ${fallbackPort}...`);
           await createServer(fallbackPort, host);
         } else {
           throw err;

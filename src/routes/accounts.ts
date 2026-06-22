@@ -30,13 +30,14 @@ accountsRouter.get('/', (c) => {
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
     startupStatus: a.startupStatus || null,
+    cdp: null as any,
   }));
   // Merge CDP status into account data
   const cdpStatuses = getCdpStatuses();
   const cdpMap = new Map(cdpStatuses.map((s) => [s.email, s]));
   for (const m of masked) {
     const cdp = cdpMap.get(m.email);
-    m.cdp = cdp || null;
+    if (cdp) m.cdp = cdp;
   }
   return c.json({ count: masked.length, accounts: masked });
 });

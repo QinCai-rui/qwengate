@@ -173,7 +173,7 @@ export async function fetchQwenModels(): Promise<any[]> {
 
       const json = JSON.parse(result.body);
       if (!json.data || !Array.isArray(json.data)) {
-        console.warn(`[Qwen] fetchQwenModels: response missing data array, returning cached or empty`);
+        logStore.log('debug', 'qwen', `[Qwen] fetchQwenModels: response missing data array, returning cached or empty`);
         return cachedModels || [];
       }
 
