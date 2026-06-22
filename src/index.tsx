@@ -238,6 +238,17 @@ if (import.meta.main) {
   const hostArg = process.argv.indexOf('--host');
   const host = hostArg !== -1 && process.argv[hostArg + 1] ? process.argv[hostArg + 1] : config.get('HOST') || 'localhost';
 
+  // Kill orphan Chromium/Chrome processes from previous crashes/restarts
+  // that didn't run gracefulShutdown. Each orphan has a --remote-debugging-port
+  // flag visible via /proc. We use pkill by flag instead of by name to avoid
+  // hitting non-related Chrome instances.
+  try {
+    const { execSync } = await import('child_process');
+    execSync("pkill -f '--remote-debugging-port=26404' 2>/dev/null", { stdio: 'ignore' });
+  } catch {
+    // pkill may not be available (Windows) or no matching processes — both fine
+  }
+
   // Show banner immediately on startup
   process.stdout.write(`\x1b[31m
 ████████▄    ▄█     █▄     ▄████████ ███▄▄▄▄

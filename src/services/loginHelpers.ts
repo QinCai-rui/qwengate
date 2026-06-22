@@ -8,7 +8,7 @@ import crypto from 'crypto';
 import type { AuthState } from '../types/auth.ts';
 import { AUTH_TOKEN_MAX_AGE_MS, checkPlaywrightSession } from './auth.ts';
 import { logStore } from './logStore.ts';
-import { createAccountContext, getActivePage, getBrowser, Mutex } from './playwright.ts';
+import { AccountContext, createAccountContext, getActivePage, getBrowser, Mutex } from './playwright.ts';
 import { createFetchTimeout, QWEN_BX_V } from './qwen.ts';
 
 const QWEN_CHAT_URL = 'https://chat.qwen.ai';
@@ -225,8 +225,9 @@ export async function loginViaTempContext(
   loginMutex: Mutex,
 ): Promise<AuthState | null> {
   const release = await loginMutex.acquire();
+  let accCtx: AccountContext | null = null;
   try {
-    const accCtx = await createAccountContext(email);
+    accCtx = await createAccountContext(email);
     const page = accCtx.page;
     const context = accCtx.context;
 
@@ -326,6 +327,21 @@ export async function loginViaTempContext(
     logStore.log('error', 'auth', `Temp context login error for ${email}: ${err.message}`);
     return null;
   } finally {
+    // Close the temp context to prevent BrowserContext leak. Each loginViaTempContext
+    // call creates a new page+context via createAccountContext — without closing it,
+    // contexts accumulate in the Playwright browser process, wasting memory.
+    if (accCtx) {
+      try {
+        await accCtx.page.close();
+      } catch {
+        /* page may already be closed */
+      }
+      try {
+        await accCtx.context.close();
+      } catch {
+        /* context may already be closed */
+      }
+    }
     release();
   }
 }
