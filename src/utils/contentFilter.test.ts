@@ -1,5 +1,5 @@
+import { describe, test } from 'bun:test';
 import assert from 'node:assert';
-import test, { describe } from 'node:test';
 import { filterContent } from '../utils/contentFilter.ts';
 
 describe('filterContent - newline preservation', () => {

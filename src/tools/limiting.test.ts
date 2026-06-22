@@ -1,5 +1,5 @@
+import { test } from 'bun:test';
 import assert from 'node:assert';
-import test from 'node:test';
 import { streamChunks } from '../tests/helpers.ts';
 
 /**
