@@ -215,7 +215,7 @@ interface ParseStatusResponse {
   status: 'running' | 'success' | 'failed';
 }
 
-async function pollParseStatus(email: string, fileId: string, maxWaitMs = 60_000): Promise<void> {
+async function pollParseStatus(email: string, fileId: string, maxWaitMs = 5_000): Promise<void> {
   const url = `${QWEN_API_BASE}/api/v2/files/parse/status`;
   const startTime = Date.now();
   const pollInterval = 1_000;
@@ -242,7 +242,10 @@ async function pollParseStatus(email: string, fileId: string, maxWaitMs = 60_000
         const resText = await response.text();
         const data = JSON.parse(resText);
         const status: string = data.data?.[0]?.status || data.status || '';
-        if (status === 'success') return;
+        if (status === 'success') {
+          logStore.log('debug', 'upload', `[FileUpload] Parse complete for ${fileId} in ${Date.now() - startTime}ms`);
+          return;
+        }
         if (status === 'failed') throw new Error(`File parsing failed for ${fileId}`);
       } catch {
         // JSON parse error or missing field — keep polling
@@ -252,7 +255,9 @@ async function pollParseStatus(email: string, fileId: string, maxWaitMs = 60_000
     await Bun.sleep(pollInterval);
   }
 
-  throw new Error(`File parse status poll timed out after ${maxWaitMs}ms for ${fileId}`);
+  logStore.log('warn', 'upload', `[FileUpload] Parse poll timed out after ${Date.now() - startTime}ms for ${fileId}`);
+  // ponytail: file upload succeeded, parse may still finish async.
+  // Qwen will include the file content once parsing completes on its side.
 }
 
 // --- Orchestrator: upload large text as a Qwen file attachment ---
