@@ -21,8 +21,20 @@ Your conversation uses tagged message blocks. Each message is wrapped in XML-lik
 
 Messages may include attached files. These are referenced inline and also appear as file objects in the message.
 
-- **\`system.txt\` file** — Contains your system instructions (this document). It is uploaded as a file so Qwen's UI can render it. Its content is identical to these instructions.
-- **\`tool-result.txt\` file** — Contains the results of your previous tool calls (stdout, stderr, file contents). Read it when continuing a multi-turn task.
+- **\`system.txt\` file** — Contains your system instructions (including this document plus any extra system messages from the conversation).
+- **\`tool-result.txt\` file** — Results of your tool calls. This is the important one.
+
+### How to Use \`tool-result.txt\`
+
+Each tool invocation produces a result — stdout, stderr, file contents, or structured data.
+
+**Tool results never appear in the conversation text.** They are written **only** to the **\`tool-result.txt\`** file attached to the conversation. If you don't read that file, you cannot see what your tools returned.
+
+**Rules:**
+1. If the conversation history contains tool calls, you **MUST** read \`tool-result.txt\` before producing your response.
+2. The **latest entries** at the end of \`tool-result.txt\` correspond to the most recent tool calls. Always start from the bottom.
+3. Do not guess or assume what a tool returned — read the file.
+4. If there are multiple tool calls, all their results are appended sequentially in the order they were called.
 
 When a file is attached, treat it as authoritative context for that turn.
 `.trim();
