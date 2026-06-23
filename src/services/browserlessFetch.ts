@@ -37,6 +37,8 @@ export interface BrowserlessFetchOptions {
   browser?: BrowserProfile;
   /** OS for client hints (default: 'linux') */
   os?: EmulationOS;
+  /** Keep the wreq-js session alive for streaming. Default false — session is closed after response. */
+  stream?: boolean;
 }
 
 /** Create a fresh wreq-js session (never reuses — avoids tokio epoll crash in Bun). */
@@ -58,8 +60,9 @@ const ACW_TC_REFRESH_MS = 15 * 60 * 1000; // 15 minutes
 
 /** Fetch acw_tc cookie from the Qwen root page. */
 async function refreshAcwTcCookie(): Promise<string | null> {
+  let session: Session | null = null;
   try {
-    const session = await createSession();
+    session = await createSession();
     const resp = await session.fetch(QWEN_API_BASE, {
       method: 'GET',
       headers: { accept: 'text/html,application/xhtml+xml' },
@@ -83,6 +86,10 @@ async function refreshAcwTcCookie(): Promise<string | null> {
     const msg = err instanceof Error ? err.message : String(err);
     logStore.log('warn', 'browserless', `acw_tc refresh failed: ${msg}`);
     return null;
+  } finally {
+    try {
+      await (session as any)?.close?.();
+    } catch {}
   }
 }
 
@@ -125,9 +132,23 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
     return globalThis.fetch(url, { method, headers, body });
   }
 
-  const { method = 'GET', headers = {}, body, accountEmail, signal, browser: browserProfile = 'chrome_142', os = 'linux' } = options;
+  const {
+    method = 'GET',
+    headers = {},
+    body,
+    accountEmail,
+    signal,
+    browser: browserProfile = 'chrome_142',
+    os = 'linux',
+    stream,
+  } = options;
 
-  const session = await createSession(browserProfile, os);
+  let session = await createSession(browserProfile, os);
+  const closeSession = () => {
+    try {
+      (session as any)?.close?.();
+    } catch {}
+  };
 
   // Auto-inject bx tokens
   await ensureBxUmidtoken(headers);
@@ -222,11 +243,9 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
         if (pp) headers['bx-pp'] = pp;
         logStore.log('info', 'browserless', `Retrying ${url.split('?')[0]} with fresh cookies...`);
 
-        try {
-          await (session as any).close?.();
-        } catch {}
-        const freshSession = await createSession(browserProfile, os);
-        response = await freshSession.fetch(url, { method, headers, body, disableDefaultHeaders: true });
+        closeSession(); // close old WAF'd session
+        session = await createSession(browserProfile, os);
+        response = await session.fetch(url, { method, headers, body, disableDefaultHeaders: true });
         if (wafCheck(response)) {
           throw new Error(`WAF challenge persists after cookie refresh for ${url.split('?')[0]}`);
         }
@@ -239,8 +258,17 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
     const elapsed = Date.now() - startTime;
     logStore.log('debug', 'browserless', `${method} ${url.split('?')[0]} → ${response.status} (${elapsed}ms)`);
 
+    // For streaming: stash close function on the response so caller can clean up
+    if (stream) {
+      (response as any)._wreqClose = closeSession;
+      return response as unknown as Response;
+    }
+
+    // Non-streaming: response fully buffered, close session immediately
+    closeSession();
     return response as unknown as Response;
   } catch (err) {
+    closeSession(); // cleanup on error too
     const elapsed = Date.now() - startTime;
     const msg = err instanceof Error ? err.message : String(err);
     logStore.log('warn', 'browserless', `${method} ${url.split('?')[0]} failed after ${elapsed}ms: ${msg}`);

@@ -382,6 +382,7 @@ export async function createQwenStream(
       },
       body: bodyStr,
       accountEmail: currentAccountEmail,
+      stream: true, // keep wreq-js session alive for streaming — closed when stream ends
     });
     return { response, headers: {}, qwenLogFile: makeRequestQwenLogFile };
   };
@@ -404,6 +405,7 @@ export async function createQwenStream(
   }
   const streamDebugEntryId = lastDebugEntryId;
   const textDecoder = new TextDecoder();
+  const wreqClose = (result.response as any)._wreqClose as (() => void) | undefined;
   const wrappedStream = result.response.body.pipeThrough(
     new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
@@ -416,6 +418,7 @@ export async function createQwenStream(
         if (streamDebugEntryId) {
           completeEntry(streamDebugEntryId);
         }
+        wreqClose?.(); // dispose wreq-js session when stream ends
       },
     }),
   );
