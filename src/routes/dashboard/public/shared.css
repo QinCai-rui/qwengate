@@ -118,12 +118,46 @@ body {
 }
 
 /* Dark Mode Toggle */
-.dm-toggle {
+.dm-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--text-secondary);
   font-size: 0.75rem;
-  opacity: 0.7;
 }
-.dm-toggle:hover {
-  opacity: 1;
+.dm-switch {
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition:
+    background 0.2s,
+    border-color 0.2s;
+}
+.dm-switch.active {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.dm-ball {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition:
+    transform 0.2s,
+    background 0.2s;
+}
+.dm-switch.active .dm-ball {
+  transform: translateX(14px);
+  background: #fff;
 }
 
 /* Live Indicator */

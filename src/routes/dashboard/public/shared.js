@@ -113,12 +113,15 @@ function createPoller(fn, baseInterval) {
 function applyDarkMode(enabled) {
   var html = document.documentElement;
   var label = document.getElementById('dmLabel');
+  var sw = document.getElementById('dmSwitch');
   if (enabled) {
     html.classList.add('dark-mode');
     if (label) label.textContent = 'Light';
+    if (sw) sw.classList.add('active');
   } else {
     html.classList.remove('dark-mode');
     if (label) label.textContent = 'Dark';
+    if (sw) sw.classList.remove('active');
   }
 }
 
