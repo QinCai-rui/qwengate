@@ -27,6 +27,7 @@ export interface ConfigSchema {
   RETRY_ENABLED: string;
   STREAM_IDLE_TIMEOUT_MS: string;
   MODELS_CACHE_TTL_MS: string;
+  DARK_MODE: string;
 }
 
 export const DEFAULT_CONFIG: ConfigSchema = {
@@ -54,6 +55,7 @@ export const DEFAULT_CONFIG: ConfigSchema = {
   RETRY_ENABLED: 'true',
   STREAM_IDLE_TIMEOUT_MS: '60000',
   MODELS_CACHE_TTL_MS: '3600000',
+  DARK_MODE: 'false',
 };
 
 const CONFIG_KEYS = new Set<string>(Object.keys(DEFAULT_CONFIG));

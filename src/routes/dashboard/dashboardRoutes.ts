@@ -22,8 +22,13 @@ const serveHtml = (html: string) => (c: any) => {
   // Dashboard HTML pages always serve — they're localhost admin UI.
   // API_KEY protection applies only to data endpoints (handled by requireApiKey/bearerAuth).
   // The front-end JS injects Authorization: Bearer <key> via window.API_KEY for data fetches.
-  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\nwindow.API_KEY = ${JSON.stringify(config.get('API_KEY'))};\n</script>\n`;
-  const output = html.replace(/(<script\b)/, scriptInjection + '$1');
+  const darkMode = config.get('DARK_MODE') === 'true';
+  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\nwindow.API_KEY = ${JSON.stringify(config.get('API_KEY'))};\nwindow.DARK_MODE = ${JSON.stringify(darkMode)};\n</script>\n`;
+  // Apply dark-mode class on <html> server-side to prevent flash on page navigation
+  let output = html.replace(/(<script\b)/, scriptInjection + '$1');
+  if (darkMode) {
+    output = output.replace('<html lang="en">', '<html lang="en" class="dark-mode">');
+  }
   c.header(
     'Content-Security-Policy',
     "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:;",

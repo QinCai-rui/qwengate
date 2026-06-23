@@ -108,3 +108,48 @@ function createPoller(fn, baseInterval) {
   start();
   return { start: start, stop: stop };
 }
+
+/* ── Dark Mode ── */
+function applyDarkMode(enabled) {
+  var html = document.documentElement;
+  var label = document.getElementById('dmLabel');
+  var sw = document.getElementById('dmSwitch');
+  var moon = document.getElementById('dmMoon');
+  var sun = document.getElementById('dmSun');
+  if (enabled) {
+    html.classList.add('dark-mode');
+    if (label) label.textContent = 'Dark';
+    if (moon) moon.style.display = '';
+    if (sun) sun.style.display = 'none';
+    if (sw) sw.classList.add('active');
+  } else {
+    html.classList.remove('dark-mode');
+    if (label) label.textContent = 'Light';
+    if (moon) moon.style.display = 'none';
+    if (sun) sun.style.display = '';
+    if (sw) sw.classList.remove('active');
+  }
+}
+
+async function toggleDarkMode() {
+  var next = !document.documentElement.classList.contains('dark-mode');
+  applyDarkMode(next);
+  try {
+    await fetch('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + window.API_KEY },
+      body: JSON.stringify({ DARK_MODE: String(next) }),
+    });
+  } catch (e) {
+    console.error('Failed to save dark mode preference:', e);
+  }
+}
+
+/* Apply dark mode on load */
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', function () {
+    applyDarkMode(window.DARK_MODE);
+  });
+} else {
+  applyDarkMode(window.DARK_MODE);
+}
