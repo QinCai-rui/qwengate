@@ -22,7 +22,7 @@ const serveHtml = (html: string) => (c: any) => {
   // Dashboard HTML pages always serve — they're localhost admin UI.
   // API_KEY protection applies only to data endpoints (handled by requireApiKey/bearerAuth).
   // The front-end JS injects Authorization: Bearer <key> via window.API_KEY for data fetches.
-  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\nwindow.API_KEY = ${JSON.stringify(config.get('API_KEY'))};\n</script>\n`;
+  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\nwindow.API_KEY = ${JSON.stringify(config.get('API_KEY'))};\nwindow.DARK_MODE = ${JSON.stringify(config.get('DARK_MODE') === 'true')};\n</script>\n`;
   const output = html.replace(/(<script\b)/, scriptInjection + '$1');
   c.header(
     'Content-Security-Policy',

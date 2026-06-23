@@ -108,3 +108,39 @@ function createPoller(fn, baseInterval) {
   start();
   return { start: start, stop: stop };
 }
+
+/* ── Dark Mode ── */
+function applyDarkMode(enabled) {
+  var html = document.documentElement;
+  var label = document.getElementById('dmLabel');
+  if (enabled) {
+    html.classList.add('dark-mode');
+    if (label) label.textContent = 'Light';
+  } else {
+    html.classList.remove('dark-mode');
+    if (label) label.textContent = 'Dark';
+  }
+}
+
+async function toggleDarkMode() {
+  var next = !document.documentElement.classList.contains('dark-mode');
+  applyDarkMode(next);
+  try {
+    await fetch('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + window.API_KEY },
+      body: JSON.stringify({ DARK_MODE: String(next) }),
+    });
+  } catch (e) {
+    console.error('Failed to save dark mode preference:', e);
+  }
+}
+
+/* Apply dark mode on load */
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', function () {
+    applyDarkMode(window.DARK_MODE);
+  });
+} else {
+  applyDarkMode(window.DARK_MODE);
+}

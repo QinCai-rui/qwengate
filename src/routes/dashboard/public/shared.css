@@ -25,6 +25,29 @@
   --clay-shadow-sm: 3px 3px 6px rgba(0, 0, 0, 0.04), -1px -1px 3px rgba(255, 255, 255, 0.4);
   --clay-puff: inset 2px 2px 4px rgba(255, 255, 255, 0.6), inset -2px -2px 4px rgba(0, 0, 0, 0.04);
 }
+
+/* ── Dark Mode ── */
+html.dark-mode {
+  --bg-primary: #1a1a1e;
+  --bg-card: #242428;
+  --bg-elevated: #2e2e34;
+  --border: #3a3a42;
+  --text-primary: #d4d4d8;
+  --text-secondary: #8a8a96;
+  --text-display: #e8e8ec;
+  --accent: #6ab868;
+  --accent-soft: rgba(106, 184, 104, 0.2);
+  --success: #4ade80;
+  --success-soft: rgba(74, 222, 128, 0.15);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.15);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.15);
+  --clay-shadow: 6px 6px 12px rgba(0, 0, 0, 0.3), -2px -2px 6px rgba(255, 255, 255, 0.04);
+  --clay-shadow-sm: 3px 3px 6px rgba(0, 0, 0, 0.2), -1px -1px 3px rgba(255, 255, 255, 0.03);
+  --clay-puff: inset 2px 2px 4px rgba(255, 255, 255, 0.04), inset -2px -2px 4px rgba(0, 0, 0, 0.2);
+}
+
 *,
 *::before,
 *::after {
@@ -92,6 +115,15 @@ body {
   font-size: 0.75rem;
   color: var(--text-secondary);
   font-family: var(--mono);
+}
+
+/* Dark Mode Toggle */
+.dm-toggle {
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+.dm-toggle:hover {
+  opacity: 1;
 }
 
 /* Live Indicator */

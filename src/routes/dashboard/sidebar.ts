@@ -45,11 +45,23 @@ const NAV_ITEMS: NavItem[] = [
 
 const LOGO = `<img src="/dashboard/static/logo.svg" width="60" height="60" alt="Qwen Gate">`;
 
+/**
+ * Render sidebar HTML.
+ * Dark mode toggle button is always included; JS reads window.DARK_MODE
+ * to set the initial class and label on page load.
+ */
 export function sidebarHtml(activePageId: string): string {
   const navLinks = NAV_ITEMS.map(
     (item) =>
       `<a href="${item.href}" class="nav-link${item.id === activePageId ? ' active' : ''}">${item.svg}<span>${item.label}</span></a>`,
   ).join('\n');
+
+  const dmToggle = `<button class="nav-link dm-toggle" onclick="toggleDarkMode()" title="Toggle dark mode">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </svg>
+    <span id="dmLabel">Dark</span>
+  </button>`;
 
   return `<aside class="sidebar">
     <div class="sidebar-header">
@@ -61,6 +73,9 @@ export function sidebarHtml(activePageId: string): string {
     <nav class="sidebar-nav">
 ${navLinks}
     </nav>
-    <div class="sidebar-footer"><span class="live-indicator"><span class="live-dot"></span>Live</span></div>
+    <div class="sidebar-footer" style="display:flex;flex-direction:column;gap:6px">
+      ${dmToggle}
+      <span class="live-indicator"><span class="live-dot"></span>Live</span>
+    </div>
   </aside>`;
 }
