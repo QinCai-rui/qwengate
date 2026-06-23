@@ -14,7 +14,7 @@ import { getAccountCount, getAccountStats, getAccounts, getAvailableCount, initA
 import { config } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
 import { getQwenHeaders } from './services/playwright.ts';
-import { fetchQwenModels } from './services/qwen.ts';
+import { configureAccount, fetchQwenModels } from './services/qwen.ts';
 import { safeCompare } from './utils/auth.ts';
 import { isBun } from './utils/env.ts';
 import { projectPath } from './utils/paths.ts';
@@ -326,6 +326,9 @@ if (import.meta.main) {
         const acctList = getAccounts().filter((a) => a.state?.token);
         for (const acct of acctList) {
           setStartupStatus(acct.email, 'ready');
+          configureAccount(acct.email).catch((err: any) =>
+            logStore.log('warn', 'boot', `[2/5] Account config failed for ${acct.email}: ${err.message}`),
+          );
         }
         logStore.log('info', 'boot', `[2/5] Accounts configured: ${acctList.length} ready`);
       } catch (err: any) {
