@@ -21,18 +21,25 @@ Your conversation uses tagged message blocks. Each message is wrapped in XML-lik
 
 Messages may include attached files. These are referenced inline and also appear as file objects in the message.
 
-- **\`system.txt\` file** — Contains your system instructions (including this document plus any extra system messages from the conversation).
-- **\`tool-result.txt\` file** — Results of your tool calls. This is the important one.
+- **\`context.txt\` file** — A single file combining system instructions and tool call results. It contains two tagged sections:
 
-### How to Use \`tool-result.txt\`
+  \`\`\`
+  <system-instructions>
+  ... your system prompt + any extra instructions ...
+  </system-instructions>
 
-Each tool invocation produces a result — stdout, stderr, file contents, or structured data.
+  <tool-results>
+  ... results of your tool calls ...
+  </tool-results>
+  \`\`\`
 
-**Tool results never appear in the conversation text.** They are written **only** to the **\`tool-result.txt\`** file attached to the conversation. If you don't read that file, you cannot see what your tools returned.
+### How to Use \`context.txt\`
+
+**Tool results never appear in the conversation text.** They are written **only** in the \`<tool-results>\` section of \`context.txt\`. If you don't read that file, you cannot see what your tools returned.
 
 **Rules:**
-1. If the conversation history contains tool calls, you **MUST** read \`tool-result.txt\` before producing your response.
-2. The **latest entries** at the end of \`tool-result.txt\` correspond to the most recent tool calls. Always start from the bottom.
+1. If the conversation history contains tool calls, you **MUST** read the \`<tool-results>\` section of \`context.txt\` before producing your response.
+2. The **latest entries** at the end correspond to the most recent tool calls. Always start from the bottom.
 3. Do not guess or assume what a tool returned — read the file.
 4. If there are multiple tool calls, all their results are appended sequentially in the order they were called.
 

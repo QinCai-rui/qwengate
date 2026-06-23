@@ -110,27 +110,18 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
     }
 
-    // Upload files using THIS account (accounts can't access files uploaded by other accounts)
+    // Upload a single context file containing system instructions + tool results
+    // Merging cuts upload overhead in half (one STS token, one OSS upload, one parse poll)
     if (accountEmail && (systemContent || toolResultsContent)) {
-      const fileAttachments: QwenFileAttachment[] = [];
-      if (systemContent) {
-        try {
-          const file = await uploadLargeTextAsFile(accountEmail, systemContent, 'system.txt');
-          fileAttachments.push(file);
-        } catch (err: any) {
-          logStore.log('debug', 'chat', '[Chat] Failed to upload system prompt file: ' + (err.message || err));
-        }
-      }
-      if (toolResultsContent) {
-        try {
-          const file = await uploadLargeTextAsFile(accountEmail, toolResultsContent, 'tool-result.txt');
-          fileAttachments.push(file);
-        } catch (err: any) {
-          logStore.log('debug', 'chat', '[Chat] Failed to upload tool results file: ' + (err.message || err));
-        }
-      }
-      if (fileAttachments.length > 0) {
-        processedMessages[0] = { ...processedMessages[0], files: fileAttachments };
+      const parts: string[] = [];
+      if (systemContent) parts.push(`<system-instructions>\n${systemContent}\n</system-instructions>`);
+      if (toolResultsContent) parts.push(`<tool-results>\n${toolResultsContent}\n</tool-results>`);
+      const combinedContent = parts.join('\n\n');
+      try {
+        const file = await uploadLargeTextAsFile(accountEmail, combinedContent, 'context.txt');
+        processedMessages[0] = { ...processedMessages[0], files: [file] };
+      } catch (err: any) {
+        logStore.log('debug', 'chat', '[Chat] Failed to upload context file: ' + (err.message || err));
       }
     }
 
