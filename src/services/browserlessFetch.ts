@@ -1,39 +1,31 @@
 /**
- * browserlessFetch — CycleTLS wrapper for browserless TLS/HTTP2 impersonation.
+ * browserlessFetch — wreq-js wrapper for browserless TLS/HTTP2 impersonation.
  *
- * Uses CycleTLS (Go subprocess with uTLS) to bypass Alibaba WAF.
- * No Rust/tokio conflicts with Bun's event loop.
+ * Uses wreq-js (Rust native addon with Chrome 142 fingerprint) to bypass
+ * Alibaba WAF. NLcURL was evaluated but its TLS fingerprint doesn't pass
+ * the WAF — only wreq-js Chrome 142 profiles do.
+ *
+ * Manages:
+ *   - TLS/HTTP2 impersonation (wreq-js with Chrome 142 profile)
+ *   - bx-umidtoken auto-extraction + caching
+ *   - bx-v / bx-et static headers
+ *   - WAF detection + recovery via Playwright cookie refresh
  */
-import initCycleTLS from 'cycletls';
+import wreq, { type BrowserProfile, type EmulationOS, type Session } from 'wreq-js';
 import { extractBxUmidtoken } from './bxTokenExtractor.ts';
 import { generateBxPp, generateBxUa, refreshCookiesViaBrowser } from './fireyejsRunner.ts';
 import { logStore } from './logStore.ts';
 import { QWEN_API_BASE } from './qwen.ts';
 import { tokenCache } from './tokenCache.ts';
 
-// ponytail: cycletls manages a Go subprocess internally — no session management needed.
+// ponytail: fresh session per request to avoid wreq-js tokio epoll crash.
+// wreq-js uses Rust tokio async runtime which conflicts with Bun's event loop
+// when sessions are reused (epoll fd gets invalidated). Creating a fresh session
+// per request adds ~200ms but avoids the "Bad file descriptor" panic.
 // Single-flight guard: one cookie refresh per account at a time
 const cookieRefreshInFlight = new Map<string, Promise<string | null>>();
 const BX_UMIDTOKEN_TTL_MS = 4 * 60 * 60 * 1000;
 const BX_UA_TTL_MS = 15 * 60 * 1000;
-
-const CHROME_142_JA3 =
-  '771,4865-4866-4867-49195-49199-52393-52392-49196-49200-49162-49161-49171-49172-51-57-47-53-10,0-23-65281-10-11-35-16-5-13-18-51-43-27-45-17513-21,29-23-24-25-256-257,0';
-const CHROME_142_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36';
-
-let _cycleTLS: any = null;
-let _cycleTLSInitPromise: Promise<any> | null = null;
-
-async function getCycleTLS(): Promise<any> {
-  if (_cycleTLS) return _cycleTLS;
-  if (!_cycleTLSInitPromise) {
-    _cycleTLSInitPromise = initCycleTLS().then((client: any) => {
-      _cycleTLS = client;
-      return client;
-    });
-  }
-  return _cycleTLSInitPromise;
-}
 
 export interface BrowserlessFetchOptions {
   method?: string;
@@ -41,8 +33,17 @@ export interface BrowserlessFetchOptions {
   body?: string;
   accountEmail?: string;
   signal?: AbortSignal;
-  /** Request a streaming response from cycletls. */
+  /** Chrome browser profile version (default: 'chrome_142') */
+  browser?: BrowserProfile;
+  /** OS for client hints (default: 'linux') */
+  os?: EmulationOS;
+  /** Keep the wreq-js session alive for streaming. Default false — session is closed after response. */
   stream?: boolean;
+}
+
+/** Create a fresh wreq-js session (never reuses — avoids tokio epoll crash in Bun). */
+function createSession(browser: BrowserProfile = 'chrome_142', os: EmulationOS = 'linux'): Promise<Session> {
+  return wreq.createSession({ browser, os });
 }
 
 /** Ensure bx-umidtoken is in headers, fetching from cache or sg-wum endpoint. */
@@ -57,35 +58,25 @@ async function ensureBxUmidtoken(headers: Record<string, string>): Promise<void>
 let acwTcRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const ACW_TC_REFRESH_MS = 15 * 60 * 1000; // 15 minutes
 
-/** Fetch acw_tc cookie from the Qwen root page using cycletls. */
+/** Fetch acw_tc cookie from the Qwen root page. */
 async function refreshAcwTcCookie(): Promise<string | null> {
+  let session: Session | null = null;
   try {
-    const cycleTLS = await getCycleTLS();
-    const resp = await cycleTLS(
-      QWEN_API_BASE,
-      {
-        body: '',
-        ja3: CHROME_142_JA3,
-        userAgent: CHROME_142_UA,
-        headers: { accept: 'text/html,application/xhtml+xml' },
-      },
-      'GET',
-    );
-
+    session = await createSession();
+    const resp = await session.fetch(QWEN_API_BASE, {
+      method: 'GET',
+      headers: { accept: 'text/html,application/xhtml+xml' },
+    });
     let acwTc: string | null = null;
-    // Check set-cookie header
-    const setCookieHeaders = resp.headers?.['set-cookie'];
-    if (setCookieHeaders) {
-      const headers = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
-      for (const h of headers) {
-        const match = h.match(/acw_tc=([^;]+)/);
-        if (match) {
-          acwTc = match[1];
-          break;
-        }
-      }
+    const setCookie = typeof (resp as any).headers?.get === 'function' ? (resp as any).headers.get('set-cookie') : null;
+    if (setCookie && setCookie.includes('acw_tc=')) {
+      const match = setCookie.match(/acw_tc=([^;]+)/);
+      if (match) acwTc = match[1];
     }
-
+    if (!acwTc) {
+      const sessionCookies = session.getCookies?.(QWEN_API_BASE) || {};
+      acwTc = (sessionCookies as Record<string, string>)['acw_tc'] || null;
+    }
     if (acwTc) {
       tokenCache.set('acw_tc', acwTc, ACW_TC_REFRESH_MS * 2);
       logStore.log('debug', 'browserless', `acw_tc cookie refreshed: ${acwTc.substring(0, 16)}...`);
@@ -95,6 +86,10 @@ async function refreshAcwTcCookie(): Promise<string | null> {
     const msg = err instanceof Error ? err.message : String(err);
     logStore.log('warn', 'browserless', `acw_tc refresh failed: ${msg}`);
     return null;
+  } finally {
+    try {
+      await (session as any)?.close?.();
+    } catch {}
   }
 }
 
@@ -125,37 +120,10 @@ async function ensureAcwTcCookie(headers: Record<string, string>): Promise<void>
   }
 }
 
-/** Wrap a CycleTLS response into a standard Web Response object. */
-async function wrapCycleTlsResponse(resp: any, stream?: boolean): Promise<Response> {
-  if (stream) {
-    // streaming: resp.data is a Node.js Readable stream (event emitter)
-    return new Response(
-      new ReadableStream({
-        start(controller) {
-          resp.data.on('data', (chunk: Buffer) => controller.enqueue(chunk));
-          resp.data.on('end', () => controller.close());
-          resp.data.on('error', (err: Error) => controller.error(err));
-        },
-      }),
-      {
-        status: resp.status || 200,
-        headers: new Headers(resp.headers || {}),
-      },
-    );
-  }
-
-  // Non-streaming: resp.data is a string
-  const bodyText = typeof resp.data === 'string' ? resp.data : JSON.stringify(resp.data || '');
-  return new Response(bodyText, {
-    status: resp.status || 200,
-    headers: new Headers(resp.headers || {}),
-  });
-}
-
 /**
  * Make a browserless HTTP request to Qwen API.
  *
- * Returns a standard Response object.
+ * Returns a standard Response-compatible object.
  * Use `response.body.getReader()` for SSE streaming.
  */
 export async function browserlessFetch(url: string, options: BrowserlessFetchOptions = {}): Promise<Response> {
@@ -164,9 +132,23 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
     return globalThis.fetch(url, { method, headers, body });
   }
 
-  const { method = 'GET', headers = {}, body, signal, stream } = options;
+  const {
+    method = 'GET',
+    headers = {},
+    body,
+    accountEmail,
+    signal,
+    browser: browserProfile = 'chrome_142',
+    os = 'linux',
+    stream,
+  } = options;
 
-  const cycleTLS = await getCycleTLS();
+  let session = await createSession(browserProfile, os);
+  const closeSession = () => {
+    try {
+      (session as any)?.close?.();
+    } catch {}
+  };
 
   // Auto-inject bx tokens
   await ensureBxUmidtoken(headers);
@@ -187,7 +169,7 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
       }
     }
     if (!headers['bx-ua']) {
-      headers['bx-ua'] = CHROME_142_UA;
+      headers['bx-ua'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36';
     }
   }
 
@@ -204,27 +186,19 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
 
   const startTime = Date.now();
   try {
-    let response = await cycleTLS(
-      url,
-      {
-        body: body || '',
-        ja3: CHROME_142_JA3,
-        userAgent: CHROME_142_UA,
-        headers,
-        responseType: stream ? 'stream' : undefined,
-        disableRedirect: true,
-        timeout: 60,
-      },
-      (method || 'GET').toLowerCase(),
-    );
+    let response = await session.fetch(url, {
+      method,
+      headers,
+      body,
+      disableDefaultHeaders: true,
+    });
 
-    // Check for WAF by inspecting the raw cycletls response before wrapping
     const wafCheck = (r: any): boolean => {
       if (r.status === 302) return true;
       if (r.status === 403) return true;
       if (r.status === 200) {
         try {
-          const ct = r.headers?.['content-type'] || '';
+          const ct = (r.headers?.get?.('content-type') || '') as string;
           if (ct.includes('text/html')) return true;
         } catch {
           /* ignore */
@@ -234,9 +208,6 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
     };
 
     if (wafCheck(response)) {
-      // Wrap raw response so we can call .text() on it
-      const wrappedResponse = await wrapCycleTlsResponse(response, false);
-
       logStore.log('warn', 'browserless', `WAF detected on ${url.split('?')[0]} — trying HTTP refresh first...`);
       const currentCookie = headers['cookie'] || '';
 
@@ -245,14 +216,14 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
         headers['cookie'] = currentCookie ? `${currentCookie}; acw_tc=${freshAcwTc}` : `acw_tc=${freshAcwTc}`;
       }
 
-      const responseText = await wrappedResponse.text().catch(() => '');
+      const responseText = await response.text().catch(() => '');
       const isStillWaf = !responseText || responseText.includes('aliyun_waf') || responseText.includes('<html');
       if (!isStillWaf) {
-        return wrappedResponse;
+        return response as unknown as Response;
       }
 
       logStore.log('warn', 'browserless', `HTTP refresh failed — trying Playwright browser...`);
-      const key = options.accountEmail || '_default_';
+      const key = accountEmail || '_default_';
       let promise = cookieRefreshInFlight.get(key);
       if (!promise) {
         promise = refreshCookiesViaBrowser(currentCookie).finally(() => {
@@ -272,19 +243,9 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
         if (pp) headers['bx-pp'] = pp;
         logStore.log('info', 'browserless', `Retrying ${url.split('?')[0]} with fresh cookies...`);
 
-        response = await cycleTLS(
-          url,
-          {
-            body: body || '',
-            ja3: CHROME_142_JA3,
-            userAgent: CHROME_142_UA,
-            headers,
-            responseType: stream ? 'stream' : undefined,
-            disableRedirect: true,
-            timeout: 60,
-          },
-          (method || 'GET').toLowerCase(),
-        );
+        closeSession(); // close old WAF'd session
+        session = await createSession(browserProfile, os);
+        response = await session.fetch(url, { method, headers, body, disableDefaultHeaders: true });
         if (wafCheck(response)) {
           throw new Error(`WAF challenge persists after cookie refresh for ${url.split('?')[0]}`);
         }
@@ -297,9 +258,17 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
     const elapsed = Date.now() - startTime;
     logStore.log('debug', 'browserless', `${method} ${url.split('?')[0]} → ${response.status} (${elapsed}ms)`);
 
-    // Wrap cycletls response into a standard Response object
-    return await wrapCycleTlsResponse(response, stream);
+    // For streaming: stash close function on the response so caller can clean up
+    if (stream) {
+      (response as any)._wreqClose = closeSession;
+      return response as unknown as Response;
+    }
+
+    // Non-streaming: response fully buffered, close session immediately
+    closeSession();
+    return response as unknown as Response;
   } catch (err) {
+    closeSession(); // cleanup on error too
     const elapsed = Date.now() - startTime;
     const msg = err instanceof Error ? err.message : String(err);
     logStore.log('warn', 'browserless', `${method} ${url.split('?')[0]} failed after ${elapsed}ms: ${msg}`);
@@ -312,13 +281,7 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
   }
 }
 
-/** Dispose the cycletls Go subprocess. */
-export async function disposeSession(): Promise<void> {
-  if (_cycleTLS) {
-    try {
-      await _cycleTLS.exit();
-    } catch {}
-    _cycleTLS = null;
-    _cycleTLSInitPromise = null;
-  }
+/** Dispose a session — no-op since sessions are per-request now. */
+export async function disposeSession(_accountEmail?: string): Promise<void> {
+  // ponytail: each request creates its own session, nothing to dispose at this level.
 }
