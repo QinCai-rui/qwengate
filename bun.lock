@@ -6,7 +6,7 @@
       "name": "qwen-gate",
       "dependencies": {
         "@hono/node-server": "^2.0.3",
-        "cloakbrowser": "^0.4.0",
+        "cloakbrowser": "^0.4.2",
         "dotenv": "^16.6.1",
         "hono": "^4.12.21",
         "playwright": "^1.60.0",
@@ -236,7 +236,7 @@
 
     "chownr": ["chownr@3.0.0", "", {}, "sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g=="],
 
-    "cloakbrowser": ["cloakbrowser@0.4.0", "", { "dependencies": { "tar": "^7.0.0" }, "peerDependencies": { "mmdb-lib": ">=2.0.0", "playwright-core": ">=1.53.0", "puppeteer-core": ">=21.0.0", "socks-proxy-agent": ">=10.0.0" }, "optionalPeers": ["mmdb-lib", "playwright-core", "puppeteer-core", "socks-proxy-agent"], "bin": { "cloakbrowser": "dist/cli.js" } }, "sha512-wsILB3n2YZ3Moj2kHdF1agsso4L+9RFOFpKr50cjIZ6dUzpl0ikyKss6VVi201W2/U300o6TNQTm4AV46gwy1g=="],
+    "cloakbrowser": ["cloakbrowser@0.4.2", "", { "dependencies": { "tar": "^7.0.0" }, "peerDependencies": { "mmdb-lib": ">=2.0.0", "playwright-core": ">=1.53.0", "puppeteer-core": ">=21.0.0", "socks-proxy-agent": ">=10.0.0" }, "optionalPeers": ["mmdb-lib", "playwright-core", "puppeteer-core", "socks-proxy-agent"], "bin": { "cloakbrowser": "dist/cli.js" } }, "sha512-PwXXx3L4pIFuGJtRD00eWb67HxylLEDeAAvINp//s5abcb5gACnvmzSGCzS4/5bUSSNKSJIfnPKprP3VFNJIeQ=="],
 
     "dotenv": ["dotenv@16.6.1", "", {}, "sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow=="],
 

@@ -18,11 +18,10 @@ import { logStore } from './logStore.ts';
 import { QWEN_API_BASE } from './qwen.ts';
 import { tokenCache } from './tokenCache.ts';
 
-// ponytail: per-request sessions to avoid wreq-js tokio epoll crash on reuse.
-// Each browserlessFetch call creates a fresh session. This costs ~200ms per
-// request but avoids the "Bad file descriptor" panic when reusing sessions in Bun.
-let defaultSession: Session | null = null;
-const ACCOUNT_SESSIONS = new Map<string, Session>();
+// ponytail: fresh session per request to avoid wreq-js tokio epoll crash.
+// wreq-js uses Rust tokio async runtime which conflicts with Bun's event loop
+// when sessions are reused (epoll fd gets invalidated). Creating a fresh session
+// per request adds ~200ms but avoids the "Bad file descriptor" panic.
 // Single-flight guard: one cookie refresh per account at a time
 const cookieRefreshInFlight = new Map<string, Promise<string | null>>();
 const BX_UMIDTOKEN_TTL_MS = 4 * 60 * 60 * 1000;
@@ -40,17 +39,9 @@ export interface BrowserlessFetchOptions {
   os?: EmulationOS;
 }
 
-/** Get or create a wreq-js session for the given account. */
-function getSession(accountEmail?: string, browser: BrowserProfile = 'chrome_142', os: EmulationOS = 'linux'): Promise<Session> {
-  const key = accountEmail || '_default_';
-  const existing = ACCOUNT_SESSIONS.get(key);
-  if (existing && !(existing as any).disposed) {
-    return Promise.resolve(existing);
-  }
-  return wreq.createSession({ browser, os }).then((session) => {
-    ACCOUNT_SESSIONS.set(key, session);
-    return session;
-  });
+/** Create a fresh wreq-js session (never reuses — avoids tokio epoll crash in Bun). */
+function createSession(browser: BrowserProfile = 'chrome_142', os: EmulationOS = 'linux'): Promise<Session> {
+  return wreq.createSession({ browser, os });
 }
 
 /** Ensure bx-umidtoken is in headers, fetching from cache or sg-wum endpoint. */
@@ -68,7 +59,7 @@ const ACW_TC_REFRESH_MS = 15 * 60 * 1000; // 15 minutes
 /** Fetch acw_tc cookie from the Qwen root page. */
 async function refreshAcwTcCookie(): Promise<string | null> {
   try {
-    const session = await getSession();
+    const session = await createSession();
     const resp = await session.fetch(QWEN_API_BASE, {
       method: 'GET',
       headers: { accept: 'text/html,application/xhtml+xml' },
@@ -136,7 +127,7 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
 
   const { method = 'GET', headers = {}, body, accountEmail, signal, browser: browserProfile = 'chrome_142', os = 'linux' } = options;
 
-  const session = await getSession(accountEmail, browserProfile, os);
+  const session = await createSession(browserProfile, os);
 
   // Auto-inject bx tokens
   await ensureBxUmidtoken(headers);
@@ -231,11 +222,10 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
         if (pp) headers['bx-pp'] = pp;
         logStore.log('info', 'browserless', `Retrying ${url.split('?')[0]} with fresh cookies...`);
 
-        ACCOUNT_SESSIONS.delete(accountEmail || '_default_');
         try {
           await (session as any).close?.();
         } catch {}
-        const freshSession = await getSession(accountEmail, browserProfile, os);
+        const freshSession = await createSession(browserProfile, os);
         response = await freshSession.fetch(url, { method, headers, body, disableDefaultHeaders: true });
         if (wafCheck(response)) {
           throw new Error(`WAF challenge persists after cookie refresh for ${url.split('?')[0]}`);
@@ -263,16 +253,7 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
   }
 }
 
-/** Dispose a session for the given account (e.g. on logout/error). */
-export async function disposeSession(accountEmail?: string): Promise<void> {
-  const key = accountEmail || '_default_';
-  const session = ACCOUNT_SESSIONS.get(key);
-  if (session) {
-    ACCOUNT_SESSIONS.delete(key);
-    try {
-      await (session as any).close();
-    } catch {
-      /* already closed */
-    }
-  }
+/** Dispose a session — no-op since sessions are per-request now. */
+export async function disposeSession(_accountEmail?: string): Promise<void> {
+  // ponytail: each request creates its own session, nothing to dispose at this level.
 }
