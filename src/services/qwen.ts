@@ -180,6 +180,8 @@ async function applyRequestJitter(accountEmail?: string): Promise<void> {
 }
 
 const qwenCircuitBreaker = new CircuitBreaker('qwen-api', {
+  // In CDP mode, first requests per context can take longer (baxia warmup).
+  // With 8 accounts, we need a higher threshold to avoid premature circuit open.
   failureThreshold: 5,
   resetTimeoutMs: 30_000,
   halfOpenMaxAttempts: 1,

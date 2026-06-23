@@ -1,15 +1,15 @@
 /**
  * browserlessFetch — wreq-js wrapper for browserless TLS/HTTP2 impersonation.
  *
- * Replaces native fetch() for Qwen API calls with Chrome 142 TLS fingerprinting.
+ * Uses wreq-js (Rust native addon with Chrome 142 fingerprint) to bypass
+ * Alibaba WAF. NLcURL was evaluated but its TLS fingerprint doesn't pass
+ * the WAF — only wreq-js Chrome 142 profiles do.
+ *
  * Manages:
  *   - TLS/HTTP2 impersonation (wreq-js with Chrome 142 profile)
- *   - Session-scoped cookie persistence per account
  *   - bx-umidtoken auto-extraction + caching
  *   - bx-v / bx-et static headers
- *
- * Phase A: bx-ua still uses fallback (Phase B adds fireyejs generation).
- * Phase C: bx-pp will be added per-request.
+ *   - WAF detection + recovery via Playwright cookie refresh
  */
 import wreq, { type BrowserProfile, type EmulationOS, type Session } from 'wreq-js';
 import { extractBxUmidtoken } from './bxTokenExtractor.ts';
@@ -18,21 +18,20 @@ import { logStore } from './logStore.ts';
 import { QWEN_API_BASE } from './qwen.ts';
 import { tokenCache } from './tokenCache.ts';
 
-// ponytail: single shared session for now. Upgrade to per-account sessions when
-// multiple accounts need independent cookie jars.
+// ponytail: per-request sessions to avoid wreq-js tokio epoll crash on reuse.
+// Each browserlessFetch call creates a fresh session. This costs ~200ms per
+// request but avoids the "Bad file descriptor" panic when reusing sessions in Bun.
 let defaultSession: Session | null = null;
-
 const ACCOUNT_SESSIONS = new Map<string, Session>();
 // Single-flight guard: one cookie refresh per account at a time
 const cookieRefreshInFlight = new Map<string, Promise<string | null>>();
-const BX_UMIDTOKEN_TTL_MS = 4 * 60 * 60 * 1000; // 4 hours (confirmed hours-days from research)
-const BX_UA_TTL_MS = 15 * 60 * 1000; // 15 minutes — fireyejs token refresh interval
+const BX_UMIDTOKEN_TTL_MS = 4 * 60 * 60 * 1000;
+const BX_UA_TTL_MS = 15 * 60 * 1000;
 
 export interface BrowserlessFetchOptions {
   method?: string;
   headers?: Record<string, string>;
   body?: string;
-  /** Per-account session isolation for cookie continuity. */
   accountEmail?: string;
   signal?: AbortSignal;
   /** Chrome browser profile version (default: 'chrome_142') */
@@ -62,14 +61,6 @@ async function ensureBxUmidtoken(headers: Record<string, string>): Promise<void>
 }
 
 // ─── acw_tc cookie (Alibaba WAF) ────────────────────────────────────────────
-//
-// acw_tc is a session cookie set by Alibaba's WAF (Web Application Firewall)
-// on first visit to chat.qwen.ai. It must be present in requests or baxia
-// treats the session as unverified. The cookie has a ~30min TTL and must be
-// refreshed periodically.
-//
-// We maintain a background refresh timer that re-fetches from the Qwen root
-// page to keep acw_tc alive.
 
 let acwTcRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const ACW_TC_REFRESH_MS = 15 * 60 * 1000; // 15 minutes
@@ -78,23 +69,16 @@ const ACW_TC_REFRESH_MS = 15 * 60 * 1000; // 15 minutes
 async function refreshAcwTcCookie(): Promise<string | null> {
   try {
     const session = await getSession();
-    // A GET to chat.qwen.ai sets the acw_tc cookie via Set-Cookie
     const resp = await session.fetch(QWEN_API_BASE, {
       method: 'GET',
       headers: { accept: 'text/html,application/xhtml+xml' },
     });
-    const cookies =
-      resp.headers instanceof wreq.Headers
-        ? (resp.headers as unknown as { get?: (k: string) => string | null } & Iterable<[string, string]>)
-        : null;
     let acwTc: string | null = null;
-    // Check set-cookie header from response
     const setCookie = typeof (resp as any).headers?.get === 'function' ? (resp as any).headers.get('set-cookie') : null;
     if (setCookie && setCookie.includes('acw_tc=')) {
       const match = setCookie.match(/acw_tc=([^;]+)/);
       if (match) acwTc = match[1];
     }
-    // Also get from session cookies (wreq stores them)
     if (!acwTc) {
       const sessionCookies = session.getCookies?.(QWEN_API_BASE) || {};
       acwTc = (sessionCookies as Record<string, string>)['acw_tc'] || null;
@@ -114,7 +98,6 @@ async function refreshAcwTcCookie(): Promise<string | null> {
 /** Start periodic acw_tc refresh (idempotent). */
 function startAcwTcRefresh(): void {
   if (acwTcRefreshTimer) return;
-  // Initial fetch after a short delay (don't slow first request)
   setTimeout(() => {
     refreshAcwTcCookie().catch(() => {});
   }, 1000);
@@ -125,7 +108,6 @@ function startAcwTcRefresh(): void {
 
 /** Inject acw_tc cookie into headers from cache. */
 async function ensureAcwTcCookie(headers: Record<string, string>): Promise<void> {
-  // Start the background refresh loop on first call
   startAcwTcRefresh();
 
   let acwTc = tokenCache.get('acw_tc') ?? null;
@@ -133,7 +115,6 @@ async function ensureAcwTcCookie(headers: Record<string, string>): Promise<void>
     acwTc = await refreshAcwTcCookie();
   }
   if (acwTc) {
-    // Append acw_tc to existing cookie header
     const existing = headers['cookie'] || '';
     if (!existing.includes('acw_tc=')) {
       headers['cookie'] = existing ? `${existing}; acw_tc=${acwTc}` : `acw_tc=${acwTc}`;
@@ -144,28 +125,15 @@ async function ensureAcwTcCookie(headers: Record<string, string>): Promise<void>
 /**
  * Make a browserless HTTP request to Qwen API.
  *
- * Returns a standard Response-compatible object (wreq-js returns native fetch-style Response).
- * Use `response.body.getReader()` for SSE streaming — works identically to native fetch.
- *
- * @example
- * ```ts
- * const resp = await browserlessFetch('https://chat.qwen.ai/api/v2/chat/completions', {
- *   method: 'POST',
- *   headers: { 'content-type': 'application/json', cookie: '...' },
- *   body: JSON.stringify(payload),
- *   accountEmail: 'user@example.com',
- * });
- * ```
+ * Returns a standard Response-compatible object.
+ * Use `response.body.getReader()` for SSE streaming.
  */
 export async function browserlessFetch(url: string, options: BrowserlessFetchOptions = {}): Promise<Response> {
-  // ponytail: test mode uses globalThis.fetch so tests can mock it. Same pattern as playwright.ts.
   if (process.env.TEST_MOCK_PLAYWRIGHT) {
     const { method = 'GET', headers = {}, body } = options;
     return globalThis.fetch(url, { method, headers, body });
   }
 
-  // ponytail: wreq-js Response is compatible for our use (status, body, headers, json, text)
-  // but missing `bytes()` from the global Response type. This cast is safe for our usage.
   const { method = 'GET', headers = {}, body, accountEmail, signal, browser: browserProfile = 'chrome_142', os = 'linux' } = options;
 
   const session = await getSession(accountEmail, browserProfile, os);
@@ -173,11 +141,9 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
   // Auto-inject bx tokens
   await ensureBxUmidtoken(headers);
 
-  // Static bx headers
   if (!headers['bx-v']) headers['bx-v'] = '2.5.36';
   if (!headers['bx-et']) headers['bx-et'] = 'nosgn';
 
-  // bx-ua: try cache first, then fireyejs, then static fallback
   if (!headers['bx-ua']) {
     const cached = tokenCache.get('bx-ua');
     if (cached) {
@@ -187,7 +153,7 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
         const generated = await generateBxUa();
         if (generated) headers['bx-ua'] = generated;
       } catch {
-        // fireyejs not available yet — use fallback
+        /* fallback */
       }
     }
     if (!headers['bx-ua']) {
@@ -195,15 +161,16 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
     }
   }
 
-  // bx-pp: per-request sign (Phase C)
   if (!headers['bx-pp']) {
     try {
       const pp = await generateBxPp(body);
       if (pp) headers['bx-pp'] = pp;
     } catch {
-      // bx-pp optional — skip if not available
+      /* optional */
     }
   }
+
+  await ensureAcwTcCookie(headers);
 
   const startTime = Date.now();
   try {
@@ -211,12 +178,10 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
       method,
       headers,
       body,
-      disableDefaultHeaders: true, // ponytail: prevent wreq-js overriding our API-style headers (sec-fetch-*, Accept) with navigation defaults
-      // ponytail: signal not directly supported by wreq-js session.fetch — upgrade if abort needed
+      disableDefaultHeaders: true,
     });
 
     const wafCheck = (r: any): boolean => {
-      // Detect WAF challenge: 302/403, or 200 with HTML body containing WAF keywords
       if (r.status === 302) return true;
       if (r.status === 403) return true;
       if (r.status === 200) {
@@ -230,22 +195,18 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
       return false;
     };
 
-    // Auto-refresh cookies and retry once on WAF detection
     if (wafCheck(response)) {
       logStore.log('warn', 'browserless', `WAF detected on ${url.split('?')[0]} — trying HTTP refresh first...`);
       const currentCookie = headers['cookie'] || '';
 
-      // Try cheap wreq-js GET first (same TLS profile, may get fresh acw_tc)
       const freshAcwTc = await refreshAcwTcCookie();
       if (freshAcwTc && !currentCookie.includes('acw_tc=')) {
         headers['cookie'] = currentCookie ? `${currentCookie}; acw_tc=${freshAcwTc}` : `acw_tc=${freshAcwTc}`;
       }
 
-      // Still WAF? Fall back to Playwright browser navigation
       const responseText = await response.text().catch(() => '');
       const isStillWaf = !responseText || responseText.includes('aliyun_waf') || responseText.includes('<html');
       if (!isStillWaf) {
-        // HTTP refresh worked — return the original response
         return response as unknown as Response;
       }
 
@@ -261,24 +222,21 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
       const freshCookies = await promise;
       if (freshCookies) {
         headers['cookie'] = freshCookies;
-        // Clear stale tokens so they get regenerated
         tokenCache.delete('bx-ua');
         tokenCache.delete('bx-pp');
         tokenCache.delete('acw_tc');
-        // Re-inject fresh bx tokens
         await ensureBxUmidtoken(headers);
         headers['bx-ua'] = (await generateBxUa()) || headers['bx-ua'];
         const pp = await generateBxPp(body);
         if (pp) headers['bx-pp'] = pp;
         logStore.log('info', 'browserless', `Retrying ${url.split('?')[0]} with fresh cookies...`);
-        // Close old session, get a fresh one for new TLS connection
+
         ACCOUNT_SESSIONS.delete(accountEmail || '_default_');
         try {
           await (session as any).close?.();
         } catch {}
         const freshSession = await getSession(accountEmail, browserProfile, os);
         response = await freshSession.fetch(url, { method, headers, body, disableDefaultHeaders: true });
-        // Re-check after retry
         if (wafCheck(response)) {
           throw new Error(`WAF challenge persists after cookie refresh for ${url.split('?')[0]}`);
         }
@@ -297,7 +255,6 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
     const msg = err instanceof Error ? err.message : String(err);
     logStore.log('warn', 'browserless', `${method} ${url.split('?')[0]} failed after ${elapsed}ms: ${msg}`);
 
-    // If bx-umidtoken got stale, evict and let caller retry
     if (msg.includes('403') || msg.includes('FAIL_SYS_USER_VALIDATE')) {
       tokenCache.delete('bx-umidtoken');
     }
@@ -315,7 +272,7 @@ export async function disposeSession(accountEmail?: string): Promise<void> {
     try {
       await (session as any).close();
     } catch {
-      // already closed
+      /* already closed */
     }
   }
 }

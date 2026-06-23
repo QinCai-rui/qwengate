@@ -525,15 +525,6 @@ export function getAccountStats(): Array<{
   lastUsedAgoMs: number;
   inFlight: number;
   totalRequests: number;
-  cdp: {
-    email: string;
-    connected: boolean;
-    baxiaReady: boolean;
-    fetchWrapped: boolean;
-    sessionId: string;
-    queueSize: number;
-    activeBindings: number;
-  } | null;
 }> {
   const now = Date.now();
   return accounts.map((a) => ({
@@ -547,7 +538,6 @@ export function getAccountStats(): Array<{
     lastUsedAgoMs: a.lastUsed ? now - a.lastUsed : -1,
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
-    cdp: null as any,
   }));
 }
 export function getAccountCount(): number {

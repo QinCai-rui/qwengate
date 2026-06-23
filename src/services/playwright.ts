@@ -1,5 +1,6 @@
+import { launch as cloakLaunch } from 'cloakbrowser';
 import crypto from 'crypto';
-import { type Browser, type BrowserContext, type Cookie, type Page } from 'playwright';
+import { Browser, BrowserContext, Cookie, chromium, firefox, Page, webkit } from 'playwright';
 import { logStore } from './logStore.ts';
 import { QWEN_BX_V } from './qwen.ts';
 
@@ -7,6 +8,7 @@ export type { BrowserProfileOptions, LoginResult } from './browserProfiles.ts';
 export { BROWSER_DEFAULT_ARGS, getProfileDir, openBrowserProfile, refreshViaProfile } from './browserProfiles.ts';
 
 const QWEN_BASE_URL = 'https://chat.qwen.ai';
+export type BrowserType = 'chromium' | 'firefox' | 'webkit' | 'chrome' | 'edge';
 export interface AccountContext {
   context: BrowserContext;
   page: Page;
@@ -18,7 +20,13 @@ export interface AccountContext {
 const accountContexts = new Map<string, AccountContext>();
 const contextCreationInFlight = new Map<string, Promise<AccountContext>>();
 let defaultBrowser: any = null;
+let initInFlight: Promise<void> | null = null;
 let cachedUserAgent: string | null = null;
+let cachedCookies: string | null = null;
+let lastCookiesTime = 0;
+const COOKIES_TTL = 30 * 1000;
+let cookiesInFlight: Promise<string> | null = null;
+const COOKIE_REFRESH_INTERVAL = 120 * 1000;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export function validateQwenUrl(url: string): void {
   let parsed: URL;
@@ -90,8 +98,28 @@ export async function getCookies(email?: string): Promise<string> {
     } catch (importErr: any) {
       logStore.log('debug', 'playwright', `getCookies fallback import error: ${importErr.message}`);
     }
+    return '';
   }
-  return '';
+  if (cachedCookies && Date.now() - lastCookiesTime < COOKIES_TTL) {
+    return cachedCookies;
+  }
+  if (cookiesInFlight) return cookiesInFlight;
+  cookiesInFlight = (async () => {
+    if (cachedCookies && Date.now() - lastCookiesTime < COOKIES_TTL) {
+      return cachedCookies;
+    }
+    const allCookieStrings: string[] = [];
+    for (const accCtx of accountContexts.values()) {
+      const cookies = await accCtx.context.cookies();
+      allCookieStrings.push(cookies.map((c) => `${c.name}=${c.value}`).join('; '));
+    }
+    cachedCookies = allCookieStrings.join('; ');
+    lastCookiesTime = Date.now();
+    return cachedCookies;
+  })().finally(() => {
+    cookiesInFlight = null;
+  });
+  return cookiesInFlight;
 }
 export interface BasicHeaders {
   cookie: string;
@@ -104,7 +132,7 @@ export interface BasicHeaders {
 export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
   if (process.env.TEST_MOCK_PLAYWRIGHT)
     return { cookie: 'token=mock', userAgent: 'mock', bxV: QWEN_BX_V, bxUmidtoken: '', bxUa: '', email: 'mock@test' };
-  // Browserless mode: no Playwright needed for headers.
+  // No Playwright needed for headers — cookies from saved profileCookies.
   // Cookies from saved profileCookies (disk), bx-ua from Node.js generator.
   if (!cachedUserAgent) {
     cachedUserAgent = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36';
@@ -125,7 +153,82 @@ export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
     email: tokenInfo?.email,
   };
 }
+export async function initPlaywright(headless = true, browserType: BrowserType = 'chromium') {
+  if (process.env.TEST_MOCK_PLAYWRIGHT) return;
+  if (defaultBrowser) return;
+  if (initInFlight) {
+    await initInFlight;
+    return;
+  }
+  initInFlight = (async () => {
+    if (defaultBrowser) return;
 
+    let browserEngine: any;
+    let channel: string | undefined;
+    switch (browserType) {
+      case 'firefox':
+        browserEngine = firefox;
+        break;
+      case 'webkit':
+        browserEngine = webkit;
+        break;
+      case 'chrome':
+        browserEngine = chromium;
+        channel = 'chrome';
+        break;
+      case 'edge':
+        browserEngine = chromium;
+        channel = 'msedge';
+        break;
+      case 'chromium':
+      default:
+        defaultBrowser = await cloakLaunch({
+          headless,
+          humanize: true,
+          geoip: true,
+          args: [
+            '--disable-dev-shm-usage',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-popup-blocking',
+            '--mute-audio',
+            '--no-first-run',
+            '--disable-background-networking',
+            '--disable-default-apps',
+            '--disable-sync',
+            '--disable-translate',
+            '--metrics-recording-only',
+            '--disable-blink-features=AutomationControlled',
+          ],
+        });
+        break;
+    }
+    if (browserEngine) {
+      defaultBrowser = await browserEngine.launch({
+        headless,
+        channel,
+        ignoreDefaultArgs: ['--enable-automation'],
+        args: ['--disable-blink-features=AutomationControlled'],
+      });
+    }
+    const cleanupAllContexts = async () => {
+      for (const [_email, accCtx] of accountContexts.entries()) {
+        if (accCtx.refreshInterval) clearInterval(accCtx.refreshInterval);
+        await accCtx.context.close();
+      }
+      accountContexts.clear();
+      if (defaultBrowser) {
+        await defaultBrowser.close();
+        defaultBrowser = null;
+      }
+    };
+    process.on('SIGTERM', cleanupAllContexts);
+    process.on('SIGINT', cleanupAllContexts);
+  })().finally(() => {
+    initInFlight = null;
+  });
+  return initInFlight;
+}
 function typedCast<T>(v: unknown): T {
   return v as T;
 }
@@ -154,6 +257,7 @@ export async function createAccountContext(email: string, cookies?: Record<strin
   }
 }
 async function createContextInternal(email: string, cookies?: Record<string, string>): Promise<AccountContext> {
+  await initPlaywright();
   if (!defaultBrowser) throw new Error('Playwright browser not initialized');
   if (accountContexts.has(email)) return accountContexts.get(email)!;
 
@@ -278,7 +382,7 @@ async function createContextInternal(email: string, cookies?: Record<string, str
         console.error(`[AccountContext] Refresh failed for ${email}:`, err);
       }
     },
-    120_000 + Math.random() * 30000,
+    COOKIE_REFRESH_INTERVAL + Math.random() * 30000,
   );
   return accCtx;
 }
@@ -375,6 +479,21 @@ export function removeAccountContext(email: string): void {
   accountContexts.delete(email);
 }
 
+export async function closePlaywright() {
+  if (process.env.TEST_MOCK_PLAYWRIGHT) return;
+  for (const [_email, accCtx] of accountContexts.entries()) {
+    if (accCtx.refreshInterval) clearInterval(accCtx.refreshInterval);
+    await accCtx.context.close();
+  }
+  accountContexts.clear();
+  if (defaultBrowser) {
+    await defaultBrowser.close();
+    defaultBrowser = null;
+  }
+  cachedUserAgent = null;
+  cachedCookies = null;
+  lastCookiesTime = 0;
+}
 export function getActivePage(email?: string): Page | null {
   if (email) return accountContexts.get(email)?.page || null;
   for (const accCtx of accountContexts.values()) {
@@ -401,6 +520,22 @@ export async function getQwenHeaders(
 //   - Real baxia bx-umidtoken / bx-ua headers
 //   - All session cookies with proper domain/path isolation
 // ---------------------------------------------------------------------------
+
+let browserFetchFnCounter = 0;
+
+/**
+ * Base64-encode a string that may contain non-Latin1 (Unicode) characters.
+ * Uses TextEncoder to produce UTF-8 bytes, then converts to Latin-1 string
+ * for btoa. Safe for any Unicode input, unlike bare btoa() which throws
+ * on non-Latin1 characters.
+ *
+ * Decode with: new TextDecoder().decode(Uint8Array.from(atob(str), c => c.charCodeAt(0)))
+ */
+function b64encode(str: string): string {
+  let binary = '';
+  for (const byte of new TextEncoder().encode(str)) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
 
 /**
  * Ensure the account's browser page is at a valid SPA URL where baxia is active.
@@ -438,6 +573,17 @@ async function ensurePageAtSpaRoot(page: Page): Promise<void> {
 }
 
 /**
+ * Result of a non-streaming fetch routed through the browser page.
+ */
+export interface BrowserFetchResult {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+/**
  * Make a non-streaming HTTP request through the account's browser page.
  *
  * Uses page.evaluate(fetch) to get the real Chrome TLS stack, automatic
@@ -450,7 +596,7 @@ export async function performBrowserFetch(
   email: string,
   url: string,
   options: { method: string; body?: string; timeout?: number },
-): Promise<{ ok: boolean; status: number; statusText: string; headers: Record<string, string>; body: string }> {
+): Promise<BrowserFetchResult> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) {
     // In test mode, delegate to globalThis.fetch (mocked by the test).
     const resp = await fetch(url, {
@@ -467,7 +613,6 @@ export async function performBrowserFetch(
     };
   }
 
-  // CDP mode: route through the real Chrome browser (logged-in Qwen account).
   let accCtx = accountContexts.get(email);
   if (!accCtx) {
     const existingKeys = Array.from(accountContexts.keys());
@@ -559,3 +704,23 @@ export async function performBrowserFetch(
 
   return result;
 }
+
+/**
+ * Make a streaming HTTP request through the account's browser page and return
+ * a Node.js ReadableStream that receives SSE chunks in real-time.
+ *
+ * Architecture:
+ *   Browser `fetch()` inside page.evaluate()
+ *     -> reads Response.body.getReader() chunk by chunk
+ *     -> each chunk base64-encoded and sent via page.exposeFunction()
+ *     -> Node.js callback decodes and enqueues into a ReadableStream
+ *
+ * The browser handles all TLS, headers, cookies, and baxia instrumentation.
+ * The Node.js process just receives raw SSE bytes as they arrive.
+ *
+ * Each stream creates a unique exposed function (`__qsb_N_timestamp`) on the
+ * page. These accumulate on the page but are bounded by the number of
+ * concurrent streams × accounts (< 50 for any realistic workload).
+ * Page navigations (from refreshAccountCookies) clear them naturally.
+ *
+ */

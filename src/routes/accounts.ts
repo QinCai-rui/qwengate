@@ -29,7 +29,6 @@ accountsRouter.get('/', (c) => {
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
     startupStatus: a.startupStatus || null,
-    cdp: null as any,
   }));
   return c.json({ count: masked.length, accounts: masked });
 });

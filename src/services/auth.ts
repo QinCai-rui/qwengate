@@ -5,23 +5,27 @@
  * Login is in loginService.ts. Login helpers are in loginHelpers.ts.
  */
 
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import type { Cookie } from 'playwright';
 import type { AccountEntry, AuthState } from '../types/auth.ts';
 import {
   accounts,
   decodeJwt,
   discoverSavedAccounts,
+  enableHotReload as enableHotReloadImpl,
   getAccountByEmail,
   loadAccountsFromFile,
   migrateFromOldPaths,
   rebuildEmailIndex,
+  resetWatcherState,
   setupAccountWatcher as setupAccountWatcherImpl,
 } from './accountManager.ts';
 import { config } from './configService.ts';
 import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
-import { getActivePage } from './playwright.ts';
+import { getActivePage, getBrowser } from './playwright.ts';
+import { ensureAccountFresh, needsRefresh } from './tokenRefresh.ts';
 
 export {
   addAccount,
@@ -48,12 +52,16 @@ export {
   setAccountDisabled,
   throttleAccount,
 } from './accountManager.ts';
+export { ensureAccountFresh, needsRefresh, tryRefreshToken } from './tokenRefresh.ts';
+
 export function getAuthTokenMaxAgeMs(): number {
   return config.getInt('AUTH_TOKEN_MAX_AGE_MS', 28800000);
 }
 export function getAuthRefreshBeforeMs(): number {
   return config.getInt('AUTH_REFRESH_BEFORE_MS', 300000);
 }
+const TOKEN_DIR = join(process.cwd(), '.qwen', 'tokens');
+
 export async function checkPlaywrightSession(): Promise<boolean> {
   try {
     const page = getActivePage();
@@ -243,7 +251,7 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
 
     try {
       let cookies = await context.cookies();
-      let authCookie = cookies.find((c: { name: string; value: string }) => {
+      let authCookie = cookies.find((c: Cookie) => {
         const n = c.name.toLowerCase();
         if (n.includes('refresh')) return false;
         return n.includes('token') || n.includes('session');
@@ -285,8 +293,8 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
       // of the auth token—they bypass the WAF, not authenticate.
       try {
         const cookieStr = cookies
-          .filter((c: { name: string; value: string }) => c.name && c.value)
-          .map((c: { name: string; value: string }) => `${c.name}=${c.value}`)
+          .filter((c: Cookie) => c.name && c.value)
+          .map((c: Cookie) => `${c.name}=${c.value}`)
           .join('; ');
         if (cookieStr && acct) {
           acct.profileCookies = cookieStr;
@@ -302,7 +310,7 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
         const payload = decodeJwt(authCookie.value);
         const expiresAt = payload?.exp ? payload.exp * 1000 : Date.now() + getAuthTokenMaxAgeMs();
         if (expiresAt > Date.now()) {
-          const refreshCookie = cookies.find((c: { name: string; value: string }) => c.name.toLowerCase().includes('refresh'));
+          const refreshCookie = cookies.find((c: Cookie) => c.name.toLowerCase().includes('refresh'));
           const state: AuthState = {
             token: authCookie.value,
             expiresAt,
@@ -375,4 +383,12 @@ export async function saveCookies(email: string, token: string, refreshToken?: s
   } catch (err: any) {
     logStore.log('error', 'auth', `Failed to save cookies for ${normalizedEmail}: ${err.message}`);
   }
+}
+
+export function setupAccountWatcher(): void {
+  setupAccountWatcherImpl();
+}
+
+export function enableHotReload(): void {
+  enableHotReloadImpl();
 }

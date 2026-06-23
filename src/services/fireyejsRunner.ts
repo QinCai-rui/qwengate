@@ -135,8 +135,13 @@ export async function refreshCookiesViaBrowser(cookieStr: string): Promise<strin
         .catch(() => {});
     }
 
-    await page.goto(QWEN_API_BASE, { waitUntil: 'networkidle', timeout: 30_000 }).catch(() => {});
-    await page.waitForTimeout(3_000);
+    await page.goto(QWEN_API_BASE, { waitUntil: 'load', timeout: 25_000 }).catch(() => {});
+    // Wait for WAF challenge to resolve (up to 15s)
+    for (let i = 0; i < 15; i++) {
+      const html = await page.evaluate(() => document.documentElement?.innerHTML || '').catch(() => '');
+      if (!html.includes('aliyun_waf')) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
 
     const freshCookies = await page.context().cookies();
     const cookieMap = new Map<string, string>();
