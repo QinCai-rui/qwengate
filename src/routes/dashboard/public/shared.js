@@ -114,13 +114,19 @@ function applyDarkMode(enabled) {
   var html = document.documentElement;
   var label = document.getElementById('dmLabel');
   var sw = document.getElementById('dmSwitch');
+  var moon = document.getElementById('dmMoon');
+  var sun = document.getElementById('dmSun');
   if (enabled) {
     html.classList.add('dark-mode');
-    if (label) label.textContent = 'Light';
+    if (label) label.textContent = 'Dark';
+    if (moon) moon.style.display = '';
+    if (sun) sun.style.display = 'none';
     if (sw) sw.classList.add('active');
   } else {
     html.classList.remove('dark-mode');
-    if (label) label.textContent = 'Dark';
+    if (label) label.textContent = 'Light';
+    if (moon) moon.style.display = 'none';
+    if (sun) sun.style.display = '';
     if (sw) sw.classList.remove('active');
   }
 }
