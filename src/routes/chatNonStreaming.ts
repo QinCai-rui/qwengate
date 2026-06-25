@@ -317,6 +317,7 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
       toolCallCount: state.toolCallsOut.length,
       contentPreview: state.lastFullContent.length > 500 ? state.lastFullContent.substring(0, 500) + '...' : state.lastFullContent,
     };
+    entry.rawFullContent = state.lastFullContent;
     entry.remainingText = state.lastFullContent;
   });
 

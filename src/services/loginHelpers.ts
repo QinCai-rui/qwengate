@@ -8,7 +8,7 @@ import crypto from 'crypto';
 import type { AuthState } from '../types/auth.ts';
 import { checkPlaywrightSession, getAuthTokenMaxAgeMs } from './auth.ts';
 import { logStore } from './logStore.ts';
-import { AccountContext, createAccountContext, getActivePage, getBrowser, Mutex } from './playwright.ts';
+import { AccountContext, createAccountContext, getActivePage, getBrowser, Mutex, removeAccountContext } from './playwright.ts';
 import { createFetchTimeout, QWEN_BX_V } from './qwen.ts';
 
 const QWEN_CHAT_URL = 'https://chat.qwen.ai';
@@ -332,6 +332,11 @@ export async function loginViaTempContext(
     // contexts accumulate in the Playwright browser process, wasting memory.
     if (accCtx) {
       try {
+        removeAccountContext(email);
+      } catch {
+        /* removeAccountContext handles interval clear, context close, and map cleanup */
+      }
+      try {
         await accCtx.page.close();
       } catch {
         /* page may already be closed */
@@ -339,7 +344,7 @@ export async function loginViaTempContext(
       try {
         await accCtx.context.close();
       } catch {
-        /* context may already be closed */
+        /* context may already be closed or already closed by removeAccountContext */
       }
     }
     release();

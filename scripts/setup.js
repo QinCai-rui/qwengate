@@ -30,6 +30,7 @@ const DEFAULTS = {
   RETRY_MAX_DELAY_MS: '30000',
   RETRY_BACKOFF_MULTIPLIER: '2',
   RETRY_ENABLED: 'true',
+  CLAUDE_CODE_PROXY: 'false',
 };
 
 /**
