@@ -213,7 +213,7 @@ export function updateClaudeCodeSettings(cfg: ConfigSchema): void {
     const port = cfg.PORT || '26405';
     const baseUrl = `http://${host}:${port}`;
     const settings = {
-      _comment: 'Managed by qwen-gate — CLAUDE_CODE_PROXY toggle in dashboard',
+      _comment: 'Managed by opengate — CLAUDE_CODE_PROXY toggle in dashboard',
       env: {
         ANTHROPIC_BASE_URL: baseUrl,
         ANTHROPIC_AUTH_TOKEN: 'unused',
@@ -232,7 +232,7 @@ export function updateClaudeCodeSettings(cfg: ConfigSchema): void {
         const raw = readFileSync(settingsFile, 'utf-8');
         const content = JSON.parse(raw);
         // Only touch files we manage (have our _comment marker or ANTHROPIC_BASE_URL)
-        if (content._comment?.includes('qwen-gate') || content.env?.ANTHROPIC_BASE_URL) {
+        if (content._comment?.includes('opengate') || content.env?.ANTHROPIC_BASE_URL) {
           delete content._comment;
           delete content.env?.ANTHROPIC_BASE_URL;
           delete content.env?.ANTHROPIC_AUTH_TOKEN;

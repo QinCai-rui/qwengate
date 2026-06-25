@@ -1,17 +1,17 @@
 <#
 .SYNOPSIS
-  Qwen Gate — Windows watchdog server with auto-restart and crash logging.
+  OpenGate — Windows watchdog server with auto-restart and crash logging.
 .DESCRIPTION
-  Starts the qwen-gate server, monitors it, and restarts on failure.
+  Starts the opengate server, monitors it, and restarts on failure.
   Features: port pre-check, Playwright browser validation, Bun/Node auto-detect,
   stderr crash capture, clean restart loop with cooldown.
 #>
 
-$LogDir = "$env:USERPROFILE\qwen-gate"
+$LogDir = "$env:USERPROFILE\opengate"
 mkdir -Force $LogDir | Out-Null
 Start-Transcript -Path "$LogDir\startup.log" -Append
 
-$ServerDir = "$env:USERPROFILE\qwen-gate\qwen-gate-latest"
+$ServerDir = "$env:USERPROFILE\opengate\opengate-latest"
 $Port = 26405
 
 # Auto-detect Bun vs Node
@@ -26,7 +26,7 @@ if ($UseBun) {
   $RunArgs = @("--import", "tsx", $Entry)
 }
 
-Write-Host "[$(Get-Date)] Starting qwen-gate server using $NodeExe..."
+Write-Host "[$(Get-Date)] Starting opengate server using $NodeExe..."
 
 # Kill any existing server on port
 $existingProc = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -First 1

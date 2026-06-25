@@ -296,7 +296,7 @@ test('Chat completions with image uploads attaches files (t2t chat_type, vision 
 
   // Seed a test account so pickAccount returns an account for image upload
   accounts.push({
-    email: 'test@qwen-gate.dev',
+    email: 'test@opengate.dev',
     password: 'test',
     state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
     lastUsed: 0,
@@ -492,7 +492,7 @@ test('Anthropic streaming strips XML artifacts from text deltas', async () => {
   const originalAccounts = [...accounts];
 
   accounts.push({
-    email: 'xml-test@qwen-gate.dev',
+    email: 'xml-test@opengate.dev',
     password: 'test',
     state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
     lastUsed: 0,
@@ -519,7 +519,7 @@ test('Anthropic streaming strips XML artifacts from text deltas', async () => {
             ),
           );
           c.enqueue(
-            new TextEncoder().encode('data: {"choices":[{"delta":{"phase":"answer","content":" The hostname is qwen-gate."}}]}\n\n'),
+            new TextEncoder().encode('data: {"choices":[{"delta":{"phase":"answer","content":" The hostname is opengate."}}]}\n\n'),
           );
           c.enqueue(
             new TextEncoder().encode(
@@ -619,7 +619,7 @@ test('Anthropic /v1/messages streaming with local_mcp tool call emits correct to
 
   // Seed a test account
   accounts.push({
-    email: 'test@qwen-gate.dev',
+    email: 'test@opengate.dev',
     password: 'test',
     state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
     lastUsed: 0,

@@ -66,7 +66,7 @@ var SETTINGS_SECTIONS = [
   },
   {
     title: 'Claude Code',
-    desc: 'Auto-configure qwen-gate as a Claude Code proxy. Creates .claude/settings.json in the project root.',
+    desc: 'Auto-configure opengate as a Claude Code proxy. Creates .claude/settings.json in the project root.',
     fields: [{ key: 'CLAUDE_CODE_PROXY', label: 'CLAUDE_CODE_PROXY', type: 'checkbox' }],
   },
   {
@@ -121,7 +121,7 @@ function renderClaudeCodeInfo() {
   return (
     '<div class="settings-section" style="margin-top:24px">' +
     '<div class="settings-section-title">Claude Code Proxy Active</div>' +
-    '<p class="settings-section-desc">qwen-gate is configured as a Claude Code proxy. ' +
+    '<p class="settings-section-desc">opengate is configured as a Claude Code proxy. ' +
     'Set these environment variables when running Claude Code, or the <code>.claude/settings.json</code> file has been auto-configured for you.</p>' +
     '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:8px">' +
     '<code style="display:block;padding:4px 0">ANTHROPIC_BASE_URL=' +

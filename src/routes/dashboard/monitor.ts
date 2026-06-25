@@ -5,7 +5,7 @@ export const monitorHtml = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Qwen Gate — Monitor</title>
+<title>OpenGate — Monitor</title>
   <link rel="stylesheet" href="/dashboard/static/shared.css">
   <link rel="stylesheet" href="/dashboard/static/overview.css">
   <link rel="stylesheet" href="/dashboard/static/monitor.css">

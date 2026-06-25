@@ -19,7 +19,7 @@ import { safeCompare } from './utils/auth.ts';
 import { isBun } from './utils/env.ts';
 import { projectPath } from './utils/paths.ts';
 
-process.title = 'qwen-gate';
+process.title = 'opengate';
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[FATAL] Unhandled Promise Rejection:', reason);

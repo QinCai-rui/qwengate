@@ -50,7 +50,7 @@ export class SystemLogger {
     // Structured JSON logging to stdout only when piped (Docker, log aggregators).
     // Suppressed in interactive terminals to avoid visual noise.
     if (!process.stdout.isTTY) {
-      process.stdout.write(JSON.stringify({ ...entry, logger: 'qwen-gate' }) + '\n');
+      process.stdout.write(JSON.stringify({ ...entry, logger: 'opengate' }) + '\n');
     }
   }
   debug(category: string, message: string, metadata?: Record<string, unknown>): void {

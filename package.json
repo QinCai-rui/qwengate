@@ -1,12 +1,10 @@
 {
-  "name": "qwen-gate",
+  "name": "opengate",
   "version": "0.7.0",
   "description": "OpenAI-compatible API gateway for Qwen models — drop-in replacement for /v1/chat/completions with multi-account rotation, tool calling, streaming SSE, and web dashboard",
   "main": "src/index.tsx",
   "bin": {
-    "qg": "./bin/qg",
-    "qwengate": "./bin/qg",
-    "qwen-gate": "./bin/qg"
+    "opengate": "./bin/opengate"
   },
   "scripts": {
     "postinstall": "node scripts/setup.js || exit 0",
@@ -30,8 +28,8 @@
     "knip:fix": "knip --fix",
     "quality": "biome check --write src/ && oxlint --fix-suggestions --format agent src/ && bun test",
     "husky-init": "npx husky init",
-    "qg": "bun src/cli.ts",
-    "qg:restart": "bun src/cli.ts restart"
+    "opengate": "bun src/cli.ts",
+    "opengate:restart": "bun src/cli.ts restart"
   },
   "keywords": [
     "qwen",

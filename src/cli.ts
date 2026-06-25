@@ -11,16 +11,16 @@ const SERVER_ENTRY = resolve(__dirname, 'index.tsx');
 
 const out = (s: string) => process.stdout.write(s + '\n');
 function err(msg: string) {
-  console.error(`[qg] ${msg}`);
+  console.error(`[opengate] ${msg}`);
 }
 const DEFAULT_PORT = '26405';
 
 function showHelp() {
   out('');
-  out('Qwen Gate — OpenAI-compatible gateway for Qwen AI');
+  out('OpenGate — OpenAI-compatible gateway for Qwen AI');
   out('');
   out('USAGE');
-  out('  qg [command] [options]');
+  out('  opengate [command] [options]');
   out('');
   out('COMMANDS');
   out('  start          Start the API server (default)');
@@ -35,12 +35,12 @@ function showHelp() {
   out('  --host <addr>  Bind address (default: from config or localhost)');
   out('');
   out('EXAMPLES');
-  out('  qg                    Start the server');
-  out('  qg update             Update to latest version');
-  out('  qg start --port 8080  Start on port 8080');
-  out('  qg restart            Restart the server');
-  out('  qg status             Check server status');
-  out('  qg help               Show this message');
+  out('  opengate              Start the server');
+  out('  opengate update       Update to latest version');
+  out('  opengate start --port 8080  Start on port 8080');
+  out('  opengate restart      Restart the server');
+  out('  opengate status       Check server status');
+  out('  opengate help         Show this message');
   out('');
   out('ACCOUNT MANAGEMENT');
   out('  Use the web dashboard at http://localhost:26405/dashboard/accounts');
@@ -102,7 +102,7 @@ async function doUpdate() {
       bunInstall.on('close', r);
     });
     if (bunCode === 0) {
-      out('Update complete. Restart the server with: qg restart');
+      out('Update complete. Restart the server with: opengate restart');
       return;
     }
     err('bun install failed — falling back to npm...');
@@ -118,7 +118,7 @@ async function doUpdate() {
     process.exit(1);
   }
 
-  out('Update complete. Restart the server with: qg restart');
+  out('Update complete. Restart the server with: opengate restart');
 }
 
 async function checkStatus() {

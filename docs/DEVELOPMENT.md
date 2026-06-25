@@ -1,6 +1,6 @@
-# Qwen Gate Development Guide
+# OpenGate Development Guide
 
-A practical guide for developers working on Qwen Gate. Covers the codebase structure, development workflow, and common tasks.
+A practical guide for developers working on OpenGate. Covers the codebase structure, development workflow, and common tasks.
 
 ## Table of Contents
 
@@ -48,7 +48,7 @@ The wizard creates `config.json` with your settings. Configuration is managed en
 ```
 project-root/
 ├── src/
-│   ├── cli.ts                   CLI entry (qg command parser)
+│   ├── cli.ts                   CLI entry (opengate command parser)
 │   ├── cluster.ts               Multi-core cluster mode
 │   ├── index.tsx                Hono server, routing, CORS, auth
 │   ├── models.json              Model definitions
@@ -183,7 +183,7 @@ Runs `bun src/index.tsx` directly (no build step needed — Bun runs TypeScript 
 
 ```bash
 bun run scripts/setup.js   # Run the interactive setup wizard
-bun run src/cli.ts         # Launch the CLI (qg)
+bun run src/cli.ts         # Launch the CLI (opengate)
 bun src/cli.ts restart     # CLI restart
 bun src/cli.ts help        # CLI help
 bun cluster                # Multi-core cluster mode
@@ -208,7 +208,7 @@ See `ConfigSchema` in `src/services/configService.ts` for the full list of confi
 
 ### Test Framework
 
-Qwen Gate uses **Bun's built-in test runner** (`bun test`) with Bun's assertion library. No external test framework is needed.
+OpenGate uses **Bun's built-in test runner** (`bun test`) with Bun's assertion library. No external test framework is needed.
 
 ### Test File Naming
 
@@ -545,7 +545,7 @@ export const analyticsHtml = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Qwen Gate — Analytics</title>
+  <title>OpenGate — Analytics</title>
   <link rel="stylesheet" href="/dashboard/public/global.css">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono&family=Montserrat:wght@400;500;600;700&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>

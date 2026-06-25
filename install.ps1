@@ -1,9 +1,9 @@
-# qwen-gate Windows Installer
-# Run: powershell -ExecutionPolicy Bypass -c "curl.exe -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.ps1 | iex"
+# opengate Windows Installer
+# Run: powershell -ExecutionPolicy Bypass -c "curl.exe -sSL https://raw.githubusercontent.com/youssefvdel/opengate/main/install.ps1 | iex"
 
 $ErrorActionPreference = "Stop"
-$Repo = "https://github.com/youssefvdel/qwen-gate.git"
-$Dir = "$PWD\qwen-gate"
+$Repo = "https://github.com/youssefvdel/opengate.git"
+$Dir = "$PWD\opengate"
 $DefaultPort = 26405
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -22,7 +22,7 @@ function Test-Command {
 
 Write-Host ""
 Write-Host "  ========================================" -ForegroundColor Cyan
-Write-Host "         qwen-gate Windows Installer" -ForegroundColor Cyan
+Write-Host "         opengate Windows Installer" -ForegroundColor Cyan
 Write-Host "  ========================================" -ForegroundColor Cyan
 Write-Host ""
 
@@ -153,7 +153,7 @@ if ($UserPath -notlike "*$BinDir*") {
 
 Write-Host ""
 Write-Host "  ========================================" -ForegroundColor Green
-Write-Host "     qwen-gate installed successfully!" -ForegroundColor Green
+Write-Host "     opengate installed successfully!" -ForegroundColor Green
 Write-Host "  ========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Runtime:   $(if ($UseBun) { 'Bun' } else { 'Node.js' })" -ForegroundColor White
@@ -161,13 +161,13 @@ Write-Host "  Directory: $Dir" -ForegroundColor White
 Write-Host "  Port:      $DefaultPort" -ForegroundColor White
 Write-Host ""
 Write-Host "  Commands:" -ForegroundColor Yellow
-Write-Host "    qg              Start the server"
-Write-Host "    qg update       Update to latest"
-Write-Host "    qg restart      Restart server"
-Write-Host "    qg status       Check if running"
+  Write-Host "    opengate          Start the server"
+  Write-Host "    opengate update   Update to latest"
+  Write-Host "    opengate restart  Restart server"
+  Write-Host "    opengate status   Check if running"
 Write-Host ""
 Write-Host "  Dashboard: http://localhost:$DefaultPort/dashboard" -ForegroundColor Cyan
 Write-Host "  API:       http://localhost:$DefaultPort/v1" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Restart your terminal, then run 'qg' to start." -ForegroundColor Gray
+  Write-Host "  Restart your terminal, then run 'opengate' to start." -ForegroundColor Gray
 Write-Host ""

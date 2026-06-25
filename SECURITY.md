@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability, please report it privately by opening a [GitHub Security Advisory](https://github.com/youssefvdel/qwen-gate/security/advisories/new).
+If you discover a security vulnerability, please report it privately by opening a [GitHub Security Advisory](https://github.com/youssefvdel/opengate/security/advisories/new).
 
 Do not report security vulnerabilities via public GitHub issues.
 
@@ -23,7 +23,7 @@ You should receive a response within 48 hours. If you don't, please follow up.
 
 ## Scope
 
-- The Qwen Gate server (`src/`)
+- The OpenGate server (`src/`)
 - API authentication and authorization
 - Session/cookie management
 - Account credential storage

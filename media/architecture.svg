@@ -35,7 +35,7 @@
   <line x1="270" y1="185" x2="170" y2="185" stroke="#C8983A" stroke-width="1.5" opacity="0.5" marker-end="url(#arrowLeft)" stroke-dasharray="4 3"/>
   <text x="220" y="200" text-anchor="middle" font-family="ui-monospace, monospace" font-size="9" fill="#C8983A" opacity="0.8">SSE Stream</text>
   <rect x="270" y="55" width="320" height="230" rx="12" fill="url(#gateGrad)" stroke="#5E9D5C" stroke-width="1.5" filter="url(#archShadow)"/>
-  <text x="430" y="80" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" fill="#1a1615" font-weight="700" letter-spacing="-0.5">Qwen Gate</text>
+  <text x="430" y="80" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" fill="#1a1615" font-weight="700" letter-spacing="-0.5">OpenGate</text>
   <line x1="300" y1="90" x2="560" y2="90" stroke="#C9BFAE" stroke-width="0.5"/>
   <rect x="290" y="102" width="130" height="36" rx="8" fill="#F5F1EA" stroke="#C9BFAE" stroke-width="0.5"/>
   <text x="355" y="125" text-anchor="middle" font-family="ui-monospace, monospace" font-size="11" fill="#1a1615" font-weight="500">Hono Router</text>

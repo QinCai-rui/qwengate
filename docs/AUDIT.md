@@ -1,4 +1,4 @@
-# qwen-gate Full Codebase Audit
+# opengate Full Codebase Audit
 
 **Date:** June 2026
 **Auditors:** @oracle (architecture, security), @explorer (code health, performance)

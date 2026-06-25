@@ -1,4 +1,4 @@
-# Qwen-Gate Comprehensive Research Findings
+# OpenGate Comprehensive Research Findings
 
 **Generated**: 2026-05-29
 **Scope**: Full audit across codebase structure, security, streaming pipeline, architecture comparison, and industry best practices
@@ -174,7 +174,7 @@ Qwen-gate is well-architected with strong patterns (circuit breakers, retry logi
 
 Comparing against **songquanpeng/one-api** (32K★), **MartialBE/one-hub**, and industry patterns:
 
-| Pattern | one-api | qwen-gate | Recommendation |
+| Pattern | one-api | opengate | Recommendation |
 |---------|---------|-----------|----------------|
 | **Provider abstraction** | Channel-based (DB) | Account-based (file) | Consider DB for multi-provider |
 | **Rate limiting** | Quota tokens (DB) | Token bucket (memory) | Add auto-cleanup for buckets |

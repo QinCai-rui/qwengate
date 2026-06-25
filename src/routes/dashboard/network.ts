@@ -5,7 +5,7 @@ export const networkHtml = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Qwen Gate — Network Debug</title>
+<title>OpenGate — Network Debug</title>
   <link rel="stylesheet" href="/dashboard/static/shared.css">
   <link rel="stylesheet" href="/dashboard/static/network.css">
 

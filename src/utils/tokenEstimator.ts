@@ -1,5 +1,5 @@
 /**
- * Token estimation utilities for qwen-gate.
+ * Token estimation utilities for opengate.
  *
  * Uses content-aware heuristics for fallback token counting when Qwen's API
  * does not provide usage data. Used for:
@@ -128,7 +128,7 @@ export function estimateTokensFast(text: string, options?: { tools?: unknown[] }
 export interface TokenBreakdown {
   /** Token count of the user's original messages (pre-inflation) */
   clientMessages: number;
-  /** Token count of content injected by qwen-gate (system prompts, formatting, tool instructions) */
+  /** Token count of content injected by opengate (system prompts, formatting, tool instructions) */
   injectedOverhead: number;
   /** Total sent to Qwen (clientMessages + injectedOverhead) */
   totalSent: number;

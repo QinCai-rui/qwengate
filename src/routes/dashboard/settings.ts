@@ -5,7 +5,7 @@ export const settingsHtml = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Qwen Gate — Settings</title>
+<title>OpenGate — Settings</title>
   <link rel="stylesheet" href="/dashboard/static/shared.css">
   <link rel="stylesheet" href="/dashboard/static/settings.css">
 

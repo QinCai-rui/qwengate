@@ -32,7 +32,7 @@ export function buildChunkEvent(completionId: string, model: string, choices: an
     object: 'chat.completion.chunk',
     created: created ?? Math.floor(Date.now() / 1000),
     model,
-    system_fingerprint: 'fp_qwen_gate',
+    system_fingerprint: 'fp_opengate',
     service_tier: 'default',
     choices,
     ...extra,

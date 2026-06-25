@@ -1,6 +1,6 @@
-# Qwen Gate API Reference
+# OpenGate API Reference
 
-Complete API documentation for Qwen Gate's OpenAI-compatible endpoints.
+Complete API documentation for OpenGate's OpenAI-compatible endpoints.
 
 ## Table of Contents
 
@@ -40,7 +40,7 @@ Leave `API_KEY` empty to disable authentication.
 
 ## Rate Limits
 
-Qwen Gate implements rate limiting to protect Qwen accounts:
+OpenGate implements rate limiting to protect Qwen accounts:
 
 - **Default cooldown**: 2 minutes per account after rate limit
 - **Configurable**: Set `RATE_LIMIT_COOLDOWN_MS` in config
@@ -111,13 +111,13 @@ The server sends SSE (Server-Sent Events) with an initial heartbeat, then role a
 ```
 : heartbeat
 
-data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"qwen-max","system_fingerprint":"fp_qwen_gate","service_tier":"default","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"qwen-max","system_fingerprint":"fp_opengate","service_tier":"default","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}
 
 data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"qwen-max","choices":[{"index":0,"delta":{"content":"Hello"},"logprobs":null,"finish_reason":null}]}
 
 data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"qwen-max","choices":[{"index":0,"delta":{"content":"! How can I help you today?"},"logprobs":null,"finish_reason":null}]}
 
-data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"qwen-max","system_fingerprint":"fp_qwen_gate","service_tier":"default","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":15,"completion_tokens":10,"total_tokens":25,"completion_tokens_details":{"reasoning_tokens":0},"prompt_tokens_details":{"cached_tokens":0}}}
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890,"model":"qwen-max","system_fingerprint":"fp_opengate","service_tier":"default","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":15,"completion_tokens":10,"total_tokens":25,"completion_tokens_details":{"reasoning_tokens":0},"prompt_tokens_details":{"cached_tokens":0}}}
 
 data: [DONE]
 ```
@@ -136,7 +136,7 @@ data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1234567890
   "object": "chat.completion",
   "created": 1234567890,
   "model": "qwen-max",
-  "system_fingerprint": "fp_qwen_gate",
+  "system_fingerprint": "fp_opengate",
   "service_tier": "default",
   "choices": [
     {
@@ -522,7 +522,7 @@ for await (const chunk of stream) {
 import OpenAI from "openai";
 
 const client = new OpenAI({
-  apiKey: process.env.QWEN_GATE_API_KEY,
+  apiKey: process.env.OPENGATE_API_KEY,
   baseURL: "http://localhost:26405/v1",
 });
 
@@ -564,7 +564,7 @@ curl http://localhost:26405/v1/chat/completions \
 
 ### Tool Call Content Gating
 
-Qwen Gate tracks tool call nesting depth during streaming (`toolCallDepth` counter). Content inside tool call XML blocks (`<function=...>`) is suppressed from client emission to prevent chunk-boundary fragments from leaking. The full clean tool call text is delivered as a single `finish_reason: tool_calls` phase.
+OpenGate tracks tool call nesting depth during streaming (`toolCallDepth` counter). Content inside tool call XML blocks (`<function=...>`) is suppressed from client emission to prevent chunk-boundary fragments from leaking. The full clean tool call text is delivered as a single `finish_reason: tool_calls` phase.
 
 ### Tool Compression
 
@@ -579,5 +579,5 @@ Sessions are automatically managed per-account using browser session contexts. T
 For questions or issues:
 
 - **Documentation**: [README.md](../README.md)
-- **Issues**: [GitHub Issues](https://github.com/youssefvdel/qwen-gate/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/youssefvdel/qwen-gate/discussions)
+- **Issues**: [GitHub Issues](https://github.com/youssefvdel/opengate/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/youssefvdel/opengate/discussions)

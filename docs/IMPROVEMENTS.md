@@ -1,6 +1,6 @@
-# Qwen Gate -- Improvement Roadmap
+# OpenGate -- Improvement Roadmap
 
-Comprehensive analysis of the qwen-gate codebase (v0.5.1) with actionable improvements organized by priority. Use this as a living document to track progress.
+Comprehensive analysis of the opengate codebase (v0.5.1) with actionable improvements organized by priority. Use this as a living document to track progress.
 
 ---
 
@@ -194,7 +194,7 @@ function getEncryptionKey(): string {
 | Status | done |
 | Files | `src/services/systemLogger.ts` |
 
-**Changes**: Every `logStore.log()` call now also writes a newline-delimited JSON line to stdout. Includes all system log fields plus a `logger: "qwen-gate"` tag for container/aggregator ingestion (Docker, Kubernetes, ELK, Datadog).
+**Changes**: Every `logStore.log()` call now also writes a newline-delimited JSON line to stdout. Includes all system log fields plus a `logger: "opengate"` tag for container/aggregator ingestion (Docker, Kubernetes, ELK, Datadog).
 
 ### 3.2 Per-client rate limiting
 

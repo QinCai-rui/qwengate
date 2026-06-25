@@ -1,6 +1,6 @@
-# Qwen Gate Architecture
+# OpenGate Architecture
 
-Technical architecture and design documentation for Qwen Gate.
+Technical architecture and design documentation for OpenGate.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ Technical architecture and design documentation for Qwen Gate.
 
 ## Overview
 
-Qwen Gate is an OpenAI-compatible API proxy that provides access to Qwen AI models through intelligent browser automation. It bridges the gap between Qwen's web interface and standard AI API clients by:
+OpenGate is an OpenAI-compatible API proxy that provides access to Qwen AI models through intelligent browser automation. It bridges the gap between Qwen's web interface and standard AI API clients by:
 
 1. **Automating browser interactions** with Qwen's chat interface
 2. **Managing multiple accounts** with automatic rotation and session pooling
@@ -49,7 +49,7 @@ Qwen Gate is an OpenAI-compatible API proxy that provides access to Qwen AI mode
                  │ GET /v1/models
                  │
 ┌────────────────▼───────────────────────────────────────────┐
-│                     Qwen Gate Server                       │
+│                     OpenGate Server                       │
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │              API Layer (Hono)                        │  │
 │  │  - Request validation                                │  │
@@ -484,16 +484,16 @@ Flush Path (full pipeline):
 
 ### Horizontal Scaling
 
-**Strategy**: Run multiple Qwen Gate instances behind a load balancer.
+**Strategy**: Run multiple OpenGate instances behind a load balancer.
 
 ```
 Load Balancer (nginx)
     │
-    ├─► Qwen Gate Instance 1
+    ├─► OpenGate Instance 1
     │
-    ├─► Qwen Gate Instance 2
+    ├─► OpenGate Instance 2
     │
-    └─► Qwen Gate Instance 3
+    └─► OpenGate Instance 3
 
 
 **Considerations**:
@@ -716,7 +716,7 @@ The dashboard provides:
 
 ## Conclusion
 
-Qwen Gate's architecture balances performance, reliability, and maintainability. The multi-layer design provides clear separation of concerns, while the plugin-based pipeline allows for easy extension. The focus on observability and monitoring ensures operational excellence in production environments.
+OpenGate's architecture balances performance, reliability, and maintainability. The multi-layer design provides clear separation of concerns, while the plugin-based pipeline allows for easy extension. The focus on observability and monitoring ensures operational excellence in production environments.
 
 For implementation details, see:
 

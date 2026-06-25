@@ -139,7 +139,7 @@ function getEncryptionKey(): string {
 }
 
 function deriveKey(keyMaterial: string): Buffer {
-  return crypto.scryptSync(keyMaterial, 'qwen-gate-salt', 32);
+  return crypto.scryptSync(keyMaterial, 'opengate-salt', 32);
 }
 
 export function encrypt(plaintext: string): string {

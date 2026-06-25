@@ -1,4 +1,4 @@
-# Qwen Gate — Project Guide
+# OpenGate — Project Guide
 
 ## Runtime
 
@@ -14,7 +14,7 @@ bun test              # All tests, no setup needed
 bun start             # Dev server (`bun src/index.tsx`)
 bun dev               # Hot reload (`bun --watch src/index.tsx`)
 bun cluster           # Multi-core mode
-bun qg                # CLI entry (`bun src/cli.ts`)
+bun opengate          # CLI entry (`bun src/cli.ts`)
 ```
 
 ## File organization

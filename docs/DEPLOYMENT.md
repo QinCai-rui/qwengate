@@ -1,6 +1,6 @@
-# Qwen Gate Deployment Guide
+# OpenGate Deployment Guide
 
-Production deployment for Qwen Gate.
+Production deployment for OpenGate.
 
 ## Table of Contents
 
@@ -36,7 +36,7 @@ PM2 keeps the server running forever with auto-restart on crash.
 bun add -g pm2
 
 # Start with PM2
-pm2 start bun --name "qwen-gate" -- start
+pm2 start bun --name "opengate" -- start
 
 # Save process list (survives reboot)
 pm2 save
@@ -46,16 +46,16 @@ pm2 startup
 
 # Useful commands
 pm2 status                # View status
-pm2 logs qwen-gate        # View logs
+pm2 logs opengate        # View logs
 pm2 monit                 # Monitor resources
-pm2 restart qwen-gate     # Restart
-pm2 stop qwen-gate        # Stop
+pm2 restart opengate     # Restart
+pm2 stop opengate        # Stop
 ```
 
 ### Clustering (multi-core)
 
 ```bash
-pm2 start bun --name "qwen-gate" -i max -- start
+pm2 start bun --name "opengate" -i max -- start
 ```
 
 Runs one instance per CPU core.
@@ -66,7 +66,7 @@ Runs one instance per CPU core.
 // ecosystem.config.js
 module.exports = {
   apps: [{
-    name: 'qwen-gate',
+    name: 'opengate',
     script: 'bun',
     args: 'start',
     instances: 1,
@@ -86,17 +86,17 @@ module.exports = {
 
 ## systemd Service (Linux)
 
-Create `/etc/systemd/system/qwen-gate.service`:
+Create `/etc/systemd/system/opengate.service`:
 
 ```ini
 [Unit]
-Description=Qwen Gate API Proxy
+Description=OpenGate API Proxy
 After=network.target
 
 [Service]
 Type=simple
 User=youruser
-WorkingDirectory=/opt/qwen-gate
+WorkingDirectory=/opt/opengate
 ExecStart=/usr/bin/bun start
 Restart=always
 RestartSec=10
@@ -108,10 +108,10 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable qwen-gate
-sudo systemctl start qwen-gate
-sudo systemctl status qwen-gate
-journalctl -u qwen-gate -f  # View logs
+sudo systemctl enable opengate
+sudo systemctl start opengate
+sudo systemctl status opengate
+journalctl -u opengate -f  # View logs
 ```
 
 ## Configuration
@@ -187,8 +187,8 @@ curl http://localhost:26405/v1/models
 ### Application Logs
 
 ```bash
-pm2 logs qwen-gate                  # Via PM2
-journalctl -u qwen-gate -f          # Via systemd
+pm2 logs opengate                  # Via PM2
+journalctl -u opengate -f          # Via systemd
 ```
 
 `LOG_FORMAT` defaults to `json`. Set to `"text"` for human-readable log output.

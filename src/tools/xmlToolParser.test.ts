@@ -16,19 +16,19 @@ Test file for tool validation - edited
 </parameter>
 </function>`;
 
-const TOOL_CALL_AISLOP_WHY = `<function=qwengate-aislop_aislop_why>
+const TOOL_CALL_AISLOP_WHY = `<function=opengate-aislop_aislop_why>
 <parameter=rule_id>
 ai-slop/narrative-comment
 </parameter>
 </function>`;
 
-const TOOL_CALL_AISLOP_SCAN = `<function=qwengate-aislop_aislop_scan>
+const TOOL_CALL_AISLOP_SCAN = `<function=opengate-aislop_aislop_scan>
 <parameter=path>
 /tmp/kilo
 </parameter>
 </function>`;
 
-const TOOL_CALL_AISLOP_FIX = `<function=qwengate-aislop_aislop_fix>
+const TOOL_CALL_AISLOP_FIX = `<function=opengate-aislop_aislop_fix>
 <parameter=path>
 /tmp/kilo
 </parameter>
@@ -76,7 +76,7 @@ const SSE_CHUNKS = [
   '>\n</function',
   '>\n\n',
   '\n<function',
-  '=qwengate',
+  '=opengate',
   '-aislop_',
   'aislop_scan>',
   '\n<parameter=path',
@@ -85,7 +85,7 @@ const SSE_CHUNKS = [
   '>\n</function',
   '>\n\n',
   '\n<function',
-  '=qwengate',
+  '=opengate',
   '-aislop_',
   'aislop_fix>',
   '\n<parameter=path',
@@ -113,10 +113,10 @@ describe('xmlToolParser', () => {
       assert.ok(result.toolCalls[0].parameters.oldString.includes('Test file'));
     });
 
-    it('extracts tool call with hyphenated name (qwengate-aislop_why)', () => {
+    it('extracts tool call with hyphenated name (opengate-aislop_why)', () => {
       const result = parseXmlToolCalls(TOOL_CALL_AISLOP_WHY);
       assert.equal(result.toolCalls.length, 1);
-      assert.equal(result.toolCalls[0].name, 'qwengate-aislop_aislop_why');
+      assert.equal(result.toolCalls[0].name, 'opengate-aislop_aislop_why');
       assert.equal(result.toolCalls[0].parameters.rule_id, 'ai-slop/narrative-comment');
     });
   });
@@ -126,9 +126,9 @@ describe('xmlToolParser', () => {
       const result = parseXmlToolCalls(FULL_OUTPUT);
       assert.equal(result.toolCalls.length, 4, 'should find all 4 tool calls');
       assert.equal(result.toolCalls[0].name, 'edit');
-      assert.equal(result.toolCalls[1].name, 'qwengate-aislop_aislop_why');
-      assert.equal(result.toolCalls[2].name, 'qwengate-aislop_aislop_scan');
-      assert.equal(result.toolCalls[3].name, 'qwengate-aislop_aislop_fix');
+      assert.equal(result.toolCalls[1].name, 'opengate-aislop_aislop_why');
+      assert.equal(result.toolCalls[2].name, 'opengate-aislop_aislop_scan');
+      assert.equal(result.toolCalls[3].name, 'opengate-aislop_aislop_fix');
     });
 
     it('extracts tool calls from real SSE chunks (accumulated)', () => {
@@ -148,9 +148,9 @@ describe('xmlToolParser', () => {
       }
       assert.equal(allToolCalls.length, 4, 'should extract all 4 tool calls from chunked stream');
       assert.equal(allToolCalls[0].name, 'edit');
-      assert.equal(allToolCalls[1].name, 'qwengate-aislop_aislop_why');
-      assert.equal(allToolCalls[2].name, 'qwengate-aislop_aislop_scan');
-      assert.equal(allToolCalls[3].name, 'qwengate-aislop_aislop_fix');
+      assert.equal(allToolCalls[1].name, 'opengate-aislop_aislop_why');
+      assert.equal(allToolCalls[2].name, 'opengate-aislop_aislop_scan');
+      assert.equal(allToolCalls[3].name, 'opengate-aislop_aislop_fix');
     });
   });
 
@@ -269,7 +269,7 @@ describe('xmlToolParser', () => {
 </function>
 
 
-<function=qwengate-aislop_aislop_scan>
+<function=opengate-aislop_aislop_scan>
 <parameter=path>
 /tmp/kilo
 </parameter>
@@ -290,7 +290,7 @@ describe('xmlToolParser', () => {
     '>\n</function',
     '>\n\n',
     '\n<function',
-    '=qwengate',
+    '=opengate',
     '-aislop_',
     'aislop_scan>',
     '\n<parameter=path',
@@ -305,7 +305,7 @@ describe('xmlToolParser', () => {
       const result = parseXmlToolCalls(RAW_OUTPUT_2);
       assert.equal(result.toolCalls.length, 2);
       assert.equal(result.toolCalls[0].name, 'read');
-      assert.equal(result.toolCalls[1].name, 'qwengate-aislop_aislop_scan');
+      assert.equal(result.toolCalls[1].name, 'opengate-aislop_aislop_scan');
     });
 
     it('cleanTextOfXmlArtifacts leaves no XML artifacts', () => {
@@ -334,7 +334,7 @@ describe('xmlToolParser', () => {
       }
       assert.equal(allToolCalls.length, 2, 'should extract 2 tool calls');
       assert.equal(allToolCalls[0].name, 'read');
-      assert.equal(allToolCalls[1].name, 'qwengate-aislop_aislop_scan');
+      assert.equal(allToolCalls[1].name, 'opengate-aislop_aislop_scan');
     });
 
     it('no content delta leaks XML at any chunk boundary', () => {

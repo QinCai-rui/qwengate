@@ -336,7 +336,7 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
     object: 'chat.completion',
     created: Math.floor(Date.now() / 1000),
     model: body.model,
-    system_fingerprint: 'fp_qwen_gate',
+    system_fingerprint: 'fp_opengate',
     service_tier: 'default',
     choices: [
       {

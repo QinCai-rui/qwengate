@@ -1,4 +1,4 @@
-# Qwen Gate Handoff - WAF/Session Fix (June 18, 2026)
+# OpenGate Handoff - WAF/Session Fix (June 18, 2026)
 
 ## Root Cause
 

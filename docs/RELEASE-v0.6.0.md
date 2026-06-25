@@ -88,7 +88,7 @@ Added 11 memory-reduction Chromium flags in `autoBrowser.ts`:
 ## Infrastructure
 - `bun` runtime only (Node.js `start:node` script deprecated)
 - `bun.lock` replaces `package-lock.json`
-- `bin/qg` CLI entry point
+- `bin/opengate` CLI entry point
 - `scripts/` — load testing, cross-account tests, thinking format tests
 - `start-server.ps1` — Windows startup script
 - CI workflow updates

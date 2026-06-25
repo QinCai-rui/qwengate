@@ -43,7 +43,7 @@ const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-const LOGO = `<img src="/dashboard/static/logo.svg" width="60" height="60" alt="Qwen Gate">`;
+const LOGO = `<img src="/dashboard/static/logo.svg" width="60" height="60" alt="OpenGate">`;
 
 /**
  * Render sidebar HTML.
@@ -77,7 +77,7 @@ export function sidebarHtml(activePageId: string): string {
     <div class="sidebar-header">
       <h1 style="display:flex;align-items:center;gap:8px">
         ${LOGO}
-        Qwen Gate
+        OpenGate
       </h1>
     </div>
     <nav class="sidebar-nav">

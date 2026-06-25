@@ -1,12 +1,12 @@
-# Qwen Gate
+# OpenGate
 
 <p align="center">
-  <img src="media/banner.svg" alt="Qwen Gate Banner" width="100%">
+  <img src="media/banner.svg" alt="OpenGate Banner" width="100%">
 </p>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Bun](https://img.shields.io/badge/Bun-1.3+-pink.svg)](https://bun.sh/)
-[![GitHub Release](https://img.shields.io/github/v/release/youssefvdel/qwen-gate)](https://github.com/youssefvdel/qwen-gate/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/youssefvdel/opengate)](https://github.com/youssefvdel/opengate/releases)
 [![TypeScript](https://img.shields.io/badge/TypeScript-6.0-blue)](https://www.typescriptlang.org/)
 [![Browserless](https://img.shields.io/badge/Stack-Browserless-8B5CF6)](https://bun.sh)
 
@@ -17,16 +17,16 @@
 ## Quick Start
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.sh | bash
-cd qwen-gate
-qg
+curl -sSL https://raw.githubusercontent.com/youssefvdel/opengate/main/install.sh | bash
+cd opengate
+opengate
 ```
 
 Then open [http://localhost:26405/dashboard](http://localhost:26405/dashboard) to add accounts and start using the API.
 
 ## Features
 
-- **Free Qwen Models** — Use Qwen 3.7-Max, Qwen 3-Max, Qwen 3-Plus, and more for free in your existing tools. Point Claude Code, OpenCode, Qwen Code, Cursor, or any OpenAI-compatible client at Qwen Gate and use Qwen models without paying per-token.
+- **Free Qwen Models** — Use Qwen 3.7-Max, Qwen 3-Max, Qwen 3-Plus, and more for free in your existing tools. Point Claude Code, OpenCode, Qwen Code, Cursor, or any OpenAI-compatible client at OpenGate and use Qwen models without paying per-token.
 - **OpenAI-Compatible API** — Drop-in replacement for `/v1/chat/completions` and `/v1/models`. Works with existing OpenAI SDKs, curl, or any HTTP client.
 - **Multi-Account Rotation** — Configure multiple Qwen accounts (3+ recommended). Requests are distributed via round-robin with automatic failover and cooldown tracking — cooldown limits become a non-issue.
 - **Session Pooling** — Browser sessions are pooled, reused, and autoscaled under load. No per-request login overhead.
@@ -44,41 +44,41 @@ Then open [http://localhost:26405/dashboard](http://localhost:26405/dashboard) t
 ### One-Command Install (Linux / macOS)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/youssefvdel/opengate/main/install.sh | bash
 ```
 
-This clones the repo, installs dependencies, creates `config.json`, and symlinks the `qg` / `qwengate` / `qwen-gate` CLI commands.
+This clones the repo, installs dependencies, creates `config.json`, and symlinks the `opengate` / `opengate` / `opengate` CLI commands.
 
 ### Windows Install
 
 Open **PowerShell** (as administrator) and run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "curl.exe -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "curl.exe -sSL https://raw.githubusercontent.com/youssefvdel/opengate/main/install.ps1 | iex"
 ```
 
 Or clone manually:
 
 ```powershell
-git clone https://github.com/youssefvdel/qwen-gate.git
-cd qwen-gate
+git clone https://github.com/youssefvdel/opengate.git
+cd opengate
 bun install
 ```
 
-Then run `qg` to start the server.
+Then run `opengate` to start the server.
 
 ### Manual Install
 
 ```bash
-git clone https://github.com/youssefvdel/qwen-gate.git
-cd qwen-gate
+git clone https://github.com/youssefvdel/opengate.git
+cd opengate
 bun install
 ```
 
 ### Start the Server
 
 ```bash
-qg
+opengate
 ```
 
 Or:
@@ -101,7 +101,7 @@ The server starts on [http://localhost:26405](http://localhost:26405).
 
 ### Use with Any OpenAI-Compatible Client
 
-Qwen Gate works with any tool that speaks OpenAI's API: **Claude Code, OpenCode, Qwen Code, Cursor**, standard OpenAI SDKs (Python, Node.js, curl), and anything else using the `/v1/chat/completions` format — just point it at `http://localhost:26405/v1`.
+OpenGate works with any tool that speaks OpenAI's API: **Claude Code, OpenCode, Qwen Code, Cursor**, standard OpenAI SDKs (Python, Node.js, curl), and anything else using the `/v1/chat/completions` format — just point it at `http://localhost:26405/v1`.
 
 > **Tip:** Use `model: "qwen3-7-max"` for the latest Qwen model. Available models: `qwen3-7-max`, `qwen3-6-plus`, `qwen3-max`, `qwen3-coder`, `qwen3-5-plus`, `qwen3-5-flash`, and more.
 
@@ -175,7 +175,7 @@ All settings in `config.json`. Key options:
 ## Architecture
 
 <p align="center">
-  <img src="media/architecture.svg" alt="Qwen Gate Architecture Diagram" width="100%">
+  <img src="media/architecture.svg" alt="OpenGate Architecture Diagram" width="100%">
 </p>
 
 ## Web Dashboard
@@ -192,10 +192,10 @@ Accessible at `http://localhost:26405/dashboard`.
 
 ## CLI
 
-Three binary aliases: `qg`, `qwengate`, `qwen-gate`.
+Binary alias: `opengate`.
 
 ```text
-Usage: qg [command] [options]
+Usage: opengate [command] [options]
 
 Commands:
   start          Start the API server (default)
@@ -217,29 +217,29 @@ Account management is done via the web dashboard → Accounts page.
 ### Via CLI (easiest)
 
 ```bash
-qg update
+opengate update
 ```
 
 This runs `git pull --ff-only && bun install`. Then restart the server:
 
 ```bash
-qg restart
+opengate restart
 ```
 
 ### Manual
 
 ```bash
-git pull && bun install && qg restart
+git pull && bun install && opengate restart
 ```
 
 ### Re-run the installer
 
 ```bash
 # Linux / macOS
-curl -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/youssefvdel/opengate/main/install.sh | bash
 
 # Windows (PowerShell)
-powershell -ExecutionPolicy Bypass -c "curl.exe -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "curl.exe -sSL https://raw.githubusercontent.com/youssefvdel/opengate/main/install.ps1 | iex"
 ```
 
 The server checks for new GitHub releases on startup and logs a warning in the dashboard when an update is available.
@@ -248,7 +248,7 @@ The server checks for new GitHub releases on startup and logs a warning in the d
 
 ```text
 src/
-├── cli.ts                   CLI entry (qg command parser)
+├── cli.ts                   CLI entry (opengate command parser)
 ├── cluster.ts               Multi-core cluster mode
 ├── index.tsx                Hono server, routing, CORS, auth
 ├── models.json              Model definitions (context lengths, modalities)
@@ -347,11 +347,11 @@ Uses Bun's built-in test runner. Covers content filtering, tool-call parsing, st
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=youssefvdel%2Fqwen-gate&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=youssefvdel%2Fopengate&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=youssefvdel/qwen-gate&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=youssefvdel/qwen-gate&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=youssefvdel/qwen-gate&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=youssefvdel/opengate&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=youssefvdel/opengate&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=youssefvdel/opengate&type=date&legend=top-left" />
  </picture>
 </a>
 

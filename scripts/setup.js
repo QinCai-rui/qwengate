@@ -118,11 +118,11 @@ async function main() {
 
   writeFileSync(CONFIG_PATH, JSON.stringify(newConfig, null, 2) + '\n');
   if (!useDefaults) console.log(`\n  ✅ Config saved to ${CONFIG_PATH}`);
-  console.log('\n  Run `bun start` (preferred) or `npm start` to launch Qwen Gate.\n');
+  console.log('\n  Run `bun start` (preferred) or `npm start` to launch OpenGate.\n');
 }
 
 main().catch((e) => {
-  // Fail silently in non-interactive mode (postinstall, qg auto-install)
+  // Fail silently in non-interactive mode (postinstall, opengate auto-install)
   if (process.stdin.isTTY) {
     console.error('Setup failed:', e.message);
     process.exit(1);

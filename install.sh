@@ -1,18 +1,18 @@
 #!/bin/bash
 # ============================================================================
-#  Qwen Gate — One-Command Installer
+#  OpenGate — One-Command Installer
 # ============================================================================
 #  Usage:
-#    curl -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.sh | bash
+#    curl -sSL https://raw.githubusercontent.com/youssefvdel/opengate/main/install.sh | bash
 #
 #  Clones the repo, installs Bun + dependencies, creates config, and
-#  symlinks the CLI so you can run `qg` from anywhere.
+#  symlinks the CLI so you can run \`opengate\` from anywhere.
 # ============================================================================
 
 set -e
 
-REPO_URL="https://github.com/youssefvdel/qwen-gate.git"
-INSTALL_DIR="./qwen-gate"
+REPO_URL="https://github.com/youssefvdel/opengate.git"
+INSTALL_DIR="./opengate"
 DEFAULT_PORT=26405
 
 # ── Colors & symbols ─────────────────────────────────────────────────
@@ -76,9 +76,9 @@ else
 fi
 
 # ── Step 3: Clone or update the repo ─────────────────────────────────
-info "Setting up qwen-gate..."
-INSTALL_PATH="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/qwen-gate"
-INSTALL_PATH="${INSTALL_PATH:-$(pwd)/qwen-gate}"
+info "Setting up opengate..."
+INSTALL_PATH="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/opengate"
+INSTALL_PATH="${INSTALL_PATH:-$(pwd)/opengate}"
 
 if [ -d "$INSTALL_DIR" ]; then
   if [ -d "$INSTALL_DIR/.git" ]; then
@@ -88,7 +88,7 @@ if [ -d "$INSTALL_DIR" ]; then
     fail "$INSTALL_DIR exists but is not a git repository. Remove it or choose a different path."
   fi
 else
-  info "Cloning qwen-gate..."
+  info "Cloning opengate..."
   git clone "$REPO_URL" "$INSTALL_DIR"
   ok "Cloned to $INSTALL_DIR"
 fi
@@ -130,13 +130,11 @@ link_cli() {
   if [ -L "$target" ] || [ -f "$target" ]; then
     rm -f "$target"
   fi
-  ln -s "$PROJECT_ROOT/bin/qg" "$target"
+  ln -s "$PROJECT_ROOT/bin/opengate" "$target"
   ok "Linked $name -> $target"
 }
 
-link_cli "qg"
-link_cli "qwengate"
-link_cli "qwen-gate"
+link_cli "opengate"
 
 # ── Step 7: PATH check ──────────────────────────────────────────────
 PATH_READY=false
@@ -149,7 +147,7 @@ echo ""
 printf "${BOLD}${GREEN}"
 cat << 'BANNER'
   ╔═══════════════════════════════════════════════╗
-  ║            Qwen Gate installed!               ║
+  ║            OpenGate installed!               ║
   ╚═══════════════════════════════════════════════╝
 BANNER
 printf "${RESET}"
@@ -186,7 +184,7 @@ fi
 
 printf "  ${BOLD}Quick start:${RESET}\n"
 echo "    cd $INSTALL_DIR"
-echo "    qg"
+    echo "    opengate"
 echo ""
 printf "  ${DIM}Then open http://localhost:$DEFAULT_PORT/dashboard to add accounts.${RESET}\n"
 echo ""

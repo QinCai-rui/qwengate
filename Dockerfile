@@ -34,7 +34,7 @@ RUN addgroup -g 1001 -S qwen && \
     chown -R qwen:qwen /app
 USER qwen
 
-ENV QWEN_GATE_PORT=26405
+ENV OPENGATE_PORT=26405
 ENV NODE_ENV=production
 EXPOSE 26405
 VOLUME [ "/app/.qwen" ]

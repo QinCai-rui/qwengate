@@ -55,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Bun-first runtime**: Prefer bun install over npm everywhere, npm stays as fallback
 - Added `bunx playwright install` as primary browser install method (npx as fallback)
-- Removed `2>/dev/null` silencing from bin/qg so install errors are visible
+- Removed `2>/dev/null` silencing from bin/opengate so install errors are visible
 - Various code quality fixes (circuit breaker awaits, error handling cleanup)
 
 ## [0.5.0] - 2026-06-14
@@ -72,7 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Better Diagnostics**: JSON parse errors log raw data. Stream errors captured in both console and dashboard log.
 
 ### Fixed
-- **Dashboard Script Injection**: Fixed critical bug where `serveHtml` broke all `<script src="...">` tags when injecting `window.APP_VERSION`. ([#5](https://github.com/youssefvdel/qwen-gate/issues/5))
+- **Dashboard Script Injection**: Fixed critical bug where `serveHtml` broke all `<script src="...">` tags when injecting `window.APP_VERSION`. ([#5](https://github.com/youssefvdel/opengate/issues/5))
 
 ## [0.4.0] - 2026-06-11
 
@@ -126,8 +126,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unified Sidebar Navigation**: Consistent navigation across all dashboard pages
 - **12-Hour Time Format**: All timestamps now display in 12-hour AM/PM format
 - **100% Width Layout**: Dashboard pages use full available width
-- **CLI Tool `qg`**: Command-line interface for account management (login, list, remove)
-- **One-Command Install Script**: `curl -sSL https://raw.githubusercontent.com/youssefvdel/qwen-gate/main/install.sh | bash`
+- **CLI Tool `opengate`**: Command-line interface for account management (login, list, remove)
+- **One-Command Install Script**: `curl -sSL https://raw.githubusercontent.com/youssefvdel/opengate/main/install.sh | bash`
 - **Network Debug Page**: View outbound API calls with expandable detail panels
 - **System Logs Panel**: Real-time system logs in overview dashboard
 - **Session Pool Dashboard**: Live session utilization bar and model health table
@@ -184,12 +184,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Package.json with core dependencies
 - Basic README with project description
 
-[0.7.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.6.0...v0.7.0
-[0.6.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.5.1...v0.6.0
-[0.5.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.3.1...v0.4.0
-[0.3.1]: https://github.com/youssefvdel/qwen-gate/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/youssefvdel/qwen-gate/compare/v0.0.1...v0.1.0
-[0.0.1]: https://github.com/youssefvdel/qwen-gate/releases/tag/v0.0.1
+[0.7.0]: https://github.com/youssefvdel/opengate/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/youssefvdel/opengate/compare/v0.5.1...v0.6.0
+[0.5.0]: https://github.com/youssefvdel/opengate/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/youssefvdel/opengate/compare/v0.3.1...v0.4.0
+[0.3.1]: https://github.com/youssefvdel/opengate/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/youssefvdel/opengate/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/youssefvdel/opengate/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/youssefvdel/opengate/compare/v0.0.1...v0.1.0
+[0.0.1]: https://github.com/youssefvdel/opengate/releases/tag/v0.0.1

@@ -1,7 +1,7 @@
 /*
  * File: logStore.ts
  * In-memory request log store — captures client requests and Qwen responses
- * for viewing at http://qwen-gate/log (SSE) and http://qwen-gate/log/json
+ * for viewing at http://opengate/log (SSE) and http://opengate/log/json
  *
  * System-level logging has been extracted to SystemLogger (systemLogger.ts).
  */
@@ -69,7 +69,7 @@ export interface LogEntry {
     preview: string;
     /** Estimated tokens in client's original messages (pre-inflation) */
     clientTokens?: number;
-    /** Estimated tokens from content injected by qwen-gate (system prompt, formatting, tool instructions) */
+    /** Estimated tokens from content injected by opengate (system prompt, formatting, tool instructions) */
     overheadTokens?: number;
     /** Total estimated tokens sent to Qwen (clientTokens + overheadTokens) */
     estimatedTotalTokens?: number;
