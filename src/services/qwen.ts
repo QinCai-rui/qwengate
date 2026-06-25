@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { CircuitBreaker, CircuitOpenError, withRetry } from '../utils/retry.ts';
+import { logCrash, logSessionClose } from '../utils/wreqCrashLogger.ts';
 import { decrementInFlight, getTokenWithAccount, pickAccount, throttleAccount } from './auth.ts';
 import { browserlessFetch } from './browserlessFetch.ts';
 import { config } from './configService.ts';
@@ -354,9 +355,16 @@ export async function createQwenStream(
       makeRequestQwenLogFile = logQwenRequest(payload, url);
     }
 
-    // Browserless path: wreq-js for TLS/HTTP2 impersonation, cookie from account manager
+    // Browserless path: impers worker for TLS/HTTP2 impersonation, cookie from account manager
     const tokenInfo = currentAccountEmail ? await getTokenWithAccount(currentAccountEmail) : null;
     const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+    const tokenPreview = cookieStr ? cookieStr.substring(0, 20) + '...' : 'none';
+
+    logStore.log(
+      'debug',
+      'qwen',
+      `[Qwen] Fetch POST ${url.substring(0, 100)} account=${currentAccountEmail || '?'} token_len=${cookieStr.length} payload_len=${bodyStr.length}`,
+    );
 
     const response = await browserlessFetch(url, {
       method: 'POST',
@@ -382,8 +390,13 @@ export async function createQwenStream(
       },
       body: bodyStr,
       accountEmail: currentAccountEmail,
-      stream: true, // keep wreq-js session alive for streaming — closed when stream ends
+      stream: true, // keep session alive for streaming via impers worker
     });
+    logStore.log(
+      'debug',
+      'qwen',
+      `[Qwen] Fetch response status=${response.status} ok=${response.ok} account=${currentAccountEmail || '?'}`,
+    );
     return { response, headers: {}, qwenLogFile: makeRequestQwenLogFile };
   };
 
@@ -418,7 +431,12 @@ export async function createQwenStream(
         if (streamDebugEntryId) {
           completeEntry(streamDebugEntryId);
         }
-        wreqClose?.(); // dispose wreq-js session when stream ends
+        try {
+          wreqClose?.();
+          logSessionClose('qwen.stream.flush');
+        } catch (closeErr) {
+          logCrash('qwen.stream.flush', closeErr, { accountEmail: currentAccountEmail });
+        }
       },
     }),
   );

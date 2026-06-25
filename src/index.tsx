@@ -6,18 +6,20 @@ import { cors } from 'hono/cors';
 
 import { rateLimitMiddleware, startAutoCleanup, stopAutoCleanup } from './middleware/rateLimit.ts';
 import { accountsRouter } from './routes/accounts.ts';
+import { anthropicMessages } from './routes/anthropic.ts';
 import { chatCompletions } from './routes/chat.ts';
 import { configRouter } from './routes/config.ts';
 import { registerDashboardRoutes } from './routes/dashboard/dashboardRoutes.ts';
 import { debugNetworkApp } from './routes/debugNetwork.ts';
 import { getAccountCount, getAccountStats, getAccounts, getAvailableCount, initAuth, setStartupStatus } from './services/auth.ts';
-import { config } from './services/configService.ts';
+import { config, updateClaudeCodeSettings } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
-import { getQwenHeaders } from './services/playwright.ts';
 import { configureAccount, fetchQwenModels } from './services/qwen.ts';
 import { safeCompare } from './utils/auth.ts';
 import { isBun } from './utils/env.ts';
 import { projectPath } from './utils/paths.ts';
+
+process.title = 'qwen-gate';
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[FATAL] Unhandled Promise Rejection:', reason);
@@ -180,6 +182,38 @@ app.post(
   chatCompletions,
 );
 
+// 10MB request body limit on anthropic endpoint
+app.use('/v1/messages', async (c, next) => {
+  const contentLength = Number(c.req.header('content-length') || 0);
+  if (contentLength > MAX_BODY_BYTES) {
+    return c.json({ error: { message: 'Request body too large' } }, 413);
+  }
+  await next();
+});
+
+app.post(
+  '/v1/messages',
+  async (c, next) => {
+    const result = await rateLimitMiddleware(c, 'chat-completions');
+    if (result) return result;
+    await next();
+  },
+  async (c) => {
+    const startMs = Date.now();
+    const model = c.req.header('anthropic-model') || '?';
+    const url = c.req.url;
+    logStore.log('info', 'http', `[Anthropic] /v1/messages ENTER model=${model} url=${url}`);
+    try {
+      const response = await anthropicMessages(c);
+      logStore.log('info', 'http', `[Anthropic] /v1/messages EXIT duration=${Date.now() - startMs}ms`);
+      return response;
+    } catch (err: any) {
+      logStore.log('error', 'http', `[Anthropic] /v1/messages UNCAUGHT after ${Date.now() - startMs}ms: ${err.message || err}`);
+      throw err;
+    }
+  },
+);
+
 app.get(
   '/v1/models',
   async (c, next) => {
@@ -204,6 +238,9 @@ app.get(
 if (import.meta.main) {
   // Enable per-request file logging
   logStore.enableRequestFileLogging(projectPath('.logs'));
+
+  // Auto-configure Claude Code proxy if toggled on
+  updateClaudeCodeSettings(config.getAll());
 
   const port = config.getPort();
   const hostArg = process.argv.indexOf('--host');
@@ -335,13 +372,7 @@ if (import.meta.main) {
         logStore.log('warn', 'boot', `[2/5] Configure failed: ${err.message}`);
       }
 
-      logStore.log('info', 'boot', '[3/5] Pre-warming headers...');
-      try {
-        await getQwenHeaders();
-        logStore.log('info', 'boot', '[3/5] Headers ready');
-      } catch (err: any) {
-        logStore.log('warn', 'boot', `[3/5] Header pre-warm failed: ${err.message}`);
-      }
+      logStore.log('info', 'boot', '[3/5] Headers ready (browserless — no pre-warm needed)');
 
       logStore.log('info', 'boot', 'Background initialization complete');
     })().catch((err) => {

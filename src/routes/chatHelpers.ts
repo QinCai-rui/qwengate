@@ -171,14 +171,28 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
     const localMcp: Record<string, any> = {};
     localMcp['★'] = {};
+    const toolNames: string[] = [];
     for (const t of body.tools) {
       const fn = t.function || {};
       localMcp['★'][fn.name] = {
         description: fn.description || '',
         input_schema: fn.parameters || { type: 'object', properties: {} },
       };
+      toolNames.push(`${fn.name}${fn.description ? ` (${fn.description})` : ''}`);
     }
     featureConfig.local_mcp = localMcp;
+    // ponytail: tool schema in system prompt as textual fallback for models
+    // that don't honor feature_config.local_mcp consistently
+    const toolDescriptions = body.tools
+      .map((t: any) => {
+        const fn = t.function || {};
+        const params = fn.parameters?.properties ? Object.keys(fn.parameters.properties).join(', ') : '';
+        return `- ${fn.name}${fn.description ? `: ${fn.description}` : ''}${params ? ` (params: ${params})` : ''}`;
+      })
+      .join('\n');
+    systemParts.push(
+      `You have access to the following tools:\n${toolDescriptions}\n\nTo call a tool, respond with the tool call in the appropriate format.`,
+    );
   }
 
   // Single message (Qwen API only accepts 1 message per chat)

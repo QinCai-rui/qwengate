@@ -170,8 +170,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
       throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
     }
 
-    // Upload images with concurrency limit to avoid wreq-js tokio/Bun epoll conflicts
-    // (too many concurrent wreq-js sessions can corrupt the shared Rust tokio runtime)
+    // Upload images with concurrency limit — impers worker handles concurrency
     let imageFiles: QwenFileAttachment[] = [];
     if (hasImages && accountEmail) {
       const MAX_CONCURRENT = 2;
@@ -408,6 +407,9 @@ export async function chatCompletions(c: Context) {
       `[Chat] Request: model=${body.model} stream=${isStream} msgs=${messages.length} tools=${body.tools?.length || 0} msgSizes=[${messages.map((m: any) => `${m.role}:${typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content).length}`).join(',')}]`,
     );
     logStore.createEntry(logId, body.model, isStream);
+    logStore.updateEntry(logId, (entry) => {
+      entry.apiType = 'openai';
+    });
     const logEntry = logStore.getEntry(logId);
     if (logEntry) populateLogEntry(logEntry, body, messages);
 

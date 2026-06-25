@@ -486,3 +486,255 @@ test('Chat Completions endpoint - Non-streaming (stream: false)', async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test('Anthropic streaming strips XML artifacts from text deltas', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalAccounts = [...accounts];
+
+  accounts.push({
+    email: 'xml-test@qwen-gate.dev',
+    password: 'test',
+    state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
+    lastUsed: 0,
+    throttledUntil: 0,
+    refreshInFlight: null,
+    loginAttempt: 0,
+    inFlight: 0,
+    totalRequests: 0,
+    startupStatus: 'ready',
+  });
+
+  (globalThis as any).fetch = async (input: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.includes('/api/models')) {
+      return new Response(JSON.stringify({ data: [{ id: 'qwen3.7-max', owned_by: 'qwen' }] }), { status: 200 });
+    }
+    if (url.includes('/api/v2/chat/completions')) {
+      const stream = new ReadableStream({
+        start(c) {
+          // Text chunk with XML tool call artifact embedded
+          c.enqueue(
+            new TextEncoder().encode(
+              'data: {"choices":[{"delta":{"phase":"answer","content":"I\'ll check the file. <function=Bash><parameter=command>cat /etc/hostname</parameter></function>"}}]}\n\n',
+            ),
+          );
+          c.enqueue(
+            new TextEncoder().encode('data: {"choices":[{"delta":{"phase":"answer","content":" The hostname is qwen-gate."}}]}\n\n'),
+          );
+          c.enqueue(
+            new TextEncoder().encode(
+              'data: {"choices":[{"delta":{"phase":"local_tool","status":"finished","extra":{"local_mcp":{"★":[{"tool_name":"★-Bash","params":{"command":"cat /etc/hostname"}}]}}}}]}\n\n',
+            ),
+          );
+          c.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+          c.close();
+        },
+      });
+      return new Response(stream, { status: 200 });
+    }
+    return originalFetch(input);
+  };
+
+  try {
+    const payload = {
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 100,
+      stream: true,
+      tools: [
+        {
+          name: 'Bash',
+          description: 'Run a shell command',
+          input_schema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+        },
+      ],
+      messages: [{ role: 'user', content: 'Check hostname' }],
+    };
+
+    const req = new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        ...authHeaders,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const res = await app.fetch(req);
+    assert.strictEqual(res.status, 200, `Expected 200 got ${res.status}`);
+
+    const reader = res.body?.getReader();
+    assert.ok(reader, 'Response should have a readable body');
+
+    const decoder = new TextDecoder();
+    let allSse = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      allSse += decoder.decode(value, { stream: true });
+    }
+
+    const events: any[] = [];
+    for (const line of allSse.split('\n')) {
+      if (line.startsWith('data: ') && line.slice(6) !== '[DONE]') {
+        try {
+          events.push(JSON.parse(line.slice(6)));
+        } catch {
+          /* skip partial */
+        }
+      }
+    }
+
+    // Check that NO text_delta contains XML artifacts
+    const textDeltas = events.filter((e) => e.type === 'content_block_delta' && e.delta?.type === 'text_delta');
+    for (const td of textDeltas) {
+      assert.doesNotMatch(
+        td.delta.text,
+        /<function=|<\/function>|<parameter=/,
+        `text_delta must not contain XML artifacts. Got: ${JSON.stringify(td.delta.text)}`,
+      );
+    }
+
+    // Verify tool_use block exists (from local_mcp)
+    const toolStart = events.find((e) => e.type === 'content_block_start' && e.content_block?.type === 'tool_use');
+    assert.ok(toolStart, `Should have tool_use block`);
+    assert.strictEqual(toolStart.content_block.name, 'Bash');
+    // Per Anthropic spec, content_block_start has input: {}
+    assert.deepStrictEqual(toolStart.content_block.input, {}, 'tool_use start must have empty input');
+
+    // Verify input_json_delta carries the actual args
+    const inputDeltas = events.filter((e) => e.type === 'content_block_delta' && e.delta?.type === 'input_json_delta');
+    assert.ok(inputDeltas.length >= 1, 'Should have at least one input_json_delta event');
+    const parsedInput = JSON.parse(inputDeltas[0].delta.partial_json);
+    assert.strictEqual(parsedInput.command, 'cat /etc/hostname', 'input_json_delta must contain command');
+  } finally {
+    accounts.splice(0, accounts.length, ...originalAccounts);
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Anthropic /v1/messages streaming with local_mcp tool call emits correct tool_use block', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalAccounts = [...accounts];
+
+  // Seed a test account
+  accounts.push({
+    email: 'test@qwen-gate.dev',
+    password: 'test',
+    state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
+    lastUsed: 0,
+    throttledUntil: 0,
+    refreshInFlight: null,
+    loginAttempt: 0,
+    inFlight: 0,
+    totalRequests: 0,
+    startupStatus: 'ready',
+  });
+
+  (globalThis as any).fetch = async (input: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.includes('/api/models')) {
+      return new Response(JSON.stringify({ data: [{ id: 'qwen3.7-max', owned_by: 'qwen' }] }), { status: 200 });
+    }
+    if (url.includes('/api/v2/chat/completions')) {
+      const stream = new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"phase":"answer","content":"I\'ll run that for you."}}]}\n\n'));
+          c.enqueue(
+            new TextEncoder().encode(
+              'data: {"choices":[{"delta":{"phase":"local_tool","status":"finished","extra":{"local_mcp":{"★":[{"tool_name":"★-Bash","params":{"command":"ls -la /tmp"}}]}}}}]}\n\n',
+            ),
+          );
+          c.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+          c.close();
+        },
+      });
+      return new Response(stream, { status: 200 });
+    }
+    return originalFetch(input);
+  };
+
+  try {
+    const payload = {
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 100,
+      stream: true,
+      tools: [
+        {
+          name: 'Bash',
+          description: 'Run a shell command',
+          input_schema: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] },
+        },
+      ],
+      messages: [{ role: 'user', content: 'Run ls in /tmp' }],
+    };
+
+    const req = new Request('http://localhost/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+        ...authHeaders,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const res = await app.fetch(req);
+    assert.strictEqual(
+      res.status,
+      200,
+      `Expected 200 got ${res.status} — body: ${await res
+        .clone()
+        .text()
+        .catch(() => '?')}`,
+    );
+
+    const reader = res.body?.getReader();
+    assert.ok(reader, 'Response should have a readable body');
+
+    const decoder = new TextDecoder();
+    let allSse = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      allSse += decoder.decode(value, { stream: true });
+    }
+
+    // Parse all SSE events
+    const events: any[] = [];
+    for (const line of allSse.split('\n')) {
+      if (line.startsWith('data: ') && line.slice(6) !== '[DONE]') {
+        try {
+          events.push(JSON.parse(line.slice(6)));
+        } catch {
+          /* skip partial */
+        }
+      }
+    }
+
+    // Verify message_start
+    const msgStart = events.find((e) => e.type === 'message_start');
+    assert.ok(msgStart, 'Should have message_start');
+    assert.strictEqual(msgStart.message.role, 'assistant');
+
+    // Find tool_use content block — per spec, input is {} in start event
+    const toolStart = events.find((e) => e.type === 'content_block_start' && e.content_block?.type === 'tool_use');
+    assert.ok(toolStart, `Should have tool_use content_block_start — types: ${[...new Set(events.map((e) => e.type))].join(', ')}`);
+    assert.strictEqual(toolStart.content_block.name, 'Bash', `Tool name should be Bash. Got: ${toolStart.content_block.name}`);
+    assert.deepStrictEqual(toolStart.content_block.input, {}, 'tool_use start must have empty input per spec');
+
+    // Verify input_json_delta carries the actual args
+    const inputDeltas = events.filter((e) => e.type === 'content_block_delta' && e.delta?.type === 'input_json_delta');
+    assert.ok(inputDeltas.length >= 1, 'Should have at least one input_json_delta');
+    const parsedInput = JSON.parse(inputDeltas[0].delta.partial_json);
+    assert.strictEqual(parsedInput.command, 'ls -la /tmp', `input_json_delta must have command. Got: ${JSON.stringify(parsedInput)}`);
+
+    // Verify message_delta stop_reason
+    const msgDelta = events.find((e) => e.type === 'message_delta');
+    assert.ok(msgDelta, 'Should have message_delta');
+    assert.strictEqual(msgDelta.delta.stop_reason, 'tool_use');
+  } finally {
+    accounts.splice(0, accounts.length, ...originalAccounts);
+    globalThis.fetch = originalFetch;
+  }
+});
