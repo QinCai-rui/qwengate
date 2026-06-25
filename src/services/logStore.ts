@@ -88,6 +88,7 @@ export interface LogEntry {
   reasoningContent?: string;
   amplificationRatio?: number;
   amplificationTriggeredInput?: string;
+  apiType?: 'openai' | 'anthropic';
 }
 const MAX_CHUNKS_PER_ENTRY = 100;
 const MAX_FIELD_LENGTH = 10240;
@@ -194,12 +195,6 @@ export class RequestLogStore extends SystemLogger {
     this.updateEntry(id, (entry) => {
       if (entry.qwenRawChunks.length < MAX_CHUNKS_PER_ENTRY) {
         entry.qwenRawChunks.push(chunk);
-      }
-      if (entry.rawFullContent.length < MAX_FIELD_LENGTH) {
-        entry.rawFullContent += chunk;
-        if (entry.rawFullContent.length > MAX_FIELD_LENGTH) {
-          entry.rawFullContent = entry.rawFullContent.substring(0, MAX_FIELD_LENGTH) + '... [truncated]';
-        }
       }
     });
   }
@@ -370,6 +365,7 @@ export class RequestLogStore extends SystemLogger {
         timestamp: entry.timestamp,
         account: entry.accountEmail,
         model: entry.model,
+        api_type: entry.apiType || 'openai',
         finish_reason: entry.finalResponse?.finishReason || null,
         stream: entry.stream,
         latency_ms: entry.latency_ms,

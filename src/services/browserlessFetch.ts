@@ -1,27 +1,27 @@
 /**
- * browserlessFetch — wreq-js wrapper for browserless TLS/HTTP2 impersonation.
+ * browserlessFetch — wreq-js worker wrapper for browserless TLS/HTTP2 impersonation.
  *
- * Uses wreq-js (Rust native addon with Chrome 142 fingerprint) to bypass
- * Alibaba WAF. NLcURL was evaluated but its TLS fingerprint doesn't pass
- * the WAF — only wreq-js Chrome 142 profiles do.
+ * Uses a Node.js sidecar worker running wreq-js (Rust + BoringSSL) with
+ * Chrome 142 fingerprint to bypass Alibaba WAF.
  *
  * Manages:
- *   - TLS/HTTP2 impersonation (wreq-js with Chrome 142 profile)
+ *   - TLS/HTTP2 impersonation (Chrome 142 via wreq worker)
  *   - bx-umidtoken auto-extraction + caching
  *   - bx-v / bx-et static headers
  *   - WAF detection + recovery via Playwright cookie refresh
  */
-import wreq, { type BrowserProfile, type EmulationOS, type Session } from 'wreq-js';
+
+import { logCrash, logEvent, logFetchCall } from '../utils/wreqCrashLogger.ts';
 import { extractBxUmidtoken } from './bxTokenExtractor.ts';
 import { generateBxPp, generateBxUa, refreshCookiesViaBrowser } from './fireyejsRunner.ts';
 import { logStore } from './logStore.ts';
 import { QWEN_API_BASE } from './qwen.ts';
 import { tokenCache } from './tokenCache.ts';
+import { disposeWreqWorker, wreqFetch } from './wreqFetch.ts';
 
-// ponytail: fresh session per request to avoid wreq-js tokio epoll crash.
-// wreq-js uses Rust tokio async runtime which conflicts with Bun's event loop
-// when sessions are reused (epoll fd gets invalidated). Creating a fresh session
-// per request adds ~200ms but avoids the "Bad file descriptor" panic.
+// wreq-js (BoringSSL) is the only transport — bypasses library-level WAF
+// detection that impers (libcurl/OpenSSL) couldn't.
+
 // Single-flight guard: one cookie refresh per account at a time
 const cookieRefreshInFlight = new Map<string, Promise<string | null>>();
 const BX_UMIDTOKEN_TTL_MS = 4 * 60 * 60 * 1000;
@@ -33,17 +33,8 @@ export interface BrowserlessFetchOptions {
   body?: string;
   accountEmail?: string;
   signal?: AbortSignal;
-  /** Chrome browser profile version (default: 'chrome_142') */
-  browser?: BrowserProfile;
-  /** OS for client hints (default: 'linux') */
-  os?: EmulationOS;
-  /** Keep the wreq-js session alive for streaming. Default false — session is closed after response. */
+  /** Keep the session alive for streaming. Default false — session is closed after response. */
   stream?: boolean;
-}
-
-/** Create a fresh wreq-js session (never reuses — avoids tokio epoll crash in Bun). */
-function createSession(browser: BrowserProfile = 'chrome_142', os: EmulationOS = 'linux'): Promise<Session> {
-  return wreq.createSession({ browser, os });
 }
 
 /** Ensure bx-umidtoken is in headers, fetching from cache or sg-wum endpoint. */
@@ -58,38 +49,35 @@ async function ensureBxUmidtoken(headers: Record<string, string>): Promise<void>
 let acwTcRefreshTimer: ReturnType<typeof setInterval> | null = null;
 const ACW_TC_REFRESH_MS = 15 * 60 * 1000; // 15 minutes
 
-/** Fetch acw_tc cookie from the Qwen root page. */
+/** Fetch acw_tc cookie from the Qwen root page via wreq worker. */
 async function refreshAcwTcCookie(): Promise<string | null> {
-  let session: Session | null = null;
   try {
-    session = await createSession();
-    const resp = await session.fetch(QWEN_API_BASE, {
+    logEvent('refreshAcwTcCookie', 'fetching acw_tc from root');
+    const resp = await wreqFetch(QWEN_API_BASE, {
       method: 'GET',
       headers: { accept: 'text/html,application/xhtml+xml' },
+      debugLogDir: process.env.DEBUG_IMPERS_DIR,
     });
+    logFetchCall('refreshAcwTcCookie', QWEN_API_BASE, 'GET', resp.status);
     let acwTc: string | null = null;
-    const setCookie = typeof (resp as any).headers?.get === 'function' ? (resp as any).headers.get('set-cookie') : null;
+    const setCookie = resp.headers.get('set-cookie');
     if (setCookie && setCookie.includes('acw_tc=')) {
       const match = setCookie.match(/acw_tc=([^;]+)/);
       if (match) acwTc = match[1];
     }
-    if (!acwTc) {
-      const sessionCookies = session.getCookies?.(QWEN_API_BASE) || {};
-      acwTc = (sessionCookies as Record<string, string>)['acw_tc'] || null;
-    }
     if (acwTc) {
       tokenCache.set('acw_tc', acwTc, ACW_TC_REFRESH_MS * 2);
       logStore.log('debug', 'browserless', `acw_tc cookie refreshed: ${acwTc.substring(0, 16)}...`);
+      logEvent('refreshAcwTcCookie', 'acw_tc obtained', { acwTc: acwTc.substring(0, 16) });
+    } else {
+      logEvent('refreshAcwTcCookie', 'no acw_tc in response');
     }
     return acwTc;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logStore.log('warn', 'browserless', `acw_tc refresh failed: ${msg}`);
+    logCrash('refreshAcwTcCookie', err);
     return null;
-  } finally {
-    try {
-      await (session as any)?.close?.();
-    } catch {}
   }
 }
 
@@ -120,10 +108,26 @@ async function ensureAcwTcCookie(headers: Record<string, string>): Promise<void>
   }
 }
 
+// ─── WAF check ──────────────────────────────────────────────────────────────
+
+const wafCheck = (r: Response): boolean => {
+  if (r.status === 302) return true;
+  if (r.status === 403) return true;
+  if (r.status === 200) {
+    try {
+      const ct = r.headers.get('content-type') || '';
+      if (ct.includes('text/html')) return true;
+    } catch {
+      /* ignore */
+    }
+  }
+  return false;
+};
+
 /**
  * Make a browserless HTTP request to Qwen API.
  *
- * Returns a standard Response-compatible object.
+ * Returns a standard Web API Response object.
  * Use `response.body.getReader()` for SSE streaming.
  */
 export async function browserlessFetch(url: string, options: BrowserlessFetchOptions = {}): Promise<Response> {
@@ -132,23 +136,7 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
     return globalThis.fetch(url, { method, headers, body });
   }
 
-  const {
-    method = 'GET',
-    headers = {},
-    body,
-    accountEmail,
-    signal,
-    browser: browserProfile = 'chrome_142',
-    os = 'linux',
-    stream,
-  } = options;
-
-  let session = await createSession(browserProfile, os);
-  const closeSession = () => {
-    try {
-      (session as any)?.close?.();
-    } catch {}
-  };
+  const { method = 'GET', headers = {}, body, accountEmail, signal, stream } = options;
 
   // Auto-inject bx tokens
   await ensureBxUmidtoken(headers);
@@ -185,29 +173,23 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
   await ensureAcwTcCookie(headers);
 
   const startTime = Date.now();
+
+  // ─── Initial request via wreq worker ─────────────────────────────────
   try {
-    let response = await session.fetch(url, {
+    logFetchCall('browserlessFetch', url, method);
+    let response = await wreqFetch(url, {
       method,
       headers,
       body,
-      disableDefaultHeaders: true,
+      signal,
+      stream: !!stream,
+      debugLogDir: process.env.DEBUG_IMPERS_DIR,
     });
+    logFetchCall('browserlessFetch', url, method, response.status);
 
-    const wafCheck = (r: any): boolean => {
-      if (r.status === 302) return true;
-      if (r.status === 403) return true;
-      if (r.status === 200) {
-        try {
-          const ct = (r.headers?.get?.('content-type') || '') as string;
-          if (ct.includes('text/html')) return true;
-        } catch {
-          /* ignore */
-        }
-      }
-      return false;
-    };
-
+    // ─── WAF detection + recovery ─────────────────────────────────────
     if (wafCheck(response)) {
+      logEvent('browserlessFetch', 'WAF detected', { url: url.split('?')[0], status: response.status });
       logStore.log('warn', 'browserless', `WAF detected on ${url.split('?')[0]} — trying HTTP refresh first...`);
       const currentCookie = headers['cookie'] || '';
 
@@ -219,7 +201,8 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
       const responseText = await response.text().catch(() => '');
       const isStillWaf = !responseText || responseText.includes('aliyun_waf') || responseText.includes('<html');
       if (!isStillWaf) {
-        return response as unknown as Response;
+        // The acw_tc refresh worked — response body is valid
+        return response;
       }
 
       logStore.log('warn', 'browserless', `HTTP refresh failed — trying Playwright browser...`);
@@ -243,9 +226,17 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
         if (pp) headers['bx-pp'] = pp;
         logStore.log('info', 'browserless', `Retrying ${url.split('?')[0]} with fresh cookies...`);
 
-        closeSession(); // close old WAF'd session
-        session = await createSession(browserProfile, os);
-        response = await session.fetch(url, { method, headers, body, disableDefaultHeaders: true });
+        logEvent('browserlessFetch', 'WAF retry', { url: url.split('?')[0] });
+        logFetchCall('browserlessFetch.retry', url, method);
+        response = await wreqFetch(url, {
+          method,
+          headers,
+          body,
+          signal,
+          stream: !!stream,
+          debugLogDir: process.env.DEBUG_IMPERS_DIR,
+        });
+        logFetchCall('browserlessFetch.retry', url, method, response.status);
         if (wafCheck(response)) {
           throw new Error(`WAF challenge persists after cookie refresh for ${url.split('?')[0]}`);
         }
@@ -258,19 +249,27 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
     const elapsed = Date.now() - startTime;
     logStore.log('debug', 'browserless', `${method} ${url.split('?')[0]} → ${response.status} (${elapsed}ms)`);
 
-    // For streaming: stash close function on the response so caller can clean up
+    // For streaming: stash noop close function so qwen.ts doesn't break
     if (stream) {
-      (response as any)._wreqClose = closeSession;
-      return response as unknown as Response;
+      (response as any)._wreqClose = () => {
+        // Worker creates fresh session per request — nothing to close.
+      };
+      return response;
     }
 
-    // Non-streaming: response fully buffered, close session immediately
-    closeSession();
-    return response as unknown as Response;
+    return response;
   } catch (err) {
-    closeSession(); // cleanup on error too
     const elapsed = Date.now() - startTime;
     const msg = err instanceof Error ? err.message : String(err);
+
+    // Classify crash type for easier analysis
+    const errStr = msg.toLowerCase();
+    if (errStr.includes('waf') || errStr.includes('aliyun_waf') || errStr.includes('403') || errStr.includes('302')) {
+      logEvent('browserlessFetch', 'WAF error', { url: url.split('?')[0], method, error: msg.substring(0, 200), elapsed_ms: elapsed });
+    } else {
+      logCrash('browserlessFetch', err, { url: url.split('?')[0], method, elapsed_ms: elapsed });
+    }
+
     logStore.log('warn', 'browserless', `${method} ${url.split('?')[0]} failed after ${elapsed}ms: ${msg}`);
 
     if (msg.includes('403') || msg.includes('FAIL_SYS_USER_VALIDATE')) {
@@ -281,7 +280,7 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
   }
 }
 
-/** Dispose a session — no-op since sessions are per-request now. */
+/** Dispose the wreq worker process. Call on app shutdown. */
 export async function disposeSession(_accountEmail?: string): Promise<void> {
-  // ponytail: each request creates its own session, nothing to dispose at this level.
+  await disposeWreqWorker();
 }

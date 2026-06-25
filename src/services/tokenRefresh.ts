@@ -6,9 +6,9 @@
 
 import type { AccountEntry } from '../types/auth.ts';
 import { getAuthRefreshBeforeMs, getAuthTokenMaxAgeMs, saveCookies } from './auth.ts';
+import { browserlessFetch } from './browserlessFetch.ts';
 import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
-import { performBrowserFetch, refreshViaProfile } from './playwright.ts';
 
 export function needsRefresh(acct: AccountEntry): boolean {
   if (!acct.state) return true;
@@ -21,49 +21,29 @@ export async function tryRefreshToken(acct: AccountEntry): Promise<boolean> {
   if (!acct.state?.refreshToken) return false;
 
   try {
-    const result = await performBrowserFetch(acct.email, `${QWEN_CHAT_URL}/api/v2/auths/refresh`, {
+    const resp = await browserlessFetch(`${QWEN_CHAT_URL}/api/v2/auths/refresh`, {
       method: 'POST',
       body: JSON.stringify({ refresh_token: acct.state.refreshToken }),
-      timeout: 30000,
     });
 
-    if (result.ok) {
-      const data = JSON.parse(result.body);
-      if (data.data?.token) {
-        acct.state = {
-          token: data.data.token,
-          expiresAt: Date.now() + getAuthTokenMaxAgeMs(),
-          refreshToken: data.data.refresh_token || acct.state.refreshToken,
-        };
-        await saveCookies(acct.email, acct.state.token, acct.state.refreshToken, acct.state.expiresAt);
-        if (acct.throttledUntil > Date.now()) {
-          acct.throttledUntil = 0;
-        }
-        return true;
-      }
-    }
+    if (!resp.ok) return false;
 
-    // If browser fetch fails, fall back to profile-based refresh
-    logStore.log('error', 'auth', `HTTP refresh failed for ${acct.email} — falling back to profile-based refresh`);
-    try {
-      const profileResult = await refreshViaProfile(acct.email);
-      if (profileResult) return true;
-    } catch (profileErr: any) {
-      logStore.log('error', 'auth', `Profile refresh fallback failed for ${acct.email}: ${profileErr.message}`);
-    }
+    const body = await resp.text();
+    const data = JSON.parse(body);
+    if (!data.data?.token) return false;
 
-    return false;
+    acct.state = {
+      token: data.data.token,
+      expiresAt: Date.now() + getAuthTokenMaxAgeMs(),
+      refreshToken: data.data.refresh_token || acct.state.refreshToken,
+    };
+    await saveCookies(acct.email, acct.state.token, acct.state.refreshToken, acct.state.expiresAt);
+    if (acct.throttledUntil > Date.now()) {
+      acct.throttledUntil = 0;
+    }
+    return true;
   } catch (err: any) {
     logStore.log('error', 'auth', 'HTTP fetch failed:', err);
-    try {
-      const profileResult = await refreshViaProfile(acct.email);
-      if (profileResult) {
-        logStore.log('error', 'auth', `Token refreshed via profile for ${acct.email} (after network error)`);
-        return true;
-      }
-    } catch (innerErr: any) {
-      logStore.log('error', 'auth', `Profile refresh fallback failed: ${innerErr}`);
-    }
     return false;
   }
 }

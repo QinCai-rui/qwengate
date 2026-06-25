@@ -1,7 +1,7 @@
 // Test suite for Qwen-to-Anthropic tool call conversion
 // Tests both streaming and non-streaming paths
 
-import { expect, test, describe, mock } from 'bun:test';
+import { describe, expect, mock, test } from 'bun:test';
 
 // ── Mocks ────────────────────────────────────────────────────────────
 
@@ -460,8 +460,7 @@ describe('anthropicToolsToOpenAI', () => {
   });
 
   test('returns empty array for no tools', async () => {
-    const tools = undefined;
-    const converted = !tools?.length ? [] : tools.map((t: any) => ({}));
+    const converted: any[] = [];
     expect(converted).toEqual([]);
   });
 });
@@ -477,16 +476,16 @@ describe('Anthropic streaming tool call pipeline', () => {
     // 2. Accumulate local_mcp tool calls
     // 3. Merge deduped
 
-    const xmlToolCalls = [{ id: 'call_xml1', name: 'Bash', arguments: { command: 'ls' } }];
+    const xmlToolCalls: any[] = [{ id: 'call_xml1', name: 'Bash', arguments: { command: 'ls' } }];
 
-    const localMcpCalls = [
+    const localMcpCalls: any[] = [
       { id: 'call_mcp1', name: 'Bash', arguments: { command: 'ls' } }, // same tool, different ID
       { id: 'call_mcp2', name: 'Read', arguments: { file_path: '/tmp/x' } },
     ];
 
-    const allToolCalls = [...xmlToolCalls];
+    const allToolCalls: any[] = [...xmlToolCalls];
     for (const ltc of localMcpCalls) {
-      if (!allToolCalls.some((e) => e.id === ltc.id)) allToolCalls.push(ltc);
+      if (!allToolCalls.some((e: any) => e.id === ltc.id)) allToolCalls.push(ltc);
     }
 
     // No dedup by name — only by ID
@@ -1080,9 +1079,9 @@ describe('local_mcp pipeline to Claude Code', () => {
     const localMcpCalls = extractLocalMcpToolCalls(sseChunk);
 
     // Step 3: Merge (same as line 743-747)
-    const allToolCalls = [...xmlParsedCalls];
+    const allToolCalls: any[] = [...xmlParsedCalls];
     for (const ltc of localMcpCalls) {
-      if (!allToolCalls.some((e) => e.id === ltc.id)) allToolCalls.push(ltc);
+      if (!allToolCalls.some((e: any) => e.id === ltc.id)) allToolCalls.push(ltc);
     }
     // Both pass — XML and local_mcp have different IDs
     expect(allToolCalls.length).toBe(2);
