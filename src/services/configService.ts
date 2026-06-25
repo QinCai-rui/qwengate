@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { projectPath } from '../utils/paths.ts';
 import { logStore } from './logStore.ts';
 
@@ -28,6 +29,7 @@ export interface ConfigSchema {
   STREAM_IDLE_TIMEOUT_MS: string;
   MODELS_CACHE_TTL_MS: string;
   DARK_MODE: string;
+  CLAUDE_CODE_PROXY: string;
 }
 
 export const DEFAULT_CONFIG: ConfigSchema = {
@@ -56,6 +58,7 @@ export const DEFAULT_CONFIG: ConfigSchema = {
   STREAM_IDLE_TIMEOUT_MS: '60000',
   MODELS_CACHE_TTL_MS: '3600000',
   DARK_MODE: 'false',
+  CLAUDE_CODE_PROXY: 'false',
 };
 
 const CONFIG_KEYS = new Set<string>(Object.keys(DEFAULT_CONFIG));
@@ -196,6 +199,60 @@ export class ConfigService {
 
   reset(): void {
     this.load();
+  }
+}
+
+/** Write or remove `.claude/settings.json` with proxy config for Claude Code. */
+export function updateClaudeCodeSettings(cfg: ConfigSchema): void {
+  const enabled = cfg.CLAUDE_CODE_PROXY === 'true';
+  const settingsDir = projectPath('.claude');
+  const settingsFile = join(settingsDir, 'settings.json');
+
+  if (enabled) {
+    const host = cfg.HOST || 'localhost';
+    const port = cfg.PORT || '26405';
+    const baseUrl = `http://${host}:${port}`;
+    const settings = {
+      _comment: 'Managed by qwen-gate — CLAUDE_CODE_PROXY toggle in dashboard',
+      env: {
+        ANTHROPIC_BASE_URL: baseUrl,
+        ANTHROPIC_AUTH_TOKEN: 'unused',
+      },
+    };
+    try {
+      mkdirSync(settingsDir, { recursive: true });
+      writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n');
+    } catch (err) {
+      console.error('[Claude Code] Failed to write .claude/settings.json:', err);
+    }
+  } else {
+    // Remove managed proxy entry from .claude/settings.json
+    try {
+      if (existsSync(settingsFile)) {
+        const raw = readFileSync(settingsFile, 'utf-8');
+        const content = JSON.parse(raw);
+        // Only touch files we manage (have our _comment marker or ANTHROPIC_BASE_URL)
+        if (content._comment?.includes('qwen-gate') || content.env?.ANTHROPIC_BASE_URL) {
+          delete content._comment;
+          delete content.env?.ANTHROPIC_BASE_URL;
+          delete content.env?.ANTHROPIC_AUTH_TOKEN;
+          if (content.env && Object.keys(content.env).length === 0) delete content.env;
+          if (Object.keys(content).length === 0) {
+            unlinkSync(settingsFile);
+            // Also remove .claude dir if empty
+            try {
+              const rest = readdirSync(settingsDir);
+              if (rest.length === 0) rmdirSync(settingsDir);
+            } catch {}
+          } else {
+            writeFileSync(settingsFile, JSON.stringify(content, null, 2) + '\n');
+          }
+          console.log('[Claude Code] Proxy disabled — .claude/settings.json cleaned');
+        }
+      }
+    } catch {
+      // best effort cleanup
+    }
   }
 }
 
