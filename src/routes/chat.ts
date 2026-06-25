@@ -1,38 +1,28 @@
 import crypto from 'node:crypto';
 import { Context } from 'hono';
-import { pickAccount, throttleAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
-import { modelRouter } from '../services/modelRouter.ts';
-import { RetryableQwenStreamError } from '../services/qwen.ts';
-import type { QwenFileAttachment } from '../services/qwenFileUpload.ts';
-import { uploadImageAsFile, uploadLargeTextAsFile } from '../services/qwenFileUpload.ts';
-import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import { OpenAIRequest } from '../types/openai.ts';
 import { checkContextWindow, estimateTokens } from '../utils/tokenEstimator.ts';
 import { validateOpenAIRequest } from '../utils/validation.ts';
-import {
-  acquireSessionWithCorrections,
-  buildQwenMessages,
-  createQwenStreamWithRetry,
-  getModelSpecs,
-  handleImageModelFallback,
-} from './chatHelpers.ts';
-import { handleNonStreamingRequest } from './chatNonStreaming.ts';
-import { handleStreamingRequest } from './chatStreaming.ts';
+import { getModelSpecs, handleImageModelFallback } from './modelSpecs.ts';
+import { providerForModel } from './providerRegistry.ts';
+// Side-effect imports — provider modules self-register with the registry at import time.
+import './providerDeepSeek.ts';
+import './providerZai.ts';
+import { handleQwen } from './providers/qwen/handler.ts';
 
 export {
   commonPrefixLen,
   getNewContent,
-} from './chatHelpers.ts';
+} from './chatHelpersCore.ts';
 
-const MAX_MESSAGE_SIZE = 10_000_000; // 10MB — large payloads are uploaded as files via Qwen's file API
+const MAX_MESSAGE_SIZE = 10_000_000; // 10MB
 
 async function parseRequestBody(c: Context) {
   const rawBody = await c.req.json();
 
-  // Schema validation via zod — catches malformed requests early
   const validation = validateOpenAIRequest(rawBody);
   if (!validation.ok) {
     const err = new Error(validation.error!);
@@ -44,7 +34,7 @@ async function parseRequestBody(c: Context) {
 
   const body = validation.data as unknown as OpenAIRequest;
 
-  // Per-message size validation to prevent OOM during estimateTokens
+  // Per-message size validation
   if (body.messages && Array.isArray(body.messages)) {
     for (const msg of body.messages) {
       const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
@@ -87,338 +77,18 @@ async function parseRequestBody(c: Context) {
   };
 }
 
-async function setupSession(messages: any[], body: OpenAIRequest, availableTokens: number, toolCalling: boolean, logId: string) {
-  // ── Image detection ──────────────────────────────────────────
-  // Only scan the LAST message — previous turns already uploaded their images
-  let hasImages = false;
-  const imageUrls: string[] = [];
-
-  const lastMsg = messages[messages.length - 1];
-  if (lastMsg && Array.isArray(lastMsg.content)) {
-    for (const part of lastMsg.content) {
-      if (part?.type === 'image_url' && part?.image_url?.url) {
-        hasImages = true;
-        imageUrls.push(part.image_url.url);
-      }
-    }
-  }
-
-  // Strip image_url parts only from the last message
-  // (older messages shouldn't have them, but handle for safety)
-  let cleanedMessages = messages;
-  if (hasImages) {
-    cleanedMessages = messages.map((msg: any, idx: number) => {
-      if (idx !== messages.length - 1) return msg; // only strip last message
-      if (!Array.isArray(msg.content)) return msg;
-      const textParts = msg.content.filter((c: any) => c.type !== 'image_url');
-      return { ...msg, content: textParts.length > 0 ? textParts : [{ type: 'text', text: '[Image]' }] };
-    });
-  }
-
-  const {
-    qwenMessages: processedMessages,
-    systemContent,
-    toolResultsContent,
-  } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
-
-  // ── Inline content truncation ─────────────────────────────────
-  // Keep the most recent ~50k characters inline; push older history
-  // into context.txt so the model can reference it when needed.
-  const MAX_INLINE_CHARS = 50000;
-  let inlineContent = processedMessages[0].content as string;
-  let chatHistoryContent = '';
-
-  if (typeof inlineContent === 'string' && inlineContent.length > MAX_INLINE_CHARS) {
-    // Split on message boundaries: \n\n followed by <user> or <assist>
-    const parts = inlineContent.split(/\n\n(?=<user>|<assist>)/);
-
-    // Walk backwards — keep as many recent segments as fit within limit
-    let keptLen = 0;
-    let splitIdx = parts.length;
-    for (let i = parts.length - 1; i >= 0; i--) {
-      const addLen = parts[i].length + (keptLen > 0 ? 2 : 0);
-      if (keptLen + addLen <= MAX_INLINE_CHARS) {
-        keptLen += addLen;
-        splitIdx = i;
-      } else {
-        break;
-      }
-    }
-
-    // ponytail: simple character-based split at message boundaries.
-    // If models need more precise token-aware splitting, add later.
-    if (splitIdx > 0) {
-      chatHistoryContent = parts.slice(0, splitIdx).join('\n\n');
-      inlineContent = parts.slice(splitIdx).join('\n\n');
-      processedMessages[0] = { ...processedMessages[0], content: inlineContent };
-    }
-  }
-
-  // File upload happens inside retry loop using the same account as the request
-  // (accounts can't access files uploaded by other accounts — must share the account)
-  let lastFailedEmail: string | undefined;
-
-  const isThinkingModel = !body.model.includes('no-thinking');
-  const MAX_ACCOUNT_RETRIES = 5;
-  let lastError: any;
-
-  for (let attempt = 0; attempt < MAX_ACCOUNT_RETRIES; attempt++) {
-    const selectedAccount = await pickAccount(lastFailedEmail);
-    const accountEmail = selectedAccount?.email;
-    if (!selectedAccount && attempt > 0) {
-      // On retry: if still no accounts, all are throttled — stop retrying
-      throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
-    }
-
-    // Upload images with concurrency limit — impers worker handles concurrency
-    let imageFiles: QwenFileAttachment[] = [];
-    if (hasImages && accountEmail) {
-      const MAX_CONCURRENT = 2;
-      for (let i = 0; i < imageUrls.length; i += MAX_CONCURRENT) {
-        const batch = imageUrls.slice(i, i + MAX_CONCURRENT);
-        const results = await Promise.all(
-          batch.map((url) =>
-            uploadImageAsFile(accountEmail, url).catch((err: any) => {
-              logStore.log('warn', 'chat', `[Chat] Image upload failed: ${err.message}`);
-              return null;
-            }),
-          ),
-        );
-        imageFiles.push(...results.filter((f): f is QwenFileAttachment => f !== null));
-      }
-      if (imageFiles.length === 0) {
-        throw new Error('Failed to upload images — none of the image files could be uploaded');
-      }
-    }
-
-    // Upload a single context file: system instructions + tool results + older chat history
-    // Merging cuts upload overhead in half (one STS token, one OSS upload, one parse poll)
-    if (accountEmail && (systemContent || toolResultsContent || chatHistoryContent)) {
-      const parts: string[] = [];
-      if (systemContent) parts.push(`<system-instructions>\n${systemContent}\n</system-instructions>`);
-      if (toolResultsContent) parts.push(`<tool-results>\n${toolResultsContent}\n</tool-results>`);
-      if (chatHistoryContent) parts.push(`<chat_history>\n${chatHistoryContent}\n</chat_history>`);
-      const combinedContent = parts.join('\n\n');
-      try {
-        const file = await uploadLargeTextAsFile(accountEmail, combinedContent, 'context.txt');
-        processedMessages[0] = { ...processedMessages[0], files: [file] };
-      } catch (err: any) {
-        logStore.log('debug', 'chat', '[Chat] Failed to upload context file: ' + (err.message || err));
-      }
-    }
-
-    // Attach uploaded images to the first message
-    if (imageFiles.length > 0) {
-      processedMessages[0] = {
-        ...processedMessages[0],
-        files: [...(processedMessages[0].files || []), ...imageFiles],
-      };
-    }
-
-    let sessionResult;
-    try {
-      sessionResult = await acquireSessionWithCorrections(accountEmail, processedMessages);
-    } catch (err) {
-      lastFailedEmail = accountEmail;
-      lastError = err;
-      logStore.log(
-        'warn',
-        'chat',
-        `[Chat] Session acquire failed for ${accountEmail || '?'}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      logStore.addError(logId, `Session acquire failed for ${accountEmail || '?'}: ${err instanceof Error ? err.message : String(err)}`);
-      continue; // Try next account
-    }
-    const { session, qwenMessages: sessionMessages, nextParentId, sessionHeaders, resolvedEmail } = sessionResult;
-
-    // Populate the account that served this request
-    logStore.updateEntry(logId, (entry) => {
-      entry.accountEmail = resolvedEmail;
-    });
-
-    let routedModel;
-    let streamResult;
-    try {
-      routedModel = await modelRouter.route(body.model);
-      streamResult = await createQwenStreamWithRetry(
-        sessionMessages,
-        isThinkingModel,
-        routedModel,
-        session.chatId,
-        nextParentId,
-        resolvedEmail,
-        body.tools,
-        body.tool_choice,
-      );
-    } catch (err: any) {
-      // Release the acquired session to prevent pool exhaustion + inFlight leak
-      sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
-
-      logStore.log(
-        'debug',
-        'chat',
-        `[Chat] Request failed on ${resolvedEmail}: ${err.message || err} (attempt ${attempt + 1}/${MAX_ACCOUNT_RETRIES})`,
-      );
-      logStore.addError(logId, `Stream creation failed for ${resolvedEmail}: ${err.message || String(err)}`);
-
-      // If rate limited, try next account — Qwen didn't process the request yet
-      if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
-        lastFailedEmail = resolvedEmail;
-        lastError = err;
-        continue;
-      }
-      // Bot detection / CAPTCHA: Qwen rejected BEFORE processing (safe to retry on another account).
-      // Throttle the detected account so pickAccount won't pick it again.
-      if (
-        (err.message || '').includes('FAIL_SYS_USER_VALIDATE') ||
-        (err.message || '').includes('CAPTCHA') ||
-        err instanceof RetryableQwenStreamError
-      ) {
-        lastFailedEmail = resolvedEmail;
-        lastError = err;
-        if (resolvedEmail) throttleAccount(resolvedEmail, 5 * 60 * 1000);
-        continue;
-      }
-      // Timeout / slow response: Qwen didn't respond in time — skip to next account without penalty
-      if (
-        err.name === 'AbortError' ||
-        (err.message || '').includes('timed out') ||
-        (err.message || '').includes('timeout') ||
-        (err.message || '').includes('ETIMEDOUT') ||
-        err.upstreamStatus === 408 ||
-        err.upstreamStatus === 504
-      ) {
-        lastFailedEmail = resolvedEmail;
-        lastError = err;
-        continue;
-      }
-      // All other errors (network, session): Qwen may have processed the request.
-      // Don't throttle — let the user retry manually.
-      throw err;
-    }
-    let { stream, abortController: qwenAbortController } = streamResult;
-
-    // First-chunk timeout: Qwen sometimes sends HTTP headers but never body data (silent hang).
-    // Wait up to 60s for the first byte. If none arrives, release this session and try next account.
-    const FIRST_CHUNK_MS = 60_000;
-    const streamReader = stream.getReader();
-    let firstChunk: any;
-    let firstChunkTimer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      firstChunk = await Promise.race([
-        streamReader.read(),
-        new Promise<never>((_, reject) => {
-          firstChunkTimer = setTimeout(
-            () => reject(new Error(`No first chunk from ${resolvedEmail} within ${FIRST_CHUNK_MS / 1000}s`)),
-            FIRST_CHUNK_MS,
-          );
-        }),
-      ]);
-    } catch (timeoutErr) {
-      clearTimeout(firstChunkTimer);
-      logStore.log(
-        'warn',
-        'chat',
-        `[Chat] First-chunk timeout for ${resolvedEmail} after stream started (${attempt + 1}/${MAX_ACCOUNT_RETRIES})`,
-      );
-      logStore.addError(logId, `First-chunk timeout for ${resolvedEmail}`);
-      streamReader.cancel().catch(() => {});
-      qwenAbortController?.abort();
-      sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
-      lastFailedEmail = resolvedEmail;
-      lastError = timeoutErr as Error;
-      continue;
-    }
-    clearTimeout(firstChunkTimer);
-
-    // Reconstruct stream with the first chunk prepended, then pipe remaining data through.
-    // This lets us keep the first chunk (already read) while allowing async consumption.
-    stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        if (!firstChunk.done && firstChunk.value) controller.enqueue(firstChunk.value);
-        try {
-          while (true) {
-            const { done, value } = await streamReader.read();
-            if (done) break;
-            controller.enqueue(value);
-          }
-          controller.close();
-        } catch (err) {
-          controller.error(err);
-        }
-      },
-    });
-
-    // Build finalPrompt for logStore debug logging only
-    const finalPrompt = sessionMessages
-      .map((m: any) => {
-        const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '');
-        return `${m.role}: ${content}`;
-      })
-      .join('\n\n');
-    logStore.updateEntry(logId, (entry) => {
-      entry.promptToQwen = {
-        systemPromptLength: 0,
-        totalLength: finalPrompt.length,
-        preview: finalPrompt.length > 1000 ? finalPrompt.substring(0, 1000) + '...' : finalPrompt,
-      };
-    });
-
-    logStore.log('debug', 'chat', `[Chat] Request routed to ${resolvedEmail} — stream ready (attempt ${attempt + 1})`);
-
-    return {
-      sessionMessages,
-      session,
-      nextParentId,
-      sessionHeaders,
-      resolvedEmail,
-      stream,
-      qwenAbortController,
-    };
-  }
-
-  // All account retries exhausted — throw a clean user-facing error
-  throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
-}
-
-function populateLogEntry(logEntry: any, body: OpenAIRequest, messages: any[]): void {
-  const rawContent = messages.length > 0 ? messages[messages.length - 1].content : '';
-  const lastMsg = typeof rawContent === 'string' ? rawContent : rawContent !== undefined ? JSON.stringify(rawContent) : '';
-  logEntry.clientRequest = {
-    messageCount: messages.length,
-    roles: messages.map((m) => m.role),
-    hasTools: !!body.tools?.length,
-    toolNames: body.tools?.map((t: any) => t.function?.name || t.name) || [],
-    tool_choice: body.tool_choice ? (typeof body.tool_choice === 'string' ? body.tool_choice : JSON.stringify(body.tool_choice)) : null,
-    lastMessage: lastMsg.substring(0, 300),
-    messages: messages.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) })),
-  };
-}
-
 export async function chatCompletions(c: Context) {
-  const logId = crypto.randomUUID();
   const _requestStartTime = Date.now();
   try {
     const parsed = await parseRequestBody(c);
-    const { body, isStream, toolCalling, cleanOutput, messages, contextCheck } = parsed;
+    const { body, toolCalling, cleanOutput, messages, contextCheck } = parsed;
     logStore.log(
       'debug',
       'chat',
-      `[Chat] Request: model=${body.model} stream=${isStream} msgs=${messages.length} tools=${body.tools?.length || 0} msgSizes=[${messages.map((m: any) => `${m.role}:${typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content).length}`).join(',')}]`,
+      `[Chat] Request: model=${body.model} stream=${body.stream} msgs=${messages.length} tools=${body.tools?.length || 0}`,
     );
-    logStore.createEntry(logId, body.model, isStream);
-    logStore.updateEntry(logId, (entry) => {
-      entry.apiType = 'openai';
-    });
-    const logEntry = logStore.getEntry(logId);
-    if (logEntry) populateLogEntry(logEntry, body, messages);
 
     if (!contextCheck.ok) {
-      logStore.updateEntry(logId, (entry) => {
-        entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
-        entry.finalResponse.finishReason = 'context_window_exceeded';
-      });
-      logStore.finalizeRequest(logId);
       return c.json(
         {
           error: {
@@ -432,70 +102,17 @@ export async function chatCompletions(c: Context) {
       );
     }
 
-    const { session, nextParentId, sessionHeaders, resolvedEmail, stream, qwenAbortController } = await setupSession(
-      messages,
-      body,
-      contextCheck.availableTokens!,
-      toolCalling,
-      logId,
-    );
-
-    const completionId = 'chatcmpl-' + crypto.randomUUID();
-
-    if (!isStream) {
-      return handleNonStreamingRequest({
-        c,
-        logId,
-        completionId,
-        body,
-        session,
-        stream,
-        resolvedEmail,
-        initialParentId: nextParentId,
-        sessionHeaders,
-        toolCalling,
-        cleanOutput,
-      });
+    // Multi-provider routing
+    const providerRoute = providerForModel(body.model);
+    if (providerRoute) {
+      logStore.log('info', 'chat', `[Chat] Routing model=${body.model} to provider=${providerRoute.prefix}`);
+      return providerRoute.handler(c, body);
     }
 
-    return await handleStreamingRequest({
-      c,
-      logId,
-      completionId,
-      body,
-      session,
-      stream,
-      qwenAbortController,
-      resolvedEmail,
-      initialParentId: nextParentId,
-      sessionHeaders,
-      toolCalling,
-      cleanOutput,
-    });
+    // Default: Qwen provider
+    return handleQwen(c, body, contextCheck.availableTokens!);
   } catch (err: any) {
     console.error(`[Chat] <<< Request failed after ${Date.now() - _requestStartTime}ms: ${err?.message || err}`);
-    console.error('Error in chatCompletions:', err);
-    logStore.addError(logId, err.message || String(err));
-    logStore.updateEntry(logId, (entry) => {
-      entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
-      entry.finalResponse.finishReason = 'error';
-    });
-    logStore.finalizeRequest(logId);
-
-    // Rate limit errors after all accounts exhausted — clean user-facing message
-    if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
-      return c.json(
-        {
-          error: {
-            message: 'All accounts have reached their daily usage limit. Please try again later.',
-            type: 'rate_limit_error',
-            code: 'rate_limit_exceeded',
-          },
-        },
-        429,
-      );
-    }
-
     const status = err.upstreamStatus || 500;
     const cleanMessage = cleanTextOfXmlArtifacts(err.message || String(err)).cleanedText || err.message || 'Internal error';
     return c.json(

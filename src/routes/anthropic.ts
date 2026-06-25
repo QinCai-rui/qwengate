@@ -1,539 +1,31 @@
 import crypto from 'node:crypto';
 import { Context } from 'hono';
 import { stream as honoStream } from 'hono/streaming';
-import { pickAccount, throttleAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
-import { modelRouter } from '../services/modelRouter.ts';
-import { RetryableQwenStreamError } from '../services/qwen.ts';
-import type { QwenFileAttachment } from '../services/qwenFileUpload.ts';
-import { uploadImageAsFile, uploadLargeTextAsFile } from '../services/qwenFileUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
 import type { OpenAIRequest, ParsedToolCall } from '../types/openai.ts';
 import { checkContextWindow, estimateTokens } from '../utils/tokenEstimator.ts';
+import { getModelSpecs, handleImageModelFallback } from './modelSpecs.ts';
+import { extractDeltaContent } from './providers/qwen/qwen-utils.ts';
+import type { NonStreamingContext } from './providers/qwen/pipeline-nonstream.ts';
+import { handleNonStreamingRequest } from './providers/qwen/pipeline-nonstream.ts';
+import { extractLocalMcpToolCalls } from './providers/qwen/pipeline-stream.ts';
+import { setupSession } from './providers/qwen/session.ts';
 import {
-  acquireSessionWithCorrections,
-  buildQwenMessages,
-  createQwenStreamWithRetry,
-  extractDeltaContent,
-  getModelSpecs,
-  handleImageModelFallback,
-} from './chatHelpers.ts';
-import type { NonStreamingContext } from './chatNonStreaming.ts';
-import { handleNonStreamingRequest } from './chatNonStreaming.ts';
-import { extractLocalMcpToolCalls } from './chatStreamingHelpers.ts';
-
-// ── Anthropic → Qwen model map ─────────────────────────────────────
-
-// ponytail: use dotted model names matching the Qwen API (/v1/models response).
-// models.json keys use dashes (qwen3-7-max) but Qwen API expects dots (qwen3.7-max).
-const ANTHROPIC_TO_QWEN: Record<string, string> = {
-  'claude-sonnet-4-20250514': 'qwen3.7-max',
-  'claude-sonnet-4-20241022': 'qwen3.6-plus',
-  'claude-3-5-sonnet-20241022': 'qwen3.6-plus',
-  'claude-opus-4-20250514': 'qwen3.7-max',
-  'claude-opus-4-8': 'qwen3.7-max',
-  'claude-sonnet-4-8': 'qwen3.7-max',
-  'claude-3-opus-20240229': 'qwen3.7-max',
-  'claude-sonnet-4-6-20250514': 'qwen3.7-max',
-  'claude-3-haiku-20240307': 'qwen3.5-flash',
-};
-const DEFAULT_QWEN_MODEL = 'qwen3.7-max';
-
-function mapModel(anthropicModel: string): string {
-  return ANTHROPIC_TO_QWEN[anthropicModel] || DEFAULT_QWEN_MODEL;
-}
-
-// ── Request conversion ─────────────────────────────────────────────
-
-interface AnthropicContentBlock {
-  type: string;
-  text?: string;
-  source?: { type: string; media_type?: string; data?: string };
-  id?: string;
-  name?: string;
-  input?: unknown;
-  tool_use_id?: string;
-  content?: string | AnthropicContentBlock[];
-}
-
-interface AnthropicMessage {
-  role: string;
-  content: string | AnthropicContentBlock[];
-}
-
-function anthropicMessagesToOpenAI(messages: AnthropicMessage[], system?: string): any[] {
-  const out: any[] = [];
-  if (system) {
-    out.push({ role: 'system', content: system });
-  }
-  for (const msg of messages) {
-    if (msg.role === 'user') {
-      if (typeof msg.content === 'string') {
-        out.push({ role: 'user', content: msg.content });
-      } else if (Array.isArray(msg.content)) {
-        const textParts: string[] = [];
-        const imageParts: any[] = [];
-        let hasToolResult = false;
-        for (const block of msg.content) {
-          if (block.type === 'text') {
-            textParts.push(block.text || '');
-          } else if (block.type === 'image') {
-            const src = block.source;
-            if (src?.type === 'base64' && src.media_type && src.data) {
-              imageParts.push({ type: 'image_url', image_url: { url: `data:${src.media_type};base64,${src.data}` } });
-            } else if (src?.type === 'url' && src.data) {
-              imageParts.push({ type: 'image_url', image_url: { url: src.data } });
-            }
-          } else if (block.type === 'tool_result') {
-            hasToolResult = true;
-            const tc = typeof block.content === 'string' ? block.content : '';
-            out.push({ role: 'tool', tool_call_id: block.tool_use_id, content: tc });
-          } else {
-            console.warn(`[Anthropic] Unknown content block: ${block.type}`);
-          }
-        }
-        if (!hasToolResult) {
-          if (imageParts.length > 0) {
-            const content: any[] = [];
-            if (textParts.length > 0) content.push({ type: 'text', text: textParts.join('\n') });
-            content.push(...imageParts);
-            out.push({ role: 'user', content });
-          } else {
-            out.push({ role: 'user', content: textParts.join('\n') });
-          }
-        }
-      }
-    } else if (msg.role === 'assistant') {
-      if (typeof msg.content === 'string') {
-        out.push({ role: 'assistant', content: msg.content });
-      } else if (Array.isArray(msg.content)) {
-        const textParts: string[] = [];
-        const toolCalls: any[] = [];
-        for (const block of msg.content) {
-          if (block.type === 'text') {
-            textParts.push(block.text || '');
-          } else if (block.type === 'tool_use') {
-            toolCalls.push({
-              id: block.id,
-              type: 'function',
-              function: { name: block.name, arguments: JSON.stringify(block.input || {}) },
-            });
-          } else if (block.type === 'thinking' || block.type === 'redacted_thinking') {
-            // ponytail: skip thinking blocks — model reasoning, not input to Qwen
-          } else {
-            console.warn(`[Anthropic] Unknown assistant block: ${block.type}`);
-          }
-        }
-        const text = textParts.join('\n');
-        if (toolCalls.length > 0) {
-          out.push({ role: 'assistant', content: text || null, tool_calls: toolCalls });
-        } else {
-          out.push({ role: 'assistant', content: text });
-        }
-      }
-    }
-  }
-  return out;
-}
-
-function anthropicToolsToOpenAI(tools?: any[]): any[] {
-  if (!tools?.length) return [];
-  return tools.map((t: any) => ({
-    type: 'function',
-    function: { name: t.name, description: t.description || '', parameters: t.input_schema || { type: 'object', properties: {} } },
-  }));
-}
-
-// ── Response conversion ────────────────────────────────────────────
-
-function finishReasonToAnthropic(reason: string): string {
-  if (reason === 'stop') return 'end_turn';
-  if (reason === 'tool_calls') return 'tool_use';
-  if (reason === 'length') return 'max_tokens';
-  return 'end_turn';
-}
-
-// ponytail: normalize Qwen tool name case to match Claude Code conventions
-function normalizeToolName(name: string): string {
-  const CASE_MAP: Record<string, string> = {
-    bash: 'Bash',
-    read: 'Read',
-    edit: 'Edit',
-    write: 'Write',
-    websearch: 'WebSearch',
-    web_search: 'WebSearch',
-  };
-  return CASE_MAP[name] || name;
-}
-
-// ponytail: simple formatter for Anthropic content blocks in log display
-function formatContent(content: any): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return JSON.stringify(content);
-  return content
-    .map((b: any) => {
-      if (b.type === 'text') return b.text || '';
-      if (b.type === 'tool_use') return `[Tool: ${b.name}]`;
-      if (b.type === 'tool_result') {
-        const r = typeof b.content === 'string' ? b.content : JSON.stringify(b.content);
-        return `[Result: ${r}]`;
-      }
-      if (b.type === 'thinking') return '';
-      return JSON.stringify(b);
-    })
-    .filter(Boolean)
-    .join('\n');
-}
-
-function convertOpenAIResponseToAnthropic(openAIResp: any, requestModel: string): any {
-  const choice = openAIResp.choices?.[0];
-  const message = choice?.message || {};
-  const content: any[] = [];
-  if (message.content) {
-    content.push({ type: 'text', text: message.content });
-  }
-
-  // ponytail: static Claude Code required param map — adapt if tools vary
-  const REQUIRED_PARAMS: Record<string, string[]> = {
-    Bash: ['command'],
-    Read: ['filePath'],
-    Edit: ['filePath', 'oldString', 'newString'],
-    Write: ['filePath', 'content'],
-  };
-
-  function mapParamName(paramName: string): string {
-    const SNAKE_TO_CAMEL: Record<string, string> = {
-      file_path: 'filePath',
-      old_string: 'oldString',
-      new_string: 'newString',
-    };
-    return SNAKE_TO_CAMEL[paramName] || paramName;
-  }
-
-  function isValidToolCall(name: string, args: any): boolean {
-    const required = REQUIRED_PARAMS[name];
-    if (required) {
-      const missing = required.filter((p) => args[p] === undefined || args[p] === null || args[p] === '');
-      if (missing.length > 0) return false;
-    } else if (!args || typeof args !== 'object' || Object.keys(args).length === 0) {
-      return false;
-    }
-    return true;
-  }
-
-  if (message.tool_calls) {
-    for (const tc of message.tool_calls) {
-      let args: any = {};
-      try {
-        args = JSON.parse(tc.function.arguments);
-      } catch {
-        /* ignore */
-      }
-      if (!args || typeof args !== 'object') continue;
-      // Map snake_case to camelCase
-      const mapped: any = {};
-      for (const [k, v] of Object.entries(args)) {
-        mapped[mapParamName(k)] = v;
-      }
-      const normalizedName = normalizeToolName(tc.function.name);
-      if (!isValidToolCall(normalizedName, mapped)) {
-        logStore.log(
-          'debug',
-          'chat',
-          `[Anthropic] Skipped invalid tool call in non-streaming: ${tc.function?.name} args=${JSON.stringify(mapped)}`,
-        );
-        continue;
-      }
-      content.push({ type: 'tool_use', id: tc.id, name: normalizedName, input: mapped });
-    }
-  }
-  // Anthropic doesn't send text + tool_use together — prefer tool_use
-  if (content.length > 1 && content.some((c: any) => c.type === 'tool_use')) {
-    const toolBlocks = content.filter((c: any) => c.type === 'tool_use');
-    content.length = 0;
-    content.push(...toolBlocks);
-  }
-  return {
-    id: 'msg_' + crypto.randomUUID(),
-    type: 'message',
-    role: 'assistant',
-    content,
-    model: requestModel,
-    stop_reason: finishReasonToAnthropic(choice?.finish_reason),
-    stop_sequence: null,
-    usage: { input_tokens: openAIResp.usage?.prompt_tokens || 0, output_tokens: openAIResp.usage?.completion_tokens || 0 },
-  };
-}
-
-// ── Session setup (mirrors chat.ts setupSession) ───────────────────
-
-const MAX_ACCOUNT_RETRIES = 5;
-
-async function setupAnthropicSession(
-  messages: any[],
-  body: OpenAIRequest,
-  availableTokens: number,
-  toolCalling: boolean,
-  logId: string,
-): Promise<{
-  sessionMessages: any[];
-  session: { chatId: string; parentId: string | null; cachedHeaders: any; accountEmail?: string };
-  nextParentId: string | null;
-  sessionHeaders: any;
-  resolvedEmail: string;
-  stream: ReadableStream;
-  qwenAbortController: AbortController;
-}> {
-  let hasImages = false;
-  const imageUrls: string[] = [];
-  const lastMsg = messages[messages.length - 1];
-  if (lastMsg && Array.isArray(lastMsg.content)) {
-    for (const part of lastMsg.content) {
-      if (part?.type === 'image_url' && part?.image_url?.url) {
-        hasImages = true;
-        imageUrls.push(part.image_url.url);
-      }
-    }
-  }
-  let cleanedMessages = messages;
-  if (hasImages) {
-    cleanedMessages = messages.map((msg: any, idx: number) => {
-      if (idx !== messages.length - 1) return msg;
-      if (!Array.isArray(msg.content)) return msg;
-      const textParts = msg.content.filter((c: any) => c.type !== 'image_url');
-      return { ...msg, content: textParts.length > 0 ? textParts : [{ type: 'text', text: '[Image]' }] };
-    });
-  }
-
-  const {
-    qwenMessages: processedMessages,
-    systemContent,
-    toolResultsContent,
-  } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
-
-  const MAX_INLINE_CHARS = 50000;
-  let inlineContent = processedMessages[0].content as string;
-  let chatHistoryContent = '';
-  if (typeof inlineContent === 'string' && inlineContent.length > MAX_INLINE_CHARS) {
-    const parts = inlineContent.split(/\n\n(?=<user>|<assist>)/);
-    let keptLen = 0;
-    let splitIdx = parts.length;
-    for (let i = parts.length - 1; i >= 0; i--) {
-      const addLen = parts[i].length + (keptLen > 0 ? 2 : 0);
-      if (keptLen + addLen <= MAX_INLINE_CHARS) {
-        keptLen += addLen;
-        splitIdx = i;
-      } else break;
-    }
-    if (splitIdx > 0) {
-      chatHistoryContent = parts.slice(0, splitIdx).join('\n\n');
-      inlineContent = parts.slice(splitIdx).join('\n\n');
-      processedMessages[0] = { ...processedMessages[0], content: inlineContent };
-    }
-  }
-
-  let lastFailedEmail: string | undefined;
-  const isThinkingModel = !body.model.includes('no-thinking');
-  let lastError: any;
-
-  for (let attempt = 0; attempt < MAX_ACCOUNT_RETRIES; attempt++) {
-    const selectedAccount = await pickAccount(lastFailedEmail);
-    const accountEmail = selectedAccount?.email;
-    logStore.log(
-      'debug',
-      'chat',
-      `[Anthropic] Attempt ${attempt + 1}/${MAX_ACCOUNT_RETRIES} picked=${accountEmail || 'NONE'} lastFailed=${lastFailedEmail || 'none'}`,
-    );
-    if (!selectedAccount && attempt > 0) {
-      logStore.log(
-        'error',
-        'chat',
-        `[Anthropic] All ${MAX_ACCOUNT_RETRIES} attempts exhausted — last error: ${lastError?.message || lastError || 'unknown'}`,
-      );
-      throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
-    }
-
-    let imageFiles: QwenFileAttachment[] = [];
-    if (hasImages && accountEmail) {
-      const MAX_CONCURRENT = 2;
-      for (let i = 0; i < imageUrls.length; i += MAX_CONCURRENT) {
-        const batch = imageUrls.slice(i, i + MAX_CONCURRENT);
-        const results = await Promise.all(
-          batch.map((url) =>
-            uploadImageAsFile(accountEmail, url).catch((err: any) => {
-              logStore.log('warn', 'chat', `[Anthropic] Image upload failed: ${err.message}`);
-              return null;
-            }),
-          ),
-        );
-        imageFiles.push(...results.filter((f): f is QwenFileAttachment => f !== null));
-      }
-      if (imageFiles.length === 0) {
-        throw new Error('Failed to upload images — none could be uploaded');
-      }
-    }
-
-    if (accountEmail && (systemContent || toolResultsContent || chatHistoryContent)) {
-      const parts: string[] = [];
-      if (systemContent) parts.push(`<system-instructions>\n${systemContent}\n</system-instructions>`);
-      if (toolResultsContent) parts.push(`<tool-results>\n${toolResultsContent}\n</tool-results>`);
-      if (chatHistoryContent) parts.push(`<chat_history>\n${chatHistoryContent}\n</chat_history>`);
-      try {
-        const file = await uploadLargeTextAsFile(accountEmail, parts.join('\n\n'), 'context.txt');
-        processedMessages[0] = { ...processedMessages[0], files: [file] };
-      } catch (err: any) {
-        logStore.log('debug', 'chat', '[Anthropic] Failed to upload context file: ' + (err.message || err));
-      }
-    }
-
-    if (imageFiles.length > 0) {
-      processedMessages[0] = {
-        ...processedMessages[0],
-        files: [...(processedMessages[0].files || []), ...imageFiles],
-      };
-    }
-
-    let sessionResult;
-    try {
-      sessionResult = await acquireSessionWithCorrections(accountEmail, processedMessages);
-    } catch (err) {
-      lastFailedEmail = accountEmail;
-      lastError = err;
-      logStore.log(
-        'warn',
-        'chat',
-        `[Anthropic] Session acquire failed for ${accountEmail || '?'}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-      logStore.addError(logId, `Session acquire failed for ${accountEmail || '?'}: ${err instanceof Error ? err.message : String(err)}`);
-      continue;
-    }
-    const { session, qwenMessages: sessionMessages, nextParentId, sessionHeaders, resolvedEmail } = sessionResult;
-    logStore.log('debug', 'chat', `[Anthropic] Session acquired: ${resolvedEmail} chatId=${session.chatId}`);
-    logStore.updateEntry(logId, (entry) => {
-      entry.accountEmail = resolvedEmail;
-    });
-
-    let streamResult;
-    try {
-      const routedModel = await modelRouter.route(body.model);
-      streamResult = await createQwenStreamWithRetry(
-        sessionMessages,
-        isThinkingModel,
-        routedModel,
-        session.chatId,
-        nextParentId,
-        resolvedEmail,
-        body.tools,
-        body.tool_choice,
-      );
-    } catch (err: any) {
-      sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
-      logStore.log(
-        'warn',
-        'chat',
-        `[Anthropic] Stream failed on ${resolvedEmail}: ${err.message || err} (attempt ${attempt + 1}/${MAX_ACCOUNT_RETRIES}) upstreamStatus=${err.upstreamStatus || 'none'} name=${err.name || 'Error'}`,
-      );
-      logStore.addError(logId, `Stream creation failed for ${resolvedEmail}: ${err.message || String(err)}`);
-      if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
-        logStore.log('warn', 'chat', `[Anthropic]   -> rate-limited, trying next account`);
-        lastFailedEmail = resolvedEmail;
-        lastError = err;
-        continue;
-      }
-      if (
-        (err.message || '').includes('FAIL_SYS_USER_VALIDATE') ||
-        (err.message || '').includes('CAPTCHA') ||
-        err instanceof RetryableQwenStreamError
-      ) {
-        logStore.log('warn', 'chat', `[Anthropic]   -> CAPTCHA/validation, throttling + trying next`);
-        lastFailedEmail = resolvedEmail;
-        lastError = err;
-        if (resolvedEmail) throttleAccount(resolvedEmail, 5 * 60 * 1000);
-        continue;
-      }
-      if (
-        err.name === 'AbortError' ||
-        (err.message || '').includes('timed out') ||
-        (err.message || '').includes('timeout') ||
-        (err.message || '').includes('ETIMEDOUT') ||
-        err.upstreamStatus === 408 ||
-        err.upstreamStatus === 504
-      ) {
-        logStore.log('warn', 'chat', `[Anthropic]   -> timeout, trying next account`);
-        lastFailedEmail = resolvedEmail;
-        lastError = err;
-        continue;
-      }
-      logStore.log('error', 'chat', `[Anthropic]   -> non-retryable error, throwing`);
-      throw err;
-    }
-    let { stream, abortController: qwenAbortController } = streamResult;
-
-    const FIRST_CHUNK_MS = 60_000;
-    const streamReader = stream.getReader();
-    let firstChunk: any;
-    let firstChunkTimer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      firstChunk = await Promise.race([
-        streamReader.read(),
-        new Promise<never>((_, reject) => {
-          firstChunkTimer = setTimeout(
-            () => reject(new Error(`No first chunk from ${resolvedEmail} within ${FIRST_CHUNK_MS / 1000}s`)),
-            FIRST_CHUNK_MS,
-          );
-        }),
-      ]);
-    } catch (timeoutErr) {
-      clearTimeout(firstChunkTimer);
-      logStore.log('warn', 'chat', `[Anthropic] First-chunk timeout for ${resolvedEmail} (attempt ${attempt + 1})`);
-      logStore.addError(logId, `First-chunk timeout for ${resolvedEmail}`);
-      streamReader.cancel().catch(() => {});
-      qwenAbortController?.abort();
-      sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
-      lastFailedEmail = resolvedEmail;
-      lastError = timeoutErr as Error;
-      continue;
-    }
-    clearTimeout(firstChunkTimer);
-
-    stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        if (!firstChunk.done && firstChunk.value) controller.enqueue(firstChunk.value);
-        try {
-          while (true) {
-            const { done, value } = await streamReader.read();
-            if (done) break;
-            controller.enqueue(value);
-          }
-          controller.close();
-        } catch (err) {
-          controller.error(err);
-        }
-      },
-    });
-
-    const finalPrompt = sessionMessages
-      .map((m: any) => {
-        const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? '');
-        return `${m.role}: ${content}`;
-      })
-      .join('\n\n');
-    logStore.updateEntry(logId, (entry) => {
-      entry.promptToQwen = {
-        systemPromptLength: 0,
-        totalLength: finalPrompt.length,
-        preview: finalPrompt.length > 1000 ? finalPrompt.substring(0, 1000) + '...' : finalPrompt,
-      };
-    });
-    logStore.log('debug', 'chat', `[Anthropic] Request routed to ${resolvedEmail} — stream ready (attempt ${attempt + 1})`);
-
-    return { sessionMessages, session, nextParentId, sessionHeaders, resolvedEmail, stream, qwenAbortController };
-  }
-
-  throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
-}
+  AnthropicContentBlock,
+  AnthropicMessage,
+  anthropicMessagesToOpenAI,
+  anthropicToolsToOpenAI,
+  mapModel,
+  formatContent,
+  convertOpenAIResponseToAnthropic,
+  normalizeToolName,
+  REQUIRED_PARAMS,
+  mapParamName,
+  isValidToolCall,
+} from './anthropicFormat.ts';
 
 // ── Anthropic SSE streaming ────────────────────────────────────────
 
@@ -806,26 +298,6 @@ async function handleAnthropicStream(
         );
       }
 
-      // Validate and filter tool calls
-      // ponytail: static Claude Code required param map — upgrade if tools vary
-      const REQUIRED_PARAMS: Record<string, string[]> = {
-        Bash: ['command'],
-        Read: ['filePath'],
-        Edit: ['filePath', 'oldString', 'newString'],
-        Write: ['filePath', 'content'],
-      };
-
-      // ponytail: snake_case → camelCase mapping for Qwen param names
-      function mapParamName(toolName: string, paramName: string): string {
-        const SNAKE_TO_CAMEL: Record<string, string> = {
-          file_path: 'filePath',
-          old_string: 'oldString',
-          new_string: 'newString',
-          tool_call_id: 'toolCallId',
-        };
-        return SNAKE_TO_CAMEL[paramName] || paramName;
-      }
-
       function validateToolCall(tc: ParsedToolCall): { valid: boolean; fixedArgs: any } {
         let args: any = {};
         try {
@@ -838,7 +310,7 @@ async function handleAnthropicStream(
         // Map snake_case to camelCase
         const mapped: any = {};
         for (const [k, v] of Object.entries(args)) {
-          mapped[mapParamName(tc.name, k)] = v;
+          mapped[mapParamName(k)] = v;
         }
         args = mapped;
 
@@ -1112,12 +584,13 @@ export async function anthropicMessages(c: Context) {
       );
     }
 
-    const { session, nextParentId, sessionHeaders, resolvedEmail, stream, qwenAbortController } = await setupAnthropicSession(
+    const { session, nextParentId, sessionHeaders, resolvedEmail, stream, qwenAbortController } = await setupSession(
       openaiMessages,
       body,
       contextCheck.availableTokens!,
       toolCalling,
       logId,
+      'Anthropic',
     );
 
     if (!isStream) {

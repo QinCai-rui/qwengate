@@ -1,7 +1,7 @@
 import assert from 'node:assert';
 import test from 'node:test';
 import { logStore } from '../services/logStore.ts';
-import { processStreamData, type StreamProcessingCtx, type StreamProcessingState } from './chatStreamingHelpers.ts';
+import { processStreamData, type StreamProcessingCtx, type StreamProcessingState } from './providers/qwen/pipeline-stream.ts';
 
 test('reproduces and tests fix for corrupted tool call when split across chunks', async () => {
   const logId = 'test-corrupted-tool-call-log-id';

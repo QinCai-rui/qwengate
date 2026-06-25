@@ -1,8 +1,8 @@
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
-import { cleanThinkTags } from './chatHelpersCore.ts';
-import { filterContentPipeline } from './chatStreamingHelpers.ts';
+import { cleanThinkTags } from './providers/qwen/qwen-utils.ts';
+import { filterContentPipeline } from './providers/qwen/pipeline-stream.ts';
 
 // ── Real chunk data from corrupted logs ──
 

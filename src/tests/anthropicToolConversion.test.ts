@@ -35,7 +35,7 @@ function parseXmlToolCallsFromText(text: string): { toolCalls: any[]; cleanedTex
 
 describe('extractLocalMcpToolCalls', () => {
   test('extracts tool calls with params from local_mcp event', async () => {
-    const { extractLocalMcpToolCalls } = await import('../routes/chatStreamingHelpers.ts');
+    const { extractLocalMcpToolCalls } = await import('../routes/providers/qwen/pipeline-stream.ts');
 
     const sseChunk = {
       choices: [
@@ -68,7 +68,7 @@ describe('extractLocalMcpToolCalls', () => {
   });
 
   test('extracts multiple tool calls', async () => {
-    const { extractLocalMcpToolCalls } = await import('../routes/chatStreamingHelpers.ts');
+    const { extractLocalMcpToolCalls } = await import('../routes/providers/qwen/pipeline-stream.ts');
 
     const sseChunk = {
       choices: [
@@ -97,14 +97,14 @@ describe('extractLocalMcpToolCalls', () => {
   });
 
   test('returns empty array for missing local_mcp', async () => {
-    const { extractLocalMcpToolCalls } = await import('../routes/chatStreamingHelpers.ts');
+    const { extractLocalMcpToolCalls } = await import('../routes/providers/qwen/pipeline-stream.ts');
     expect(extractLocalMcpToolCalls({})).toEqual([]);
     expect(extractLocalMcpToolCalls({ choices: [] })).toEqual([]);
     expect(extractLocalMcpToolCalls({ choices: [{}] })).toEqual([]);
   });
 
   test('strips ★- prefix from tool names', async () => {
-    const { extractLocalMcpToolCalls } = await import('../routes/chatStreamingHelpers.ts');
+    const { extractLocalMcpToolCalls } = await import('../routes/providers/qwen/pipeline-stream.ts');
 
     // Test with and without prefix
     const withPrefix = {
@@ -469,7 +469,7 @@ describe('anthropicToolsToOpenAI', () => {
 
 describe('Anthropic streaming tool call pipeline', () => {
   test('merges XML and local_mcp tool calls without duplicate IDs', async () => {
-    const { extractLocalMcpToolCalls } = await import('../routes/chatStreamingHelpers.ts');
+    const { extractLocalMcpToolCalls } = await import('../routes/providers/qwen/pipeline-stream.ts');
 
     // Simulate what handleAnthropicStream does at the end:
     // 1. Parse XML from lastFullContent
@@ -790,7 +790,7 @@ describe('local_mcp pipeline to Claude Code', () => {
   }
 
   test('local_mcp Bash with camelCase command reaches Claude Code correctly', async () => {
-    const { extractLocalMcpToolCalls } = await import('../routes/chatStreamingHelpers.ts');
+    const { extractLocalMcpToolCalls } = await import('../routes/providers/qwen/pipeline-stream.ts');
 
     // Mock Qwen SSE chunk with local_mcp Bash tool call
     const sseChunk = {
@@ -843,7 +843,7 @@ describe('local_mcp pipeline to Claude Code', () => {
   });
 
   test('local_mcp Bash with snake_case file_path is mapped to filePath', async () => {
-    const { extractLocalMcpToolCalls } = await import('../routes/chatStreamingHelpers.ts');
+    const { extractLocalMcpToolCalls } = await import('../routes/providers/qwen/pipeline-stream.ts');
 
     const sseChunk = {
       choices: [
@@ -882,7 +882,7 @@ describe('local_mcp pipeline to Claude Code', () => {
   });
 
   test('local_mcp with Write tool (filePath + content) passes validation', async () => {
-    const { extractLocalMcpToolCalls } = await import('../routes/chatStreamingHelpers.ts');
+    const { extractLocalMcpToolCalls } = await import('../routes/providers/qwen/pipeline-stream.ts');
 
     const sseChunk = {
       choices: [
@@ -921,7 +921,7 @@ describe('local_mcp pipeline to Claude Code', () => {
   });
 
   test('local_mcp with lowercase tool name is normalized to PascalCase', async () => {
-    const { extractLocalMcpToolCalls } = await import('../routes/chatStreamingHelpers.ts');
+    const { extractLocalMcpToolCalls } = await import('../routes/providers/qwen/pipeline-stream.ts');
 
     const sseChunk = {
       choices: [
@@ -958,7 +958,7 @@ describe('local_mcp pipeline to Claude Code', () => {
   });
 
   test('local_mcp with missing required param is filtered out (not sent to Claude Code)', async () => {
-    const { extractLocalMcpToolCalls } = await import('../routes/chatStreamingHelpers.ts');
+    const { extractLocalMcpToolCalls } = await import('../routes/providers/qwen/pipeline-stream.ts');
 
     // Bash without command
     const sseChunk = {
@@ -988,7 +988,7 @@ describe('local_mcp pipeline to Claude Code', () => {
   });
 
   test('full multi-tool local_mcp round trip with dedup by ID', async () => {
-    const { extractLocalMcpToolCalls } = await import('../routes/chatStreamingHelpers.ts');
+    const { extractLocalMcpToolCalls } = await import('../routes/providers/qwen/pipeline-stream.ts');
 
     // Simulate multiple SSE chunks arriving during stream
     const chunks = [
@@ -1056,7 +1056,7 @@ describe('local_mcp pipeline to Claude Code', () => {
   });
 
   test('XML fallback + local_mcp both active — merge produces correct tool_use blocks', async () => {
-    const { extractLocalMcpToolCalls } = await import('../routes/chatStreamingHelpers.ts');
+    const { extractLocalMcpToolCalls } = await import('../routes/providers/qwen/pipeline-stream.ts');
     const { parseXmlToolCalls, xmlToolCallToParsed } = await import('../tools/xmlToolParser.ts');
 
     // Simulate lastFullContent with XML tool call (model hallucinated XML)

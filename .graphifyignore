@@ -1,0 +1,14 @@
+*.md
+*.mdx
+*.txt
+*.rst
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.svg
+*.yaml
+*.yml
+*.json

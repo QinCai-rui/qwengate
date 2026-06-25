@@ -1,22 +1,23 @@
+/*
+ * File: providers/qwen/pipeline-nonstream.ts
+ * Qwen non-streaming pipeline — reads Qwen SSE stream and returns OpenAI JSON response.
+ *
+ * Called by handleQwen() when stream=false.
+ * All Qwen SSE delta phase knowledge (think/thinking_summary/answer/local_tool) lives here.
+ */
+
 import { Context } from 'hono';
-import { logStore } from '../services/logStore.ts';
-import { sessionPool } from '../services/sessionPool.ts';
-import { detectParallelToolLoop } from '../tools/guard.ts';
-import type { Message, OpenAIRequest, ParsedToolCall } from '../types/openai.ts';
-import { filterContent } from '../utils/contentFilter.ts';
-import {
-  commonPrefixLen,
-  detectCumulativeChunk,
-  parseQwenErrorPayload,
-  pendingCorrections,
-  processToolCallsThroughGuard,
-  ToolSpamGuard,
-} from './chatHelpers.ts';
+import { logStore } from '../../../services/logStore.ts';
+import { sessionPool } from '../../../services/sessionPool.ts';
+import { detectParallelToolLoop } from '../../../tools/guard.ts';
+import type { Message, OpenAIRequest, ParsedToolCall } from '../../../types/openai.ts';
+import { filterContent } from '../../../utils/contentFilter.ts';
+import { commonPrefixLen, pendingCorrections, detectCumulativeChunk } from '../../chatHelpersCore.ts';
+import { parseQwenErrorPayload, processToolCallsThroughGuard, ToolSpamGuard } from './qwen-utils.ts';
+import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../../../tools/xmlToolParser.ts';
+import { extractLocalMcpToolCalls } from './pipeline-stream.ts';
 
 const MAX_TOOL_CALLS_PER_TURN = 8;
-
-import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
-import { extractLocalMcpToolCalls } from './chatStreamingHelpers.ts';
 
 export interface NonStreamingContext {
   c: Context;
@@ -82,8 +83,6 @@ function buildQwenRequest(ctx: NonStreamingContext): StreamProcessorState {
 }
 
 function processThinkingDelta(delta: any, state: StreamProcessorState): void {
-  // Handle thinking_summary format (thinking_format: "summary")
-  // Content is in extra.summary_thought.content[] array
   if (delta.phase === 'thinking_summary') {
     const thoughts = delta.extra?.summary_thought?.content;
     if (!thoughts) return;
@@ -100,8 +99,6 @@ function processThinkingDelta(delta: any, state: StreamProcessorState): void {
     return;
   }
 
-  // Handle think format (thinking_format: "full")
-  // Content is in delta.content (token-by-token)
   if (delta.phase === 'think') {
     if (delta.content !== undefined && delta.content !== '') {
       state.reasoningBuffer += delta.content;
@@ -158,7 +155,6 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
     return;
   }
 
-  // Detect upstream Qwen SSE error payload mid-stream
   if (chunk.error) {
     const errMsg = typeof chunk.error === 'string' ? chunk.error : chunk.error.message || JSON.stringify(chunk.error);
     logStore.addError(ctx.logId, `Qwen upstream SSE error: ${errMsg}`);
@@ -197,9 +193,6 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
   } else if (delta.phase === 'answer') {
     processAnswerDelta(delta, state, ctx);
   } else if (delta.phase === 'local_tool') {
-    // Qwen returns tool calls in the local_tool phase via extra.local_mcp["★"].
-    // These may arrive with or without XML tool call blocks in the answer phase,
-    // so we must extract them here to avoid losing tool calls.
     const localToolCalls = extractLocalMcpToolCalls(chunk);
     if (localToolCalls.length > 0) {
       const parsed = localToolCalls.map((tc) => ({
@@ -222,8 +215,6 @@ function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
   const { toolCalls } = parseXmlToolCalls(state.lastFullContent);
   if (toolCalls.length > 0) {
     const parsed = toolCalls.map((tc, i) => xmlToolCallToParsed(tc, i));
-    // Filter out already-processed tool calls to avoid corrupting ToolSpamGuard state
-    // Stable dedup: sort object keys so property order doesn't cause false negatives
     const stableArgs = (args: Record<string, unknown>): string => {
       const keys = Object.keys(args).sort();
       return '{' + keys.map((k) => `${JSON.stringify(k)}:${JSON.stringify(args[k])}`).join(',') + '}';
@@ -270,7 +261,6 @@ function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
     logStore.log('debug', 'chat', `[🔄 PARALLEL LOOP] ${loopCheck.errors[0]}`);
     state.correctionPrompts.push(loopCheck.correctionPrompt);
     logStore.addError(logId, `Parallel loop: ${loopCheck.errors[0]}`);
-    // Filter out duplicate tool calls from the response
     if (loopCheck.valid && loopCheck.valid.length < parsedForLoopCheck.length) {
       const validIds = new Set(loopCheck.valid.map((v) => v.id));
       state.toolCallsOut = state.toolCallsOut.filter((tc) => validIds.has(tc.id));

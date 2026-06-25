@@ -2,8 +2,6 @@
  * SSE event write helpers for streaming chat responses.
  */
 
-import { type AmplificationGuardState, checkAmplificationGuard } from './chatHelpers.ts';
-
 /**
  * Write a single SSE data event to the stream.
  */
@@ -45,31 +43,6 @@ export function buildChunkEvent(completionId: string, model: string, choices: an
 export async function writeReasoningEvent(streamWriter: any, completionId: string, model: string, content: string) {
   if (!content) return;
   await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ reasoning_content: content })]));
-}
-
-/**
- * Write a content delta event with amplification guard and log store update.
- * Returns false if the amplification guard suppressed the event.
- */
-export async function writeContentDelta(
-  streamWriter: any,
-  completionId: string,
-  model: string,
-  contentDelta: string,
-  ampState: AmplificationGuardState,
-  logId: string,
-  resolvedEmail: string,
-  lastRawContent: string,
-  lastVStrRaw: string,
-  logStore: { addProcessedOutput: (id: string, c: string) => void; updateEntry: (id: string, fn: (e: any) => void) => void },
-): Promise<boolean> {
-  if (checkAmplificationGuard(ampState, contentDelta.length, logId, resolvedEmail, model, lastRawContent, lastVStrRaw)) {
-    return false;
-  }
-  logStore.addProcessedOutput(logId, contentDelta);
-  ampState.emittedOutputBytes += contentDelta.length;
-  await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ content: contentDelta })]));
-  return true;
 }
 
 /**

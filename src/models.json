@@ -170,5 +170,13 @@
   "qwen3-coder": { "max_context": 1048576, "max_output": 65536, "modalities": ["text"] },
   "qwen3-vl-235b-a22b": { "max_context": 262144, "max_output": 32768, "modalities": ["text", "image", "video"] },
   "qwen3-omni-flash": { "max_context": 65536, "max_output": 24576, "modalities": ["text", "image", "video", "audio"] },
-  "qwen2-5-max": { "max_context": 131072, "max_output": 8192, "modalities": ["text"] }
+  "qwen2-5-max": { "max_context": 131072, "max_output": 8192, "modalities": ["text"] },
+
+  "deepseek/instant": { "max_context": 32000, "max_output": 8000, "modalities": ["text"] },
+  "deepseek/expert": { "max_context": 64000, "max_output": 8000, "modalities": ["text"] },
+  "deepseek/vision": { "max_context": 32000, "max_output": 8000, "modalities": ["text", "image"] },
+  "deepseek/reasoner": { "max_context": 64000, "max_output": 8000, "modalities": ["text"] },
+
+  "zai/glm-5.2": { "max_context": 32000, "max_output": 16000, "modalities": ["text", "image"] },
+  "zai/glm-4.7": { "max_context": 32000, "max_output": 16000, "modalities": ["text", "image"] }
 }

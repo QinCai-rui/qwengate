@@ -15,6 +15,7 @@ import { getAccountCount, getAccountStats, getAccounts, getAvailableCount, initA
 import { config, updateClaudeCodeSettings } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
 import { configureAccount, fetchQwenModels } from './services/qwen.ts';
+import { PROVIDER_MODELS } from './utils/providerModels.ts';
 import { safeCompare } from './utils/auth.ts';
 import { isBun } from './utils/env.ts';
 import { projectPath } from './utils/paths.ts';
@@ -223,13 +224,18 @@ app.get(
   },
   async (c) => {
     try {
-      const models = await fetchQwenModels();
+      const qwenModels = await fetchQwenModels();
+      const allModels = [...qwenModels, ...PROVIDER_MODELS];
       return c.json({
         object: 'list',
-        data: models,
+        data: allModels,
       });
     } catch (err: any) {
-      return c.json({ error: { message: err.message } }, 500);
+      // If Qwen fetch fails, still return provider models
+      return c.json({
+        object: 'list',
+        data: PROVIDER_MODELS,
+      });
     }
   },
 );
