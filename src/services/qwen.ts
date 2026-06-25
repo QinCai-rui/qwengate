@@ -12,7 +12,7 @@ export { configureAccount, deleteAllChats, fetchQwenModels } from './qwenModels.
 
 // Shared URL constants for Qwen API
 export const QWEN_API_BASE = 'https://chat.qwen.ai';
-export const QWEN_CHAT_COMPLETIONS_URL = `${QWEN_API_BASE}/api/v2/chat/completions`;
+const QWEN_CHAT_COMPLETIONS_URL = `${QWEN_API_BASE}/api/v2/chat/completions`;
 export const QWEN_SETTINGS_URL = `${QWEN_API_BASE}/api/v2/users/user/settings/update`;
 
 /** Build shared feature_config for Qwen message payloads. */
@@ -40,7 +40,7 @@ export class RetryableQwenStreamError extends Error {
   }
 }
 
-export class QwenUpstreamError extends Error {
+class QwenUpstreamError extends Error {
   readonly upstreamCode: string;
   readonly upstreamStatus: number;
   constructor(message: string, upstreamCode: string, upstreamStatus: number) {

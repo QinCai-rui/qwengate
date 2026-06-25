@@ -7,8 +7,6 @@ import { completeEntry, errorEntry } from './networkDebug.ts';
 import { getBasicHeaders } from './playwright.ts';
 import { QWEN_API_BASE, QWEN_CHATS_URL, QWEN_MODELS_URL, QWEN_SETTINGS_URL } from './qwen.ts';
 
-export { DEFAULT_SYSTEM_PROMPT };
-
 async function postQwenSettings(
   email: string | undefined,
   payload: Record<string, unknown>,

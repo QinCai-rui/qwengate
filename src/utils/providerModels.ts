@@ -64,14 +64,6 @@ export const PROVIDER_MODELS: ProviderModelEntry[] = [
   },
 ];
 
-/**
- * Return all provider model entries.
- * Separated from the inline list so tests can import it easily.
- */
-export function getProviderModels(): ProviderModelEntry[] {
-  return [...PROVIDER_MODELS];
-}
-
 const PROVIDER_MODEL_SPECS: Record<string, { max_context: number; max_output: number; modalities: string[] }> = {
   'deepseek/instant': { max_context: 32000, max_output: 8000, modalities: ['text'] },
   'deepseek/expert': { max_context: 64000, max_output: 8000, modalities: ['text'] },
@@ -80,7 +72,3 @@ const PROVIDER_MODEL_SPECS: Record<string, { max_context: number; max_output: nu
   'zai/glm-5.2': { max_context: 32000, max_output: 16000, modalities: ['text', 'image'] },
   'zai/glm-4.7': { max_context: 32000, max_output: 16000, modalities: ['text', 'image'] },
 };
-
-export function getProviderModelSpecs(modelId: string): { max_context: number; max_output: number; modalities: string[] } | null {
-  return PROVIDER_MODEL_SPECS[modelId] || null;
-}

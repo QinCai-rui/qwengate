@@ -116,7 +116,7 @@ export function estimateTokens(
  * Used when performance matters more than precision.
  * Falls back to the original `length / 3.5` heuristic.
  */
-export function estimateTokensFast(text: string, options?: { tools?: unknown[] }): number {
+function estimateTokensFast(text: string, options?: { tools?: unknown[] }): number {
   if (!text) return 0;
   let estimate = Math.ceil(text.length / RATIO_DEFAULT);
   if (options?.tools?.length) {
@@ -140,7 +140,7 @@ export interface TokenBreakdown {
  * @param originalMessages - Concatenated text of the user's original messages
  * @param finalPrompt - The full prompt sent to Qwen (after all injection)
  */
-export function calculateTokenOverhead(originalMessages: string, finalPrompt: string): TokenBreakdown {
+function calculateTokenOverhead(originalMessages: string, finalPrompt: string): TokenBreakdown {
   const clientTokens = estimateTokens(originalMessages);
   const totalTokens = estimateTokens(finalPrompt);
 

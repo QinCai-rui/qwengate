@@ -6,7 +6,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Project root is two levels up from src/utils/
-export const PROJECT_ROOT = resolve(__dirname, '..', '..');
+const PROJECT_ROOT = resolve(__dirname, '..', '..');
 
 /**
  * Resolve a path relative to the project root.

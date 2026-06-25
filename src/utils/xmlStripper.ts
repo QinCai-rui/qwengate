@@ -43,7 +43,7 @@ export function stripToolCallArtifacts(text: string): string {
   return text;
 }
 
-export function stripToolEcho(text: string): string {
+function stripToolEcho(text: string): string {
   if (!text) return '';
   let result = text;
   const originalLines = text.split('\n');

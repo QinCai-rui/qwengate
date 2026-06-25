@@ -281,6 +281,6 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
 }
 
 /** Dispose the wreq worker process. Call on app shutdown. */
-export async function disposeSession(_accountEmail?: string): Promise<void> {
+async function disposeSession(_accountEmail?: string): Promise<void> {
   await disposeWreqWorker();
 }
