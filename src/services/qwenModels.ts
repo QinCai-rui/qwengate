@@ -35,7 +35,7 @@ let lastModelsFetch = 0;
 let customInstructionApplied = false;
 let applyingCustomInstructionInProgress: Promise<void> | null = null;
 
-export async function setCustomInstruction(instruction: string): Promise<void> {
+async function setCustomInstruction(instruction: string): Promise<void> {
   if (!instruction || instruction.trim().length === 0) return;
   if (customInstructionApplied) return;
   if (applyingCustomInstructionInProgress) {

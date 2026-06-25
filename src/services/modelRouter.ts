@@ -17,13 +17,6 @@ export interface FallbackChain {
   fallbacks: FallbackEntry[];
 }
 
-export interface ModelConfig {
-  max_context: number;
-  max_output: number;
-  modalities: string[];
-  fallback_chain?: FallbackChain;
-}
-
 // ponytail: static fallback chains — opengate-specific, not available from Qwen API
 const FALLBACK_CHAINS: Record<string, FallbackChain> = {
   'qwen3-6-plus': {
@@ -75,7 +68,7 @@ const FALLBACK_CHAINS: Record<string, FallbackChain> = {
   'qwen3-5-27b': { primary: 'qwen3-5-27b', fallbacks: [] },
 };
 
-export class ModelRouter {
+class ModelRouter {
   private modelHealth: Map<string, { errors: number; successes: number; lastChecked: number }> = new Map();
   private readonly ERROR_THRESHOLD = 0.3; // 30% error rate triggers degradation
   private readonly HEALTH_WINDOW_MS = 5 * 60 * 1000; // 5 minute sliding window

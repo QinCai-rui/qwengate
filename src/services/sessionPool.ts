@@ -15,13 +15,13 @@ interface PoolEntry {
   accountEmail?: string;
 }
 
-export function formatQwenEnvelopeError(json: any): string {
+function formatQwenEnvelopeError(json: any): string {
   const code = json?.data?.code || json?.code || 'unknown';
   const details = json?.data?.details || json?.details || json?.message || '';
   return details ? `${code}: ${details}` : String(code);
 }
 
-export class SessionPool {
+class SessionPool {
   private activeSessions = new Set<string>();
   private activeCount = 0;
   private releaseTimers = new Map<string, ReturnType<typeof setTimeout>>();

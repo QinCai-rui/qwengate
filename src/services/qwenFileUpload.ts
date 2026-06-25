@@ -9,7 +9,7 @@ import { QWEN_API_BASE } from './qwen.ts';
  * When a message exceeds this, it must be uploaded as a file instead.
  * Source: Qwen web UI error message — "more than 131072 characters".
  */
-export const QWEN_CONTENT_CHAR_LIMIT = 131_072;
+const QWEN_CONTENT_CHAR_LIMIT = 131_072;
 
 // --- Types ---
 

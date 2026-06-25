@@ -82,7 +82,7 @@ function escXml(s: string): string {
 
 // ── Qwen message builder ──────────────────────────────────────────────
 
-export function buildQwenMessages(messages: any[], body: any, availableTokens: number, _toolCalling: boolean): BuildQwenMessagesResult {
+function buildQwenMessages(messages: any[], body: any, availableTokens: number, _toolCalling: boolean): BuildQwenMessagesResult {
   const timestamp = Math.floor(Date.now() / 1000);
   const model = (body.model || '').replace('-no-thinking', '');
 
@@ -249,7 +249,7 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
 
 // ── Session acquisition ────────────────────────────────────────────────
 
-export async function acquireSessionWithCorrections(
+async function acquireSessionWithCorrections(
   accountEmail: string | undefined,
   qwenMessages: QwenMessage[],
 ): Promise<{
@@ -286,7 +286,7 @@ export async function acquireSessionWithCorrections(
 
 // ── Stream creation ────────────────────────────────────────────────────
 
-export async function createQwenStreamWithRetry(
+async function createQwenStreamWithRetry(
   qwenMessages: QwenMessage[],
   isThinkingModel: boolean,
   routedModel: string,

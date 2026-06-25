@@ -100,39 +100,3 @@ export interface ModelSpec {
   max_output: number;
   modalities: string[];
 }
-
-export interface ToolCallResult {
-  toolCallId: string;
-  name: string;
-  result: string;
-  isError: boolean;
-}
-
-export type ToolHandler<TArgs = any, TResult = any> = (args: TArgs, context: ToolContext) => Promise<TResult>;
-
-export interface ToolContext {
-  /** The original messages from the request */
-  messages: unknown[];
-  /** The current turn number in the execution loop */
-  turn: number;
-  /** The model being used */
-  model: string;
-  /** Custom state or services can be attached here */
-  [key: string]: any;
-}
-
-export interface ToolRegistration {
-  name: string;
-  description: string;
-  parameters: JsonSchema;
-  strict: boolean;
-  handler: ToolHandler;
-  policy?: ToolPolicy;
-}
-
-export interface ToolPolicy {
-  maxCallsPerRun?: number;
-  requiresApproval?: boolean;
-  rateLimit?: number;
-  allowedContexts?: string[];
-}

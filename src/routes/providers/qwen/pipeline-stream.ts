@@ -391,7 +391,7 @@ export async function processStreamData(data: any, state: StreamProcessingState,
 
 // ── SSE read loop ──────────────────────────────────────────────────
 
-export async function runStreamLoop(
+async function runStreamLoop(
   c: { req: { raw?: { signal?: AbortSignal } } },
   reader: ReadableStreamDefaultReader<Uint8Array>,
   streamState: StreamProcessingState,
@@ -472,7 +472,7 @@ export async function runStreamLoop(
 
 // ── Post-stream completion ─────────────────────────────────────────
 
-export async function handlePostStreamCompletion(
+async function handlePostStreamCompletion(
   args: {
     streamWriter: any;
     completionId: string;

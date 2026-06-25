@@ -38,7 +38,7 @@ function getDefaultRetryConfig(): Required<RetryConfig> {
 
 const DEFAULT_CONFIG: Required<RetryConfig> = getDefaultRetryConfig();
 
-export class NonRetryableError extends Error {
+class NonRetryableError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'NonRetryableError';
@@ -54,7 +54,7 @@ export class CircuitOpenError extends Error {
   }
 }
 
-export class AttemptTimeoutError extends Error {
+class AttemptTimeoutError extends Error {
   constructor(timeoutMs: number) {
     super(`Attempt timed out after ${timeoutMs}ms`);
     this.name = 'AttemptTimeoutError';
@@ -202,7 +202,7 @@ export class CircuitBreaker {
  * Retryable: network errors, timeout, 429, 500, 502, 503, 504
  * Non-retryable: 4xx except 429, or explicit NonRetryableError
  */
-export function isRetryable(error: unknown, httpStatus?: number): boolean {
+function isRetryable(error: unknown, httpStatus?: number): boolean {
   // Explicit non-retryable
   if (error instanceof NonRetryableError) return false;
 
@@ -283,7 +283,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
 /**
  * Load retry config from environment variables with defaults.
  */
-export function getRetryConfigFromEnv(): Required<RetryConfig> {
+function getRetryConfigFromEnv(): Required<RetryConfig> {
   const envConfig: RetryConfig = {};
 
   envConfig.maxRetries = Math.max(0, config.getInt('RETRY_MAX_ATTEMPTS', DEFAULT_CONFIG.maxRetries));

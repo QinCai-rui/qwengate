@@ -53,13 +53,6 @@ export function migrateFromOldPaths(): void {
   }
 }
 
-export interface CookieData {
-  email: string;
-  token: string;
-  refreshToken: string | null;
-  savedAt: number;
-  expiresAt: number;
-}
 /** Strip // and /* * / JSONC comments before JSON.parse */
 function stripJsoncComments(text: string): string {
   return text.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -71,7 +64,7 @@ interface PersistedAccountData {
   throttledUntil?: number;
   disabled?: boolean;
 }
-export function parseAccountsFromEnv(): Array<{ email: string; password: string }> {
+function parseAccountsFromEnv(): Array<{ email: string; password: string }> {
   const result: Array<{ email: string; password: string }> = [];
   for (const [key, value] of Object.entries(process.env)) {
     if (!/^ACCOUNT\d+$/i.test(key) || !value) continue;
@@ -142,7 +135,7 @@ function deriveKey(keyMaterial: string): Buffer {
   return crypto.scryptSync(keyMaterial, 'opengate-salt', 32);
 }
 
-export function encrypt(plaintext: string): string {
+function encrypt(plaintext: string): string {
   const key = deriveKey(getEncryptionKey());
   const iv = crypto.randomBytes(IV_LENGTH);
   const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
@@ -152,7 +145,7 @@ export function encrypt(plaintext: string): string {
   return iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
 }
 
-export function decrypt(encryptedText: string): string {
+function decrypt(encryptedText: string): string {
   const parts = encryptedText.split(':');
   if (parts.length !== 3) return encryptedText;
   const [ivHex, authTagHex, encrypted] = parts;

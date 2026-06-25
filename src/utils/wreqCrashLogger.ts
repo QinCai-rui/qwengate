@@ -138,7 +138,7 @@ export function logEvent(context: string, event: string, details?: Record<string
  * Log the "Bad file descriptor" / epoll tokio crash specifically.
  * This is the known crash pattern with Bun + napi-rs.
  */
-export function logTokioCrash(context: string, error: unknown, extra?: Record<string, unknown>): void {
+function logTokioCrash(context: string, error: unknown, extra?: Record<string, unknown>): void {
   const err = error instanceof Error ? error : new Error(String(error));
   write({
     ts: nowISO(),
@@ -158,7 +158,7 @@ export function logTokioCrash(context: string, error: unknown, extra?: Record<st
 /**
  * Get the current log file path (for user reference).
  */
-export function getLogPath(): string {
+function getLogPath(): string {
   return LOG_FILE;
 }
 

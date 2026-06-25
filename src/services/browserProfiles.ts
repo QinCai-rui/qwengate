@@ -224,7 +224,7 @@ export async function openBrowserProfile(email: string, password?: string, optio
   }
 }
 
-export async function refreshViaProfile(email: string): Promise<boolean> {
+async function refreshViaProfile(email: string): Promise<boolean> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return true;
 
   const profileDir = getProfileDir(email);

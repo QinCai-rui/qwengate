@@ -1,5 +1,5 @@
 // ponytail: simple TTL map, upgrade to persistent cache if process restarts lose tokens
-export class TokenCache {
+class TokenCache {
   private cache = new Map<string, { value: string; expiresAt: number }>();
 
   get(key: string): string | undefined {

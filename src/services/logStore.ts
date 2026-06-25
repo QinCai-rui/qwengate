@@ -20,7 +20,7 @@ import { monitorStore } from './monitorStore.ts';
 import { __registerLogStore, SystemLogger } from './systemLogger.ts';
 
 export type { LogLevel, SystemLogEntry, SystemLogFilter } from './systemLogger.ts';
-export { logStore, SystemLogger } from './systemLogger.ts';
+export { logStore } from './systemLogger.ts';
 export interface LogEntry {
   id: string;
   timestamp: string;

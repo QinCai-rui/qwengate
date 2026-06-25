@@ -46,8 +46,6 @@ export function detectCumulativeChunk(newText: string, lastText: string): { cumu
   return { cumulative: false, delta: newText };
 }
 
-export { compressToolResult, truncateToolResult } from './compressToolResult.ts';
-
 // ── Tool and streaming utilities ──────────────────────────────────
 
 export const pendingCorrections = new Map<string, string[]>();

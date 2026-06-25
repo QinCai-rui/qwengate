@@ -20,7 +20,7 @@ import type { OpenAIRequest } from '../types/openai.ts';
 export type ProviderHandler = (c: Context, body: OpenAIRequest) => Promise<Response>;
 
 /** Known provider prefixes, checked in order (longest first for sub-prefix safety) */
-export const PROVIDER_PREFIXES = ['deepseek/', 'zai/'] as const;
+const PROVIDER_PREFIXES = ['deepseek/', 'zai/'] as const;
 
 type ProviderMap = Map<string, ProviderHandler>;
 
@@ -54,7 +54,7 @@ export function providerForModel(model: string): { prefix: string; handler: Prov
 /**
  * Return the list of known provider model prefixes (for model listing).
  */
-export function getProviderPrefixes(): string[] {
+function getProviderPrefixes(): string[] {
   return [...providers.keys()];
 }
 

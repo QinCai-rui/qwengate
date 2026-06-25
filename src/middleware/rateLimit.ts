@@ -19,7 +19,7 @@ const DEFAULT_CONFIG: RateLimitConfig = {
   burst_allowance: 10,
 };
 
-export class TokenBucket {
+class TokenBucket {
   private key: string;
   private config: RateLimitConfig;
   private maxTokens: number;
@@ -117,7 +117,7 @@ export async function rateLimitMiddleware(c: Context, key: string, config?: Part
 }
 
 // Cleanup old buckets periodically (prevents memory growth from stale entries)
-export function cleanupIdleBuckets(maxIdleMinutes: number = 60): void {
+function cleanupIdleBuckets(maxIdleMinutes: number = 60): void {
   const now = Date.now();
   const maxIdleMs = maxIdleMinutes * 60 * 1000;
 

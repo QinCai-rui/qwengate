@@ -4,7 +4,7 @@
  * into a form the model can analyze but cannot verbatim-repeat.
  */
 
-export function truncateToolResult(content: string, maxBytes: number = 4096): string {
+function truncateToolResult(content: string, maxBytes: number = 4096): string {
   if (!content) return '';
   const encoded = new TextEncoder().encode(content);
   if (encoded.length <= maxBytes) return content;

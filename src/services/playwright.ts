@@ -4,7 +4,7 @@ import { logStore } from './logStore.ts';
 import { QWEN_BX_V } from './qwen.ts';
 
 export type { BrowserProfileOptions, LoginResult } from './browserProfiles.ts';
-export { BROWSER_DEFAULT_ARGS, getProfileDir, openBrowserProfile, refreshViaProfile } from './browserProfiles.ts';
+export { BROWSER_DEFAULT_ARGS, getProfileDir, openBrowserProfile } from './browserProfiles.ts';
 
 export type BrowserType = 'chromium' | 'firefox' | 'webkit' | 'chrome' | 'edge';
 export interface AccountContext {
@@ -69,7 +69,7 @@ export class Mutex {
   }
 }
 
-export async function getCookies(email?: string): Promise<string> {
+async function getCookies(email?: string): Promise<string> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return 'token=mock';
   // Directly return saved profileCookies from auth.ts — no browser context needed.
   try {
@@ -123,7 +123,7 @@ export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
   };
 }
 
-export async function initPlaywright(headless = true, browserType: BrowserType = 'chromium') {
+async function initPlaywright(headless = true, browserType: BrowserType = 'chromium') {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return;
   if (defaultBrowser) return;
   if (initInFlight) {
@@ -347,7 +347,7 @@ export function removeAccountContext(email: string): void {
   accountContexts.delete(email);
 }
 
-export async function closePlaywright() {
+async function closePlaywright() {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return;
   for (const [_email, accCtx] of accountContexts.entries()) {
     if (accCtx.refreshInterval) clearInterval(accCtx.refreshInterval);
