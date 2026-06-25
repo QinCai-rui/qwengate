@@ -71,3 +71,16 @@ export const PROVIDER_MODELS: ProviderModelEntry[] = [
 export function getProviderModels(): ProviderModelEntry[] {
   return [...PROVIDER_MODELS];
 }
+
+const PROVIDER_MODEL_SPECS: Record<string, { max_context: number; max_output: number; modalities: string[] }> = {
+  'deepseek/instant': { max_context: 32000, max_output: 8000, modalities: ['text'] },
+  'deepseek/expert': { max_context: 64000, max_output: 8000, modalities: ['text'] },
+  'deepseek/vision': { max_context: 32000, max_output: 8000, modalities: ['text', 'image'] },
+  'deepseek/reasoner': { max_context: 64000, max_output: 8000, modalities: ['text'] },
+  'zai/glm-5.2': { max_context: 32000, max_output: 16000, modalities: ['text', 'image'] },
+  'zai/glm-4.7': { max_context: 32000, max_output: 16000, modalities: ['text', 'image'] },
+};
+
+export function getProviderModelSpecs(modelId: string): { max_context: number; max_output: number; modalities: string[] } | null {
+  return PROVIDER_MODEL_SPECS[modelId] || null;
+}

@@ -4,7 +4,6 @@
  * Implements LiteLLM-style weighted fallback chain selection
  */
 
-import modelsConfig from '../models.json' with { type: 'json' };
 import { logStore } from './logStore.ts';
 
 export interface FallbackEntry {
@@ -25,6 +24,57 @@ export interface ModelConfig {
   fallback_chain?: FallbackChain;
 }
 
+// ponytail: static fallback chains — opengate-specific, not available from Qwen API
+const FALLBACK_CHAINS: Record<string, FallbackChain> = {
+  'qwen3-6-plus': {
+    primary: 'qwen3-6-plus',
+    fallbacks: [
+      { model: 'qwen3-5-plus', weight: 0.8, health_threshold: 0.9 },
+      { model: 'qwen3-5-flash', weight: 0.5, health_threshold: 0.8 },
+    ],
+  },
+  'qwen3-7-max': {
+    primary: 'qwen3-7-max',
+    fallbacks: [
+      { model: 'qwen3-6-plus', weight: 0.9, health_threshold: 0.9 },
+      { model: 'qwen3-5-plus', weight: 0.6, health_threshold: 0.8 },
+    ],
+  },
+  'qwen3-6-max-preview': {
+    primary: 'qwen3-6-max-preview',
+    fallbacks: [{ model: 'qwen3-5-max-preview', weight: 0.85, health_threshold: 0.9 }],
+  },
+  'qwen3-6-27b': { primary: 'qwen3-6-27b', fallbacks: [{ model: 'qwen3-5-27b', weight: 0.9, health_threshold: 0.9 }] },
+  'qwen3-7-max-preview': {
+    primary: 'qwen3-7-max-preview',
+    fallbacks: [{ model: 'qwen3-6-plus-preview', weight: 0.8, health_threshold: 0.9 }],
+  },
+  'qwen3-7-plus': {
+    primary: 'qwen3-7-plus',
+    fallbacks: [
+      { model: 'qwen3-6-plus', weight: 0.9, health_threshold: 0.9 },
+      { model: 'qwen3-5-plus', weight: 0.6, health_threshold: 0.8 },
+    ],
+  },
+  'qwen3-7-plus-preview': {
+    primary: 'qwen3-7-plus-preview',
+    fallbacks: [
+      { model: 'qwen3-6-plus', weight: 0.85, health_threshold: 0.9 },
+      { model: 'qwen3-5-plus', weight: 0.6, health_threshold: 0.8 },
+    ],
+  },
+  'qwen3-5-plus': { primary: 'qwen3-5-plus', fallbacks: [{ model: 'qwen3-5-flash', weight: 0.7, health_threshold: 0.85 }] },
+  'qwen3-5-omni-plus': { primary: 'qwen3-5-omni-plus', fallbacks: [{ model: 'qwen3-5-omni-flash', weight: 0.8, health_threshold: 0.9 }] },
+  'qwen3-6-35b-a3b': { primary: 'qwen3-6-35b-a3b', fallbacks: [{ model: 'qwen3-5-397b-a17b', weight: 0.75, health_threshold: 0.85 }] },
+  'qwen3-5-flash': { primary: 'qwen3-5-flash', fallbacks: [] },
+  'qwen3-5-max-preview': { primary: 'qwen3-5-max-preview', fallbacks: [{ model: 'qwen3-5-plus', weight: 0.7, health_threshold: 0.85 }] },
+  'qwen3-6-plus-preview': { primary: 'qwen3-6-plus-preview', fallbacks: [{ model: 'qwen3-5-plus', weight: 0.8, health_threshold: 0.9 }] },
+  'qwen3-5-397b-a17b': { primary: 'qwen3-5-397b-a17b', fallbacks: [{ model: 'qwen3-5-122b-a10b', weight: 0.8, health_threshold: 0.85 }] },
+  'qwen3-5-122b-a10b': { primary: 'qwen3-5-122b-a10b', fallbacks: [{ model: 'qwen3-5-27b', weight: 0.75, health_threshold: 0.85 }] },
+  'qwen3-5-omni-flash': { primary: 'qwen3-5-omni-flash', fallbacks: [] },
+  'qwen3-5-27b': { primary: 'qwen3-5-27b', fallbacks: [] },
+};
+
 export class ModelRouter {
   private modelHealth: Map<string, { errors: number; successes: number; lastChecked: number }> = new Map();
   private readonly ERROR_THRESHOLD = 0.3; // 30% error rate triggers degradation
@@ -35,14 +85,14 @@ export class ModelRouter {
    * Falls back through weighted chain if primary is unhealthy or fails
    */
   async route(requestedModel: string, attemptCount = 0): Promise<string> {
-    const config = modelsConfig[requestedModel as keyof typeof modelsConfig] as ModelConfig | undefined;
+    const chain = FALLBACK_CHAINS[requestedModel];
 
-    if (!config?.fallback_chain) {
+    if (!chain) {
       // No fallback config, return as-is
       return requestedModel;
     }
 
-    const { primary, fallbacks } = config.fallback_chain;
+    const { primary, fallbacks } = chain;
 
     // Check if primary is healthy enough
     if (attemptCount === 0 && this.isModelHealthy(primary)) {

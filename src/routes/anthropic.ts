@@ -562,8 +562,8 @@ export async function anthropicMessages(c: Context) {
       };
     });
 
-    handleImageModelFallback(body, openaiMessages);
-    const { maxContext, maxOutput } = getModelSpecs(body);
+    await handleImageModelFallback(body, openaiMessages);
+    const { maxContext, maxOutput } = await getModelSpecs(body);
 
     const formattedMessages = openaiMessages.map((m: any) => ({
       role: m.role,
