@@ -65,6 +65,11 @@ var SETTINGS_SECTIONS = [
     ],
   },
   {
+    title: 'Claude Code',
+    desc: 'Auto-configure qwen-gate as a Claude Code proxy. Creates .claude/settings.json in the project root.',
+    fields: [{ key: 'CLAUDE_CODE_PROXY', label: 'CLAUDE_CODE_PROXY', type: 'checkbox' }],
+  },
+  {
     title: 'System & Accounts',
     desc: 'System prompts and account management actions.',
     fields: [
@@ -96,7 +101,7 @@ function renderSettingsForm() {
     }
     html += '</div></fieldset>';
   }
-  container.innerHTML = html + renderDeleteAllChatsSection();
+  container.innerHTML = html + renderDeleteAllChatsSection() + renderClaudeCodeInfo();
 }
 
 function renderDeleteAllChatsSection() {
@@ -105,6 +110,29 @@ function renderDeleteAllChatsSection() {
     '<div class="settings-section-title" style="color:var(--danger)">Danger Zone</div>' +
     '<p class="settings-section-desc" style="color:var(--text-secondary)">Irreversible account-wide actions. Proceed with caution.</p>' +
     '<button class="delete-all-btn" onclick="handleDeleteAllChats()">Delete All Chats</button></div>'
+  );
+}
+
+function renderClaudeCodeInfo() {
+  if (!settingsData['CLAUDE_CODE_PROXY'] || settingsData['CLAUDE_CODE_PROXY'] !== 'true') return '';
+  var host = settingsData['HOST'] || 'localhost';
+  var port = settingsData['PORT'] || '26405';
+  var baseUrl = 'http://' + host + ':' + port;
+  return (
+    '<div class="settings-section" style="margin-top:24px">' +
+    '<div class="settings-section-title">Claude Code Proxy Active</div>' +
+    '<p class="settings-section-desc">qwen-gate is configured as a Claude Code proxy. ' +
+    'Set these environment variables when running Claude Code, or the <code>.claude/settings.json</code> file has been auto-configured for you.</p>' +
+    '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:8px">' +
+    '<code style="display:block;padding:4px 0">ANTHROPIC_BASE_URL=' +
+    baseUrl +
+    '</code>' +
+    '<code style="display:block;padding:4px 0">ANTHROPIC_AUTH_TOKEN=unused</code>' +
+    '</div>' +
+    '<p style="margin-top:8px;font-size:0.85em;color:var(--text-secondary)">' +
+    'The <code>.claude/settings.json</code> file is auto-created in the project root when this toggle is on, ' +
+    'and cleaned up when toggled off.' +
+    '</p></div>'
   );
 }
 

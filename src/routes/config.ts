@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { config, DEFAULT_CONFIG, isValidKey } from '../services/configService.ts';
+import { config, DEFAULT_CONFIG, isValidKey, updateClaudeCodeSettings } from '../services/configService.ts';
 
 export const configRouter = new Hono();
 
@@ -48,5 +48,6 @@ configRouter.put('/', async (c) => {
   }
 
   config.save();
+  updateClaudeCodeSettings(config.getAll());
   return c.json({ config: config.getAll() });
 });
