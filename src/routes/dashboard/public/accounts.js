@@ -173,6 +173,8 @@ async function loadAccounts() {
       return a.configuredProviders && a.configuredProviders.indexOf(pk) !== -1;
     });
     renderProviderTable(filtered, pk, configs[pk]);
+    /* Auto-login for Qwen and DeepSeek — not GLM */
+    if (pk !== 'glm') autoLoginProvider(filtered, pk);
   }
 }
 
@@ -383,13 +385,37 @@ async function handleToggleProviderDisabled(event, email, provider, currentlyDis
   }
 }
 
+/* ── Auto-login tracking ── */
+var autoTriggered = {};
+
+function autoLoginProvider(accts, pk) {
+  for (var i = 0; i < accts.length; i++) {
+    var a = accts[i];
+    var key = a.email + '-' + pk;
+    if (autoTriggered[key]) continue;
+    var provAuth = a.providerAuth && a.providerAuth[pk];
+    var status = (provAuth && provAuth.status) || 'disconnected';
+    if (status === 'live') {
+      autoTriggered[key] = true;
+      continue;
+    }
+    autoTriggered[key] = true;
+    // Stagger auto-login attempts to avoid opening multiple browsers at once
+    setTimeout(
+      (function (em, prov) {
+        return function () {
+          handleProviderLogin(em, prov);
+        };
+      })(a.email, pk),
+      i * 3000,
+    );
+  }
+}
+
 /* ── Init ── */
 function init() {
   /* Load on start */
   loadAccounts();
-
-  /* Auto-poll every 2 seconds */
-  createPoller(loadAccounts, 2000);
 
   /* Add form submit */
   document.getElementById('addForm').addEventListener('submit', function (e) {
