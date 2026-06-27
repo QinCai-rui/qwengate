@@ -68,10 +68,23 @@ function providerStatusBadge(status) {
     connecting: 'connecting',
     pending: 'pending',
     disconnected: 'disconnected',
+    captcha: 'captcha',
+    waf: 'waf',
+    bot_detected: 'captcha',
     unknown: 'unknown',
   };
   var dotClass = dots[status] || 'unknown';
-  var labels = { live: 'Live', expired: 'Expired', connecting: 'Connecting', pending: 'Pending', disconnected: '—', unknown: 'Unknown' };
+  var labels = {
+    live: 'Live',
+    expired: 'Expired',
+    connecting: 'Connecting',
+    pending: 'Pending',
+    disconnected: '\u2014',
+    captcha: 'Bot Detect',
+    waf: 'WAF Block',
+    bot_detected: 'Bot Detect',
+    unknown: 'Unknown',
+  };
   var label = labels[status] || 'Unknown';
   return '<span class="prov-status"><span class="prov-dot ' + dotClass + '"></span>' + label + '</span>';
 }
@@ -108,7 +121,7 @@ function renderProviderTable(accts, pk, cfg) {
   for (var i = 0; i < accts.length; i++) {
     var a = accts[i];
     var provAuth = a.providerAuth && a.providerAuth[pk];
-    var status = (provAuth && provAuth.status) || 'disconnected';
+    var status = (provAuth && provAuth.status) || (provAuth && provAuth.lastError) || 'disconnected';
     var isLive = status === 'live';
     var loginBtn = isLive
       ? '<button class="prov-login-btn logged-in" disabled>Logged In</button>'
@@ -145,6 +158,8 @@ function renderProviderTable(accts, pk, cfg) {
       loginBtn +
       '<button class="account-btn small danger" data-email="' +
       escHtml(a.email) +
+      '" data-provider="' +
+      pk +
       '" data-action="remove">Remove</button>' +
       '</div></td>';
     rows += '<tr>' + cols + '</tr>';
@@ -224,15 +239,25 @@ function handleAdd(email, password) {
   })();
 }
 
-/* ── Remove Account ── */
-function handleRemove(email) {
-  document.getElementById('confirmEmail').textContent = email;
+/* ── Remove Account / Provider ── */
+function handleRemove(email, provider) {
+  var message;
+  if (provider) {
+    message = 'Are you sure you want to remove <strong>' + escHtml(email) + '</strong> from <strong>' + escHtml(provider) + '</strong>?';
+  } else {
+    message = 'Are you sure you want to remove <strong>' + escHtml(email) + '</strong>? This cannot be undone.';
+  }
+  document.getElementById('confirmEmail').innerHTML = message;
   document.getElementById('confirmOverlay').classList.add('open');
   document.getElementById('confirmYes').onclick = async function () {
     document.getElementById('confirmOverlay').classList.remove('open');
     setError(null);
     try {
-      var res = await fetch('/api/accounts/' + encodeURIComponent(email), {
+      var url = '/api/accounts/' + encodeURIComponent(email);
+      if (provider) {
+        url += '/provider/' + encodeURIComponent(provider);
+      }
+      var res = await fetch(url, {
         method: 'DELETE',
         headers: authHeaders(),
       });
@@ -243,11 +268,10 @@ function handleRemove(email) {
         result = null;
       }
       if (!res.ok) {
-        throw new Error(
-          result && result.error && result.error.message ? result.error.message : 'Failed to remove account (' + res.status + ')',
-        );
+        throw new Error(result && result.error && result.error.message ? result.error.message : 'Failed to remove (' + res.status + ')');
       }
-      showToast('Account removed: ' + email, 'success');
+      var successMsg = provider ? provider + ' removed from ' + email : 'Account removed: ' + email;
+      showToast(successMsg, 'success');
       loadAccounts();
     } catch (e) {
       setError(e.message);
@@ -478,7 +502,7 @@ function init() {
     var action = btn.getAttribute('data-action');
     var provider = btn.getAttribute('data-provider');
     if (!email && !action && !provider) return;
-    if (action === 'remove') handleRemove(email);
+    if (action === 'remove') handleRemove(email, provider);
     else if (provider) handleProviderLogin(email, provider);
   });
 

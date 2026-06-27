@@ -542,6 +542,16 @@
   background: transparent;
   border: 1.5px solid var(--border);
 }
+.prov-dot.captcha {
+  background: #ff6b35;
+  box-shadow: 0 0 6px rgba(255, 107, 53, 0.4);
+}
+
+.prov-dot.waf {
+  background: #e74c3c;
+  box-shadow: 0 0 6px rgba(231, 76, 60, 0.4);
+}
+
 .prov-dot.unknown {
   background: var(--border);
 }
