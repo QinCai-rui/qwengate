@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Shared Manual Browser Login**: `manualBrowserLogin()` extracted to `loginHelpers.ts` — one reusable function with `beforeFill` callback and `authPagePaths` config for provider-specific login flows. (#auth, loginHelpers.ts)
 - **Per-Provider Disable**: `disabledProviders: string[]` on `AccountEntry` replaces single boolean `disabled`. Each provider table can disable its own provider per account. (#accounts, accountManager.ts/accounts.js)
 - **Provider Persistence**: `providers` and `disabledProviders` arrays now persisted to `auth.json` (were only in-memory). (#accounts, accountManager.ts)
-- **AGENTS.md Rules**: Added "Commit after every logical change" and "Update CHANGELOG.md with every change" to global agent rules. (#config, ~/.config/opencode/AGENTS.md)
 - **Configure Provider Keys Modal**: New modal in accounts page for setting DeepSeek and GLM API keys per account. (#accounts, accounts.ts/accounts.js)
 - **Login Endpoint for Each Provider**: Dedicated GET endpoints for Qwen (`/autofill`), DeepSeek (`/login/deepseek`), GLM (`/login/glm`). (#api, dashboardRoutes.ts/routes/accounts.ts)
 - **Poll Provider Login**: Per-provider polling that watches `providerAuth[provider].status === 'live'` instead of generic auth check. (#accounts, accounts.js)
