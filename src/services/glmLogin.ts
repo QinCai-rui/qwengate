@@ -75,6 +75,7 @@ export async function loginGlmAuto(
         refreshToken: null,
         lastLoginAttempt: Date.now(),
         captchaVerifyParam,
+        cookies: outcome.cookieStr || undefined,
       },
     };
   }
@@ -91,6 +92,7 @@ export async function loginGlmAuto(
           expiresAt: outcome.expiresAt,
           refreshToken: null,
           lastLoginAttempt: Date.now(),
+          cookies: outcome.cookieStr || undefined,
         },
       };
     }

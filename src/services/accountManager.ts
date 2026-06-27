@@ -82,6 +82,7 @@ interface PersistedAccountData {
   providers?: string[];
   throttledUntil?: number;
   disabledProviders?: string[];
+  providerStates?: { [provider: string]: { token?: string; expiresAt?: number; cookies?: string; captchaVerifyParam?: string } };
 }
 function parseAccountsFromEnv(): Array<{ email: string; password: string }> {
   const result: Array<{ email: string; password: string }> = [];
@@ -209,31 +210,28 @@ export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
   }
   const data: PersistedAccountData[] = accounts
     .filter((a) => a.password)
-    .map((a) => ({
-      email: a.email,
-      password: a.password,
-      providers: a.providers && a.providers.length > 0 ? a.providers : undefined,
-      ...(a.throttledUntil > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
-      disabledProviders: a.disabledProviders && a.disabledProviders.length > 0 ? a.disabledProviders : undefined,
-    }));
+    .map((a) => {
+      const entry: PersistedAccountData = {
+        email: a.email,
+        password: a.password,
+        providers: a.providers && a.providers.length > 0 ? a.providers : undefined,
+        ...(a.throttledUntil > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
+        disabledProviders: a.disabledProviders && a.disabledProviders.length > 0 ? a.disabledProviders : undefined,
+      };
+      // Persist provider states (cookies, captchaVerifyParam) for GLM/DeepSeek
+      const ps: PersistedAccountData['providerStates'] = {};
+      for (const [provider, state] of Object.entries(a.providerStates)) {
+        if (state && (state.cookies || state.captchaVerifyParam)) {
+          ps[provider] = { cookies: state.cookies, captchaVerifyParam: state.captchaVerifyParam };
+        }
+      }
+      if (Object.keys(ps).length > 0) entry.providerStates = ps;
+      return entry;
+    });
   writeFileSync(AUTH_FILE, JSON.stringify(data, null, 2), 'utf-8');
 }
-export function loadAccountsFromFile(): Array<{
-  email: string;
-  password: string;
-  providers?: string[];
-  throttledUntil?: number;
-  disabledProviders?: string[];
-}> {
-  const tryLoad = (
-    filePath: string,
-  ): Array<{
-    email: string;
-    password: string;
-    providers?: string[];
-    throttledUntil?: number;
-    disabledProviders?: string[];
-  }> | null => {
+export function loadAccountsFromFile(): PersistedAccountData[] {
+  const tryLoad = (filePath: string): PersistedAccountData[] | null => {
     try {
       if (!existsSync(filePath)) return null;
       const raw = readFileSync(filePath, 'utf-8');
@@ -246,6 +244,7 @@ export function loadAccountsFromFile(): Array<{
           providers: d.providers,
           throttledUntil: d.throttledUntil,
           disabledProviders: d.disabledProviders,
+          providerStates: d.providerStates,
         }));
     } catch (err: any) {
       logStore.log('error', 'auth', `Failed to load ${filePath}: ${err.message}`);
@@ -253,7 +252,26 @@ export function loadAccountsFromFile(): Array<{
     }
   };
 
-  return tryLoad(AUTH_FILE) ?? tryLoad(FALLBACK_AUTH_FILE) ?? [];
+  // Phase 2: Restore provider states from persisted data
+  const persisted = tryLoad(AUTH_FILE) ?? tryLoad(FALLBACK_AUTH_FILE) ?? [];
+  // Update in-memory accounts with persisted provider states
+  for (const p of persisted) {
+    if (p.providerStates) {
+      const acct = accounts.find((a) => a.email.toLowerCase().trim() === p.email.toLowerCase().trim());
+      if (acct) {
+        for (const [provider, ps] of Object.entries(p.providerStates)) {
+          if (ps) {
+            const state = acct.providerStates[provider];
+            if (state) {
+              if (ps.cookies) state.cookies = ps.cookies;
+              if (ps.captchaVerifyParam) state.captchaVerifyParam = ps.captchaVerifyParam;
+            }
+          }
+        }
+      }
+    }
+  }
+  return persisted;
 }
 export async function addAccount(
   email: string,

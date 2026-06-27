@@ -4,7 +4,7 @@
  */
 
 export const GLM_BASE_URL = 'https://chat.z.ai';
-export const GLM_FE_VERSION = '1.1.67';
+export const GLM_FE_VERSION = 'prod-fe-1.1.67';
 
 const GLM_QUERY_VERSION = '0.0.1';
 
@@ -12,6 +12,7 @@ export interface GlmContext {
   jwt: string;
   userId: string;
   userName: string;
+  cookieStr?: string;
 }
 
 /**
@@ -29,7 +30,7 @@ export function buildFingerprintParams(ctx: GlmContext): URLSearchParams {
   params.set('version', GLM_QUERY_VERSION);
   params.set('platform', 'web');
   params.set('token', ctx.jwt);
-  params.set('user_agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36');
+  params.set('user_agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36');
   params.set('language', 'en-US');
   params.set('languages', 'en-US,en;q=0.9');
   params.set('timezone', 'Asia/Shanghai');
@@ -126,15 +127,22 @@ export async function buildGlmHeaders(ctx: GlmContext, body: string, requestId: 
   const signature = await computeSignature(body, ctx.jwt, '', requestId);
 
   return {
-    Cookie: `token=${ctx.jwt}`,
+    Cookie: ctx.cookieStr || `token=${ctx.jwt}`,
+    Authorization: `Bearer ${ctx.jwt}`,
     'Content-Type': 'application/json',
     'x-fe-version': GLM_FE_VERSION,
+    'x-signature': signature,
     'x-region': 'overseas',
     'x-request-id': requestId,
     Accept: '*/*',
-    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
+    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
     Origin: 'https://chat.z.ai',
-    Referer: 'https://chat.z.ai/',
+    Referer: '',
+    'accept-language': 'en-US',
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-origin',
+    'sec-gpc': '1',
   };
 }
 

@@ -406,6 +406,7 @@ export async function manualBrowserLogin(email: string, password: string, opts: 
           expiresAt: tokenResult.expiresAt,
           refreshToken: null,
           lastLoginAttempt: null,
+          captchaVerifyParam: tokenResult.captchaVerifyParam,
         };
       }
       // Fallback: use cookies
@@ -509,6 +510,7 @@ export async function manualBrowserLogin(email: string, password: string, opts: 
         expiresAt: tokenResult.expiresAt,
         refreshToken: null,
         lastLoginAttempt: Date.now(),
+        captchaVerifyParam: tokenResult.captchaVerifyParam,
       };
     }
     // Fallback: use cookies if provider-specific extraction failed

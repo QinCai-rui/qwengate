@@ -371,12 +371,76 @@ export async function extractProviderToken(
   }
 
   if (provider === 'glm') {
-    // GLM: read JWT from token cookie
+    // GLM: read JWT from token cookie and captcha_verify_param from the page
     try {
       const cookies = await context.cookies();
       const tokenCookie = cookies.find((c: any) => c.name === 'token' && (c.domain.includes('z.ai') || c.domain.includes('chatglm')));
       if (tokenCookie?.value) {
-        return { token: tokenCookie.value, expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000 };
+        // Try to extract captcha_verify_param from the page (if available)
+        let captchaVerifyParam: string | undefined;
+        try {
+          if (page) {
+            await page.goto('https://chat.z.ai', { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+            await new Promise((r) => setTimeout(r, 5000));
+            captchaVerifyParam = await page.evaluate(() => {
+              const globals = [
+                'captchaVerifyParam',
+                '__captchaVerifyParam',
+                'CAPTCHA_VERIFY_PARAM',
+                'aliyunCaptchaVerifyParam',
+                'AWSC_verifyParam',
+              ];
+              for (const key of globals) {
+                try {
+                  const val = (window as any)[key];
+                  if (val && typeof val === 'string' && val.length > 10) return val;
+                } catch {}
+              }
+              try {
+                const awsc = (window as any).AWSC;
+                if (awsc?.nc?.getVerifyParam) {
+                  const param = awsc.nc.getVerifyParam();
+                  if (param) return param;
+                }
+              } catch {}
+              try {
+                for (let i = 0; i < localStorage.length; i++) {
+                  const k = localStorage.key(i);
+                  if (k && k.toLowerCase().includes('captcha')) {
+                    const v = localStorage.getItem(k);
+                    if (v && v.length > 10) return v;
+                  }
+                }
+              } catch {}
+              try {
+                const scripts = document.querySelectorAll('script:not([src])');
+                for (const s of scripts) {
+                  const text = s.textContent || '';
+                  const m1 = text.match(/["']captcha_verify_param["']\s*:\s*["']([^"']{10,})["']/);
+                  if (m1) return m1[1];
+                  const m2 = text.match(/captchaVerifyParam\s*[:=]\s*["']([^"']{10,})["']/);
+                  if (m2) return m2[1];
+                }
+              } catch {}
+              try {
+                const nd = (window as any).__NEXT_DATA__;
+                if (nd) {
+                  const json = JSON.stringify(nd);
+                  const m = json.match(/captcha_verify_param["']:\s*["']([^"']{10,})["']/);
+                  if (m) return m[1];
+                }
+              } catch {}
+              return null;
+            });
+          }
+        } catch {
+          // Non-critical
+        }
+        return {
+          token: tokenCookie.value,
+          expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
+          captchaVerifyParam,
+        };
       }
     } catch (err: any) {
       logStore.log('warn', 'browser', `Failed to extract GLM token: ${err.message}`);
@@ -598,7 +662,7 @@ export async function autoLoginViaBrowser(email: string, password: string | unde
 export async function loadSessionFromProfile(
   email: string,
   provider: 'qwen' | 'deepseek' | 'glm',
-): Promise<{ token: string; expiresAt: number } | null> {
+): Promise<{ token: string; expiresAt: number; cookieStr?: string } | null> {
   let context: any = null;
   try {
     context = await setupBrowserContext(email, true); // headless: true — no UI
@@ -630,22 +694,36 @@ export async function loadSessionFromProfile(
       // GLM: token is in the `token` cookie (HttpOnly, set on chat.z.ai domain)
       const cookies = await context.cookies('https://chat.z.ai');
       const tokenCookie = cookies.find((c: any) => c.name === 'token' && c.value);
-      if (tokenCookie?.value) {
-        // Validate the JWT is not expired
-        try {
-          const payload = JSON.parse(atob(tokenCookie.value.split('.')[1]));
-          if (payload.exp && payload.exp * 1000 < Date.now()) {
-            logStore.log('warn', 'browser', `GLM JWT expired for ${email} — needs re-login`);
-            await context.close().catch(() => {});
-            return null;
-          }
-        } catch {
-          // Can't decode — assume valid, GLM tokens don't expire per payload
-        }
-        logStore.log('info', 'browser', `Loaded GLM JWT from profile cookie for ${email}`);
+      if (!tokenCookie?.value) {
         await context.close().catch(() => {});
-        return { token: tokenCookie.value, expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000 };
+        return null;
       }
+
+      // Validate the JWT is not expired
+      try {
+        const payload = JSON.parse(atob(tokenCookie.value.split('.')[1]));
+        if (payload.exp && payload.exp * 1000 < Date.now()) {
+          logStore.log('warn', 'browser', `GLM JWT expired for ${email} — needs re-login`);
+          await context.close().catch(() => {});
+          return null;
+        }
+      } catch {
+        // Can't decode — assume valid, GLM tokens don't expire per payload
+      }
+
+      // Build the full cookie string from all browser cookies
+      const cookieStr = cookies
+        .filter((c: any) => c.value)
+        .map((c: any) => `${c.name}=${c.value}`)
+        .join('; ');
+
+      logStore.log('info', 'browser', `Loaded GLM JWT from profile cookie for ${email}`);
+      await context.close().catch(() => {});
+      return {
+        token: tokenCookie.value,
+        expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
+        cookieStr,
+      };
     } else {
       // Qwen: existing cookie-based check
       const cookies = await context.cookies();

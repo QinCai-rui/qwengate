@@ -15,6 +15,7 @@ export interface GlmProxyContext {
   jwt: string;
   userId: string;
   userName: string;
+  cookieStr?: string;
 }
 
 /**
@@ -104,10 +105,11 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
   const history = messagesToGlmFormat(body.messages || []);
   const variables = buildGlmVariables(ctx);
 
-  // Extract captcha_verify_param from provider state (required by GLM on every chat call)
+  // Extract captcha_verify_param and browser cookies from provider state
   const { getProviderState } = await import('../../../services/accountManager.ts');
   const acct = (await import('../../../services/accountManager.ts')).accounts.find((a: any) => a.providerStates.glm?.token === jwt);
   const captchaVerifyParam = acct?.providerStates.glm?.captchaVerifyParam;
+  ctx.cookieStr = acct?.providerStates.glm?.cookies || undefined;
 
   // ponytail: features and background_tasks must be objects, not arrays — GLM crashes (500) on array types
   const glmFeatures: Record<string, any> = {
@@ -160,7 +162,10 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => 'unknown error');
+      const respHeaders = Object.fromEntries(resp.headers.entries());
       logStore.log('warn', 'glm-pipeline', `GLM API error (${resp.status}): ${errText.slice(0, 1000)}`);
+      logStore.log('warn', 'glm-pipeline', `GLM response headers: ${JSON.stringify(respHeaders)}`);
+      logStore.log('warn', 'glm-pipeline', `GLM request body (truncated): ${bodyStr.slice(0, 2000)}`);
       logStore.log('warn', 'glm-pipeline', `GLM request URL: ${url.slice(0, 500)}`);
       logStore.log(
         'warn',
@@ -189,6 +194,7 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
       let fullContent = '';
       let fullThinking = '';
       let usage: any = null;
+      let captchaError: string | undefined;
 
       for (const line of lines) {
         try {
@@ -196,6 +202,14 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
           if (raw === '[DONE]') continue;
           const parsed = JSON.parse(raw);
           const data = parsed.data || parsed;
+
+          // Check for captcha/error responses from GLM
+          if (data.error?.code === 'FRONTEND_CAPTCHA_REQUIRED') {
+            captchaError = data.error.detail || 'CAPTCHA verification required';
+            logStore.log('warn', 'glm-pipeline', `GLM captcha error: ${captchaError}`);
+            break;
+          }
+
           if (data.phase === 'thinking') {
             fullThinking += data.delta_content || '';
           } else if (data.phase === 'answer') {
@@ -206,6 +220,18 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
         } catch {
           // Skip unparseable lines
         }
+      }
+
+      if (captchaError) {
+        return c.json(
+          {
+            error: {
+              message: `GLM requires CAPTCHA verification: ${captchaError}. Login via dashboard → GLM → Login button.`,
+              type: 'auth_error',
+            },
+          },
+          503,
+        );
       }
 
       const responseMsg: Record<string, any> = {

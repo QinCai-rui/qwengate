@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fix: DeepSeek token extraction from localStorage instead of cross-origin fetch (page.evaluate fetch failed on about:blank) — uses localStorage.userToken after navigation, plus server-side validation to skip stale tokens (#deepseek, browserProfiles.ts)
 - fix: DeepSeek auto-login no longer uses cookie fallback for token-based auth (cookies don't contain the Bearer token needed by DeepSeek API) — falls through to fresh login when extraction returns null (#deepseek, browserProfiles.ts)
 - fix: DeepSeek sign-in email input selector case-sensitivity (CSS `*=Email` didn't match `placeholder="Phone number / email address"`) and Enter key fallback when no submit button (#deepseek, browserProfiles.ts)
-- fix: GLM pipeline headers — removed x-signature HMAC (wrong key caused 500), removed Authorization header (conflicts with Cookie), fixed x-fe-version format from `prod-fe-1.1.67` to `1.1.67` (#glm, pipeline.ts, spoofing.ts)
+- fix: GLM pipeline headers — restored x-signature HMAC, Authorization header, x-fe-version=prod-fe-1.1.67, Chrome/149 UA, full browser Cookie string with all cookies, lang + sec-fetch headers, empty referer (#glm, spoofing.ts, pipeline.ts, browserProfiles.ts, auth.ts, glmLogin.ts, loginHelpers.ts, accountManager.ts)
 - fix: DeepSeek tool now sends aws-waf-token cookie + correct referer + search_enabled=true (#deepseek, pipeline.ts, spoofing.ts, browserProfiles.ts)
 - fix: GLM tool now sends captcha_verify_param + stream=true + reasoning_effort=max + separate id UUID (#glm, pipeline.ts, browserProfiles.ts, types/auth.ts)
 - fix: DeepSeek non-streaming response extraction now handles JSON-patch APPEND format (#deepseek, pipeline.ts)
