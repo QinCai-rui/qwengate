@@ -206,12 +206,14 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
           const { loadSessionFromProfile } = await import('./browserProfiles.ts');
           const session = await loadSessionFromProfile(acct.email, 'glm');
           if (session) {
+            const existingCaptchaParam = acct.providerStates.glm?.captchaVerifyParam;
             acct.providerStates.glm = {
               token: session.token,
               expiresAt: session.expiresAt,
               refreshToken: null,
               lastLoginAttempt: null,
               cookies: session.cookieStr || undefined,
+              captchaVerifyParam: session.captchaVerifyParam || existingCaptchaParam || undefined,
             };
             logStore.log('info', 'auth', `\u2713 GLM session loaded from profile for ${acct.email}`);
           }
@@ -220,6 +222,10 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
         }
       }
     }
+
+    // Persist any provider states loaded from profiles (cookies, captchaVerifyParam)
+    const { saveAccountsToFile } = await import('./accountManager.ts');
+    saveAccountsToFile(accounts);
 
     // Phase 2: Login accounts that don't have tokens yet — max 3 concurrent
     // Only login accounts configured for qwen (checked via providers array)

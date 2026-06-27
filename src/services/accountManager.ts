@@ -73,7 +73,46 @@ export function migrateFromOldPaths(): void {
 
 /** Strip // and /* * / JSONC comments before JSON.parse */
 function stripJsoncComments(text: string): string {
-  return text.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  // Strip // comments only outside of strings (not inside quoted values like URLs)
+  // ponytail: simple state machine — tracks whether we're inside a string
+  let result = '';
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (escape) {
+      result += ch;
+      escape = false;
+      continue;
+    }
+    if (ch === '\\' && inString) {
+      result += ch;
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      result += ch;
+      continue;
+    }
+    if (!inString && ch === '/' && text[i + 1] === '/') {
+      // Skip to end of line
+      const eol = text.indexOf('\n', i);
+      if (eol === -1) break;
+      i = eol;
+      result += '\n';
+      continue;
+    }
+    if (!inString && ch === '/' && text[i + 1] === '*') {
+      // Skip to closing */
+      const end = text.indexOf('*/', i + 2);
+      if (end === -1) break;
+      i = end + 1;
+      continue;
+    }
+    result += ch;
+  }
+  return result;
 }
 
 interface PersistedAccountData {
@@ -261,11 +300,12 @@ export function loadAccountsFromFile(): PersistedAccountData[] {
       if (acct) {
         for (const [provider, ps] of Object.entries(p.providerStates)) {
           if (ps) {
-            const state = acct.providerStates[provider];
-            if (state) {
-              if (ps.cookies) state.cookies = ps.cookies;
-              if (ps.captchaVerifyParam) state.captchaVerifyParam = ps.captchaVerifyParam;
+            if (!acct.providerStates[provider]) {
+              acct.providerStates[provider] = { token: null, expiresAt: null, refreshToken: null, lastLoginAttempt: null };
             }
+            const state = acct.providerStates[provider]!;
+            if (ps.cookies) state.cookies = ps.cookies;
+            if (ps.captchaVerifyParam) state.captchaVerifyParam = ps.captchaVerifyParam;
           }
         }
       }
