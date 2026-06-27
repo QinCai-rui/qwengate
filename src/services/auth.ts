@@ -213,7 +213,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
               refreshToken: null,
               lastLoginAttempt: null,
               cookies: session.cookieStr || undefined,
-              captchaVerifyParam: session.captchaVerifyParam || existingCaptchaParam || undefined,
+              captchaVerifyParam: existingCaptchaParam || undefined,
             };
             logStore.log('info', 'auth', `\u2713 GLM session loaded from profile for ${acct.email}`);
           }
@@ -276,6 +276,9 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
         logStore.log('error', 'auth', `GLM auto-login failed for ${acct.email}: ${err.message}`);
       }
     }
+
+    // Persist provider states after auto-login (DeepSeek/GLM tokens)
+    saveAccountsToFile(accounts);
 
     // Phase 3: Run post-login callbacks in parallel
     if (onAccountReady) {
