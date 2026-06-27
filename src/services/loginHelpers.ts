@@ -407,8 +407,18 @@ export async function manualBrowserLogin(email: string, password: string, opts: 
       };
     }
 
-    const page = context.pages()[0] || (await context.newPage());
-    await page.goto(opts.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // Create a fresh page — don't reuse the initial about:blank page from the persistent
+    // context, which can be in a bad state (half-loaded, blank, or corrupted session restore).
+    // Original code used browser.newContext() + context.newPage() for the same reason.
+    const pages = context.pages();
+    const page = await context.newPage();
+    // Close any leftover initial pages to avoid blank tab clutter
+    for (const p of pages) await p.close().catch(() => {});
+
+    // Use networkidle — DeepSeek is an SPA that renders via JS after DOMContentLoaded.
+    // domcontentloaded fires too early (before React renders), so the page shows blank.
+    // Original code used networkidle successfully.
+    await page.goto(opts.loginUrl, { waitUntil: 'networkidle', timeout: 30000 });
 
     // Optional pre-fill setup (e.g., click "Continue with Email")
     if (opts.beforeFill) {
