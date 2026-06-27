@@ -176,6 +176,50 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       }
     }
 
+    // Phase 1.5: Load existing sessions from browser profile (no re-login)
+    // For DeepSeek/GLM, check the persistent profile for valid tokens before auto-login
+    for (const acct of accounts) {
+      const providers = acct.providers || ['qwen'];
+
+      // DeepSeek: try to load from profile
+      if (providers.includes('deepseek') && !acct.providerStates.deepseek?.token) {
+        try {
+          const { loadSessionFromProfile } = await import('./browserProfiles.ts');
+          const session = await loadSessionFromProfile(acct.email, 'deepseek');
+          if (session) {
+            acct.providerStates.deepseek = {
+              token: session.token,
+              expiresAt: session.expiresAt,
+              refreshToken: null,
+              lastLoginAttempt: null,
+            };
+            logStore.log('info', 'auth', `\u2713 DeepSeek session loaded from profile for ${acct.email}`);
+          }
+        } catch (err: any) {
+          logStore.log('warn', 'auth', `DeepSeek profile load failed for ${acct.email}: ${err.message}`);
+        }
+      }
+
+      // GLM: try to load from profile
+      if (providers.includes('glm') && !acct.providerStates.glm?.token) {
+        try {
+          const { loadSessionFromProfile } = await import('./browserProfiles.ts');
+          const session = await loadSessionFromProfile(acct.email, 'glm');
+          if (session) {
+            acct.providerStates.glm = {
+              token: session.token,
+              expiresAt: session.expiresAt,
+              refreshToken: null,
+              lastLoginAttempt: null,
+            };
+            logStore.log('info', 'auth', `\u2713 GLM session loaded from profile for ${acct.email}`);
+          }
+        } catch (err: any) {
+          logStore.log('warn', 'auth', `GLM profile load failed for ${acct.email}: ${err.message}`);
+        }
+      }
+    }
+
     // Phase 2: Login accounts that don't have tokens yet — max 3 concurrent
     // Only login accounts configured for qwen (checked via providers array)
     const needLogin = accounts.filter((a) => (a.providers || ['qwen']).includes('qwen') && !a.providerStates.qwen?.token && a.password);

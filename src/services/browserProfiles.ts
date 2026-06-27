@@ -70,7 +70,7 @@ export async function setupBrowserContext(email: string, headless: boolean): Pro
 async function checkExistingToken(context: any): Promise<boolean> {
   const existingCookies: Cookie[] = await context.cookies();
   const existingToken = existingCookies.find((c: Cookie) => c.name === 'token');
-  return !!(existingToken && existingToken.expires && existingToken.expires * 1000 > Date.now());
+  return !!(existingToken && (!existingToken.expires || existingToken.expires <= 0 || existingToken.expires * 1000 > Date.now()));
 }
 
 export async function fillLoginForm(page: any, email: string, password: string): Promise<void> {
@@ -303,7 +303,7 @@ async function buildCookieFallback(context: any): Promise<{ cookieStr: string; e
     .map((c: any) => `${c.name}=${c.value}`)
     .join('; ');
   const expiresAt =
-    cookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
+    cookies.reduce((latest: number, c: any) => Math.max(latest, c.expires && c.expires > 0 ? c.expires * 1000 : 0), 0) ||
     Date.now() + 7 * 24 * 60 * 60 * 1000;
   return { cookieStr, expiresAt };
 }
@@ -324,7 +324,10 @@ export async function autoLoginViaBrowser(email: string, password: string | unde
         c.value &&
         (c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session') || c.name.toLowerCase().includes('auth')),
     );
-    const allValid = existingCookies.every((c: any) => !c.expires || c.expires * 1000 > Date.now());
+    const allValid = existingCookies.every((c: any) => {
+      if (!c.expires || c.expires <= 0) return true; // session cookie = valid
+      return c.expires * 1000 > Date.now(); // check expiry
+    });
     if (hasAuthCookie && allValid) {
       // Extract provider-specific token if requested
       const existingPage = context.pages()[0] || (await context.newPage().catch(() => null));
@@ -334,7 +337,7 @@ export async function autoLoginViaBrowser(email: string, password: string | unde
         .map((c: any) => `${c.name}=${c.value}`)
         .join('; ');
       const expiresAt =
-        existingCookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
+        existingCookies.reduce((latest: number, c: any) => Math.max(latest, c.expires && c.expires > 0 ? c.expires * 1000 : 0), 0) ||
         Date.now() + 7 * 24 * 60 * 60 * 1000;
       await context.close().catch(() => {});
       logStore.log('info', 'browser', `Existing valid session for ${email} — skipping auto-login`);
@@ -432,6 +435,91 @@ export async function autoLoginViaBrowser(email: string, password: string | unde
     logStore.log('error', 'browser', `Auto-login error for ${email}: ${err.message}`);
     if (context) await context.close().catch(() => {});
     return { status: 'error' };
+  }
+}
+
+/**
+ * Load a valid session from the persistent browser profile without re-logging in.
+ * Opens the profile headlessly, checks for valid auth cookies/localStorage,
+ * and returns the token if found.
+ *
+ * For DeepSeek: reads `localStorage.userToken.value` from chat.deepseek.com
+ * For GLM: reads the `token` cookie from chat.z.ai
+ * For Qwen: uses the existing cookie-based check
+ *
+ * Returns null if no valid session found — caller should then do auto-login.
+ */
+export async function loadSessionFromProfile(
+  email: string,
+  provider: 'qwen' | 'deepseek' | 'glm',
+): Promise<{ token: string; expiresAt: number } | null> {
+  let context: any = null;
+  try {
+    context = await setupBrowserContext(email, true); // headless: true — no UI
+
+    if (provider === 'deepseek') {
+      // DeepSeek: token is in localStorage.userToken
+      const page = await context.newPage();
+      try {
+        await page.goto('https://chat.deepseek.com/', { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => {});
+        const result = await page.evaluate(() => {
+          try {
+            const raw = localStorage.getItem('userToken');
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            return parsed?.value || null;
+          } catch {
+            return null;
+          }
+        });
+        if (result && typeof result === 'string' && result.length > 20) {
+          logStore.log('info', 'browser', `Loaded DeepSeek token from profile localStorage for ${email}`);
+          await context.close().catch(() => {});
+          return { token: result, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 };
+        }
+      } finally {
+        await page.close().catch(() => {});
+      }
+    } else if (provider === 'glm') {
+      // GLM: token is in the `token` cookie (HttpOnly, set on chat.z.ai domain)
+      const cookies = await context.cookies('https://chat.z.ai');
+      const tokenCookie = cookies.find((c: any) => c.name === 'token' && c.value);
+      if (tokenCookie?.value) {
+        // Validate the JWT is not expired
+        try {
+          const payload = JSON.parse(atob(tokenCookie.value.split('.')[1]));
+          if (payload.exp && payload.exp * 1000 < Date.now()) {
+            logStore.log('warn', 'browser', `GLM JWT expired for ${email} — needs re-login`);
+            await context.close().catch(() => {});
+            return null;
+          }
+        } catch {
+          // Can't decode — assume valid, GLM tokens don't expire per payload
+        }
+        logStore.log('info', 'browser', `Loaded GLM JWT from profile cookie for ${email}`);
+        await context.close().catch(() => {});
+        return { token: tokenCookie.value, expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000 };
+      }
+    } else {
+      // Qwen: existing cookie-based check
+      const cookies = await context.cookies();
+      const authCookie = cookies.find(
+        (c: any) => c.name === 'token' && c.value && (!c.expires || c.expires <= 0 || c.expires * 1000 > Date.now()),
+      );
+      if (authCookie?.value) {
+        const expiresAt = authCookie.expires && authCookie.expires > 0 ? authCookie.expires * 1000 : Date.now() + 7 * 24 * 60 * 60 * 1000;
+        logStore.log('info', 'browser', `Loaded Qwen token from profile cookie for ${email}`);
+        await context.close().catch(() => {});
+        return { token: authCookie.value, expiresAt };
+      }
+    }
+
+    await context.close().catch(() => {});
+    return null;
+  } catch (err: any) {
+    logStore.log('warn', 'browser', `loadSessionFromProfile failed for ${email} (${provider}): ${err.message}`);
+    if (context) await context.close().catch(() => {});
+    return null;
   }
 }
 
