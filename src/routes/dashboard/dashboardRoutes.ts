@@ -419,6 +419,60 @@ export function registerDashboardRoutes(app: Hono): void {
     },
   );
 
+  app.get(
+    '/api/accounts/:email/auto-login/deepseek',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const email = c.req.param('email');
+        const { getAccountByEmail, setProviderState } = await import('../../services/accountManager.ts');
+        const acct = getAccountByEmail(email);
+        if (!acct) return c.json({ error: 'Account not found' }, 404);
+
+        const { loginDeepseekAuto } = await import('../../services/deepseekLogin.ts');
+
+        const result = await loginDeepseekAuto(email, acct.password);
+        if (result.status === 'success' && result.result) {
+          setProviderState(email, 'deepseek', result.result);
+          return c.json({ ok: true, status: 'success' });
+        } else if (result.status === 'captcha') {
+          return c.json({ ok: true, status: 'captcha', message: 'CAPTCHA or bot detection — click Login for manual browser' });
+        } else {
+          return c.json({ ok: true, status: 'error', message: 'Auto-login failed — click Login for manual browser' });
+        }
+      } catch (err: any) {
+        return c.json({ error: err.message }, 500);
+      }
+    },
+  );
+
+  app.get(
+    '/api/accounts/:email/auto-login/glm',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const email = c.req.param('email');
+        const { getAccountByEmail, setProviderState } = await import('../../services/accountManager.ts');
+        const acct = getAccountByEmail(email);
+        if (!acct) return c.json({ error: 'Account not found' }, 404);
+
+        const { loginGlmAuto } = await import('../../services/glmLogin.ts');
+
+        const result = await loginGlmAuto(email, acct.password);
+        if (result.status === 'success' && result.result) {
+          setProviderState(email, 'glm', result.result);
+          return c.json({ ok: true, status: 'success' });
+        } else if (result.status === 'captcha') {
+          return c.json({ ok: true, status: 'captcha', message: 'CAPTCHA or bot detection — click Login for manual browser' });
+        } else {
+          return c.json({ ok: true, status: 'error', message: 'Auto-login failed — click Login for manual browser' });
+        }
+      } catch (err: any) {
+        return c.json({ error: err.message }, 500);
+      }
+    },
+  );
+
   app.get('/log/json', async (c, next) => requireApiKey(c, next), logJsonHandler);
   app.get('/log/stream', async (c, next) => requireApiKey(c, next), logStreamHandler);
   app.get(

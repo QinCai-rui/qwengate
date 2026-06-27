@@ -224,6 +224,137 @@ export async function openBrowserProfile(email: string, password?: string, optio
   }
 }
 
+export type AutoLoginOutcome = { status: 'success'; cookieStr: string; expiresAt: number } | { status: 'captcha' | 'closed' | 'error' };
+
+export async function autoLoginViaBrowser(
+  email: string,
+  password: string | undefined,
+  opts: {
+    authUrl: string;
+    authPagePaths: string[];
+    beforeFill?: (page: any) => Promise<void>;
+  },
+): Promise<AutoLoginOutcome> {
+  if (process.env.TEST_MOCK_PLAYWRIGHT) {
+    return { status: 'success', cookieStr: '', expiresAt: Date.now() + 3600000 };
+  }
+
+  let context: any = null;
+  try {
+    context = await setupBrowserContext(email, true); // headless:true — stealth stealth
+
+    // Check existing valid session first
+    const existingCookies: any[] = await context.cookies();
+    const hasAuthCookie = existingCookies.some(
+      (c: any) =>
+        c.value &&
+        (c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session') || c.name.toLowerCase().includes('auth')),
+    );
+    const allValid = existingCookies.every((c: any) => !c.expires || c.expires * 1000 > Date.now());
+    if (hasAuthCookie && allValid) {
+      const cookieStr = existingCookies
+        .filter((c: any) => c.value)
+        .map((c: any) => `${c.name}=${c.value}`)
+        .join('; ');
+      const expiresAt =
+        existingCookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
+        Date.now() + 7 * 24 * 60 * 60 * 1000;
+      await context.close().catch(() => {});
+      logStore.log('info', 'browser', `Existing valid session for ${email} — skipping auto-login`);
+      return { status: 'success', cookieStr, expiresAt };
+    }
+
+    // Create fresh page
+    const pages = context.pages();
+    const page = await context.newPage();
+    for (const p of pages) await p.close().catch(() => {});
+
+    logStore.log('info', 'browser', `Navigating to ${opts.authUrl} for ${email}...`);
+    await page.goto(opts.authUrl, { waitUntil: 'networkidle', timeout: 30_000 });
+
+    // Before-fill callback (e.g., click "Continue with Email" for GLM)
+    if (opts.beforeFill) {
+      await opts.beforeFill(page);
+    }
+
+    // Auto-fill credentials
+    if (password) {
+      logStore.log('info', 'browser', `Filling login form for ${email}...`);
+      // Use fillLoginForm from same file (already imported/available)
+      await fillLoginForm(page, email, password);
+    }
+
+    logStore.log('info', 'browser', `Polling for token for ${email}...`);
+    // Poll for success — URL change OR auth cookies
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await sleep(2000);
+
+      // Check URL change (navigated away from auth page)
+      try {
+        const currentUrl = page.url();
+        if (!opts.authPagePaths.some((p: string) => currentUrl.includes(p))) {
+          const finalCookies: any[] = await context.cookies();
+          await context.close().catch(() => {});
+          const cookieStr = finalCookies
+            .filter((c: any) => c.value)
+            .map((c: any) => `${c.name}=${c.value}`)
+            .join('; ');
+          const expiresAt =
+            finalCookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
+            Date.now() + 7 * 24 * 60 * 60 * 1000;
+          logStore.log('info', 'browser', `✓ Auto-login success for ${email}`);
+          return { status: 'success', cookieStr, expiresAt };
+        }
+      } catch {
+        break;
+      }
+
+      // Check cookies directly (fallback)
+      const currentCookies: any[] = await context.cookies();
+      const hasAuth = currentCookies.some(
+        (c: any) =>
+          c.value &&
+          (c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session') || c.name.toLowerCase().includes('auth')),
+      );
+      if (hasAuth) {
+        await context.close().catch(() => {});
+        const cookieStr = currentCookies
+          .filter((c: any) => c.value)
+          .map((c: any) => `${c.name}=${c.value}`)
+          .join('; ');
+        const expiresAt =
+          currentCookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
+          Date.now() + 7 * 24 * 60 * 60 * 1000;
+        logStore.log('info', 'browser', `✓ Auto-login success (cookie-based) for ${email}`);
+        return { status: 'success', cookieStr, expiresAt };
+      }
+
+      // Check for captcha every 3 attempts
+      if (attempt > 0 && attempt % 3 === 0) {
+        try {
+          const hasCaptcha = await detectCaptcha(page);
+          if (hasCaptcha) {
+            logStore.log('warn', 'browser', `Captcha detected for ${email} — falling back to manual`);
+            await context.close().catch(() => {});
+            return { status: 'captcha' };
+          }
+        } catch {
+          /* captcha detection failed non-critical */
+        }
+      }
+    }
+
+    // Timed out — probably bot detection
+    logStore.log('warn', 'browser', `Auto-login timed out for ${email} — likely bot detection`);
+    await context.close().catch(() => {});
+    return { status: 'captcha' };
+  } catch (err: any) {
+    logStore.log('error', 'browser', `Auto-login error for ${email}: ${err.message}`);
+    if (context) await context.close().catch(() => {});
+    return { status: 'error' };
+  }
+}
+
 async function refreshViaProfile(email: string): Promise<boolean> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) return true;
 

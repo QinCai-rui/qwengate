@@ -195,6 +195,37 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       }
     }
 
+    // Phase 2.5: Auto-login DeepSeek and GLM accounts (headless stealth)
+    const dsNeedLogin = accounts.filter(
+      (a) => (a.providers || ['qwen']).includes('deepseek') && !a.providerStates.deepseek?.token && a.password,
+    );
+    for (const acct of dsNeedLogin) {
+      try {
+        const { loginDeepseekAuto } = await import('./deepseekLogin.ts');
+        const result = await loginDeepseekAuto(acct.email, acct.password);
+        if (result.status === 'success' && result.result) {
+          acct.providerStates.deepseek = result.result;
+        }
+        // captcha/error — user clicks Login button later
+      } catch (err: any) {
+        logStore.log('error', 'auth', `DeepSeek auto-login failed for ${acct.email}: ${err.message}`);
+      }
+    }
+
+    const glmNeedLogin = accounts.filter((a) => (a.providers || ['qwen']).includes('glm') && !a.providerStates.glm?.token && a.password);
+    for (const acct of glmNeedLogin) {
+      try {
+        const { loginGlmAuto } = await import('./glmLogin.ts');
+        const result = await loginGlmAuto(acct.email, acct.password);
+        if (result.status === 'success' && result.result) {
+          acct.providerStates.glm = result.result;
+        }
+        // captcha/error — user clicks Login button later
+      } catch (err: any) {
+        logStore.log('error', 'auth', `GLM auto-login failed for ${acct.email}: ${err.message}`);
+      }
+    }
+
     // Phase 3: Run post-login callbacks in parallel
     if (onAccountReady) {
       const readyPromises = accounts

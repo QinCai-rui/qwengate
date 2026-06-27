@@ -266,6 +266,13 @@ var providerEndpoints = {
   glm: '/login/glm',
 };
 
+/* ── Auto-login endpoints (headless stealth, no browser window) ── */
+var autoProviderEndpoints = {
+  qwen: '/login',
+  deepseek: '/auto-login/deepseek',
+  glm: '/auto-login/glm',
+};
+
 function handleProviderLogin(email, provider) {
   var loginBtns = document.querySelectorAll('button[data-email="' + escHtml(email) + '"][data-provider="' + provider + '"]');
   loginBtns.forEach(function (b) {
@@ -385,6 +392,38 @@ async function handleToggleProviderDisabled(event, email, provider, currentlyDis
   }
 }
 
+async function autoLoginForProvider(email, provider) {
+  try {
+    var ep = autoProviderEndpoints[provider];
+    if (!ep) return;
+    var res = await fetch('/api/accounts/' + encodeURIComponent(email) + ep, {
+      method: 'GET',
+      headers: authHeaders(),
+    });
+    var result;
+    try {
+      result = await res.json();
+    } catch {
+      result = null;
+    }
+    if (!res.ok) {
+      showToast(provider + ' auto-login failed (' + res.status + ')', 'warning');
+      return;
+    }
+    if (result.status === 'success') {
+      pollProviderLogin(email, provider, 15);
+    } else if (result.status === 'captcha') {
+      showToast(provider + ': ' + (result.message || 'Bot detection \u2014 click Login to complete manually'), 'warning');
+      loadAccounts();
+    } else {
+      showToast(result.message || provider + ' auto-login failed', 'warning');
+      loadAccounts();
+    }
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
 /* ── Auto-login tracking ── */
 var autoTriggered = {};
 
@@ -400,11 +439,11 @@ function autoLoginProvider(accts, pk) {
       continue;
     }
     autoTriggered[key] = true;
-    // Stagger auto-login attempts to avoid opening multiple browsers at once
+    // Stagger auto-login attempts to avoid launching multiple browsers at once
     setTimeout(
       (function (em, prov) {
         return function () {
-          handleProviderLogin(em, prov);
+          autoLoginForProvider(em, prov);
         };
       })(a.email, pk),
       i * 3000,
