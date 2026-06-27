@@ -1,1 +1,20 @@
-{"code":0,"msg":"","data":{"biz_code":0,"biz_msg":"","biz_data":{"challenge":{"algorithm":"DeepSeekHashV1","challenge":"92b9091e647df52b7df291972d230816d51eef56baaa894948f55b1132a47284","salt":"79b153922e8c2caa2b8e","signature":"d9bebcd2658cb69a6c01d3937e5489f0f854f5602e946a7b1d96f0fe22227a22","difficulty":144000,"expire_at":1782414648421,"expire_after":300000,"target_path":"/api/v0/chat/completion"}}}}
+{
+  "code": 0,
+  "msg": "",
+  "data": {
+    "biz_code": 0,
+    "biz_msg": "",
+    "biz_data": {
+      "challenge": {
+        "algorithm": "DeepSeekHashV1",
+        "challenge": "1d94201403117cf7c7161f486bf43315944f299d9bd7aa6c9ebc230cdc4ce969",
+        "salt": "bfc9cd02e6b4a6d98537",
+        "signature": "5bb5cd2445fa9a06cbd74c27df25260bdc676caabfa876cc8ede93ed5118aecf",
+        "difficulty": 144000,
+        "expire_at": 1782537291376,
+        "expire_after": 300000,
+        "target_path": "/api/v0/chat/completion"
+      }
+    }
+  }
+}

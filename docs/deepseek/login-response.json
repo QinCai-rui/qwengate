@@ -1,1 +1,25 @@
-{"code":0,"msg":"","data":{"biz_code":0,"biz_msg":"","biz_data":{"code":0,"msg":"","user":{"id":"6ccdc439-aaed-4d78-a9fe-4bd0b0c32d16","token":"sIZSlxOJGGv1VlTs7YpfZlz/3V4AhPfzFSsQaFPItR12caixYAbMQ2KQ0CHo9aCA","email":"you*****ue@gmail.com","mobile_number":"","area_code":"","status":0,"id_profile":null,"id_profiles":[],"chat":{"is_muted":0,"mute_until":null},"has_legacy_chat_history":false,"need_birthday":false}}}}
+{
+  "code": 0,
+  "msg": "",
+  "data": {
+    "biz_code": 0,
+    "biz_msg": "",
+    "biz_data": {
+      "code": 0,
+      "msg": "",
+      "user": {
+        "id": "6ccdc439-aaed-4d78-a9fe-4bd0b0c32d16",
+        "token": "dk4E6t9IKWKcB1+cOgeRIi8P6TcC4EBup21cqUbD1tu7v0KwAKakM7V8kmwI0vCs",
+        "email": "you*****ue@gmail.com",
+        "mobile_number": "",
+        "area_code": "",
+        "status": 0,
+        "id_profile": null,
+        "id_profiles": [],
+        "chat": { "is_muted": 0, "mute_until": null },
+        "has_legacy_chat_history": false,
+        "need_birthday": false
+      }
+    }
+  }
+}

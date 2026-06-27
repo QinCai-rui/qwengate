@@ -1,1 +1,11 @@
-{"chat_session_id":"b19a23c0-6e1e-4b21-9496-04760246278a","parent_message_id":null,"model_type":"default","prompt":"Hello, what model are you running?","ref_file_ids":[],"thinking_enabled":false,"search_enabled":true,"action":null,"preempt":false}
+{
+  "chat_session_id": "9f51005e-a87b-43ad-8a4f-099fbb58d6b0",
+  "parent_message_id": null,
+  "model_type": "default",
+  "prompt": "What is 2+2?",
+  "ref_file_ids": [],
+  "thinking_enabled": false,
+  "search_enabled": true,
+  "action": null,
+  "preempt": false
+}

@@ -2,237 +2,31 @@ event: ready
 data: {"request_message_id":1,"response_message_id":2,"model_type":"default"}
 
 event: update_session
-data: {"updated_at":1782414360.358532}
+data: {"updated_at":1782536992.117987}
 
-data: {"v":{"response":{"message_id":2,"parent_id":1,"model":"","role":"ASSISTANT","thinking_enabled":false,"ban_edit":false,"ban_regenerate":false,"status":"WIP","incomplete_message":null,"accumulated_token_usage":0,"feedback":null,"inserted_at":1782414360.346864,"search_enabled":true,"fragments":[{"id":2,"type":"RESPONSE","content":"Hello","references":[],"stage_id":1}],"conversation_mode":"DEFAULT","has_pending_fragment":false,"auto_continue":false,"search_triggered":false}}}
+data: {"v":{"response":{"message_id":2,"parent_id":1,"model":"","role":"ASSISTANT","thinking_enabled":false,"ban_edit":false,"ban_regenerate":false,"status":"WIP","incomplete_message":null,"accumulated_token_usage":0,"feedback":null,"inserted_at":1782536992.1072628,"search_enabled":true,"fragments":[{"id":2,"type":"RESPONSE","content":"2","references":[],"stage_id":1}],"conversation_mode":"DEFAULT","has_pending_fragment":false,"auto_continue":false,"search_triggered":false}}}
 
-data: {"p":"response/fragments/-1/content","o":"APPEND","v":"!"}
-
-data: {"v":" I"}
-
-data: {"v":"'m"}
-
-data: {"v":" Deep"}
-
-data: {"v":"Se"}
-
-data: {"v":"ek"}
-
-data: {"v":","}
-
-data: {"v":" the"}
-
-data: {"v":" latest"}
-
-data: {"v":" version"}
-
-data: {"v":" model"}
-
-data: {"v":" created"}
-
-data: {"v":" by"}
-
-data: {"v":" Deep"}
-
-data: {"v":"Se"}
-
-data: {"v":"ek"}
-
-data: {"v":" Company"}
-
-data: {"v":"."}
-
-data: {"v":" I"}
-
-data: {"v":"'m"}
-
-data: {"v":" a"}
-
-data: {"v":" pure"}
-
-data: {"v":" text"}
-
-data: {"v":"-based"}
-
-data: {"v":" AI"}
-
-data: {"v":" assistant"}
-
-data: {"v":","}
-
-data: {"v":" capable"}
-
-data: {"v":" of"}
-
-data: {"v":" processing"}
-
-data: {"v":" context"}
-
-data: {"v":" up"}
-
-data: {"v":" to"}
+data: {"p":"response/fragments/-1/content","o":"APPEND","v":" +"}
 
 data: {"v":" "}
 
-data: {"v":"1"}
+data: {"v":"2"}
 
-data: {"v":" million"}
-
-data: {"v":" tokens"}
-
-data: {"v":","}
-
-data: {"v":" supporting"}
-
-data: {"v":" file"}
-
-data: {"v":" upload"}
-
-data: {"v":"s"}
-
-data: {"v":" ("}
-
-data: {"v":"images"}
-
-data: {"v":","}
-
-data: {"v":" txt"}
-
-data: {"v":","}
-
-data: {"v":" pdf"}
-
-data: {"v":","}
-
-data: {"v":" ppt"}
-
-data: {"v":","}
-
-data: {"v":" word"}
-
-data: {"v":","}
-
-data: {"v":" excel"}
-
-data: {"v":"),"}
-
-data: {"v":" reading"}
-
-data: {"v":" information"}
-
-data: {"v":" from"}
-
-data: {"v":" them"}
-
-data: {"v":","}
-
-data: {"v":" and"}
-
-data: {"v":" providing"}
-
-data: {"v":" detailed"}
-
-data: {"v":" responses"}
-
-data: {"v":"."}
-
-data: {"v":" My"}
-
-data: {"v":" knowledge"}
-
-data: {"v":" cutoff"}
-
-data: {"v":" is"}
-
-data: {"v":" May"}
+data: {"v":" ="}
 
 data: {"v":" "}
 
-data: {"v":"202"}
+data: {"v":"4"}
 
-data: {"v":"5"}
-
-data: {"v":","}
-
-data: {"v":" and"}
-
-data: {"v":" I"}
-
-data: {"v":"'m"}
-
-data: {"v":" here"}
-
-data: {"v":" to"}
-
-data: {"v":" help"}
-
-data: {"v":" you"}
-
-data: {"v":" with"}
-
-data: {"v":" a"}
-
-data: {"v":" wide"}
-
-data: {"v":" range"}
-
-data: {"v":" of"}
-
-data: {"v":" questions"}
-
-data: {"v":" and"}
-
-data: {"v":" tasks"}
-
-data: {"v":".\n\n"}
-
-data: {"v":"Is"}
-
-data: {"v":" there"}
-
-data: {"v":" anything"}
-
-data: {"v":" specific"}
-
-data: {"v":" you"}
-
-data: {"v":"'d"}
-
-data: {"v":" like"}
-
-data: {"v":" to"}
-
-data: {"v":" know"}
-
-data: {"v":" or"}
-
-data: {"v":" any"}
-
-data: {"v":" way"}
-
-data: {"v":" I"}
-
-data: {"v":" can"}
-
-data: {"v":" assist"}
-
-data: {"v":" you"}
-
-data: {"v":" today"}
-
-data: {"v":"?"}
-
-data: {"v":" 😊"}
-
-data: {"p":"response","o":"BATCH","v":[{"p":"accumulated_token_usage","v":149},{"p":"quasi_status","v":"FINISHED"}]}
+data: {"p":"response","o":"BATCH","v":[{"p":"accumulated_token_usage","v":45},{"p":"quasi_status","v":"FINISHED"}]}
 
 data: {"p":"response/status","o":"SET","v":"FINISHED"}
 
 event: update_session
-data: {"updated_at":1782414361.7876868}
+data: {"updated_at":1782536992.4661648}
 
 event: title
-data: {"content":"2026-06-25,Thursday,Model,Clear"}
+data: {"content":"2+2"}
 
 event: close
 data: {"click_behavior":"none","auto_resume":false}
