@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Scoped Provider Removal**: `removeProviderFromAccount(email, provider)` removes one provider; calls `removeAccount()` (deletes email + password + browser profile) if no providers remain. (#accounts, accountManager.ts)
 - **DELETE `/api/accounts/:email/provider/:provider`**: New endpoint for provider-scoped removal. Returns `{ok, accountDeleted}`. (#api, dashboardRoutes.ts)
 
+### Fixed
+- fix: DeepSeek handler arg mismatch (token passed as accountEmail) (#deepseek, handler.ts:15)
+
 ## [0.8.0] - 2026-06-27
 
 ### Added

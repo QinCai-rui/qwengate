@@ -12,7 +12,7 @@ export async function deepseekHandler(c: any, body: any): Promise<Response> {
     const token = getProviderToken('deepseek');
     if (token) {
       const { proxyViaDeepSeekWebChat } = await import('./pipeline.ts');
-      return await proxyViaDeepSeekWebChat(c, body, token);
+      return await proxyViaDeepSeekWebChat(c, body);
     }
   } catch {
     // Fall through to error
