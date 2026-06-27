@@ -19,6 +19,8 @@ export interface ProviderAuthState {
   cookies?: string;
   /** Login lifecycle status (e.g., Qwen startup tracking) */
   startupStatus?: 'pending' | 'initializing' | 'connecting' | 'ready';
+  /** Last error message from auto-login attempts (e.g., 'captcha: bot detection on auto-login'). Checked by getAuthStatus() for bot/WAF detection. */
+  lastError?: string;
 }
 
 export interface AccountEntry {

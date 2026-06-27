@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Bot Detection Status via `lastError`**: `ProviderAuthState.lastError?: string` field; `setProviderStateLastError()` helper; `getAuthStatus()` checks `/captcha|bot|waf/i` first and returns `'captcha'`; `getAccountStats()` exposes `lastError` per provider. Dashboard renders "Bot Detect" badge. (#auth, types/auth.ts/accountManager.ts)
+- **Auto-Login Sets `lastError`**: `/api/accounts/:email/auto-login/{deepseek,glm}` endpoints set `lastError` on captcha/error, clear it on success. (#auth, dashboardRoutes.ts)
+- **Scoped Provider Removal**: `removeProviderFromAccount(email, provider)` removes one provider; calls `removeAccount()` (deletes email + password + browser profile) if no providers remain. (#accounts, accountManager.ts)
+- **DELETE `/api/accounts/:email/provider/:provider`**: New endpoint for provider-scoped removal. Returns `{ok, accountDeleted}`. (#api, dashboardRoutes.ts)
+
 ## [0.8.0] - 2026-06-27
 
 ### Added

@@ -425,7 +425,7 @@ export function registerDashboardRoutes(app: Hono): void {
     async (c) => {
       try {
         const email = c.req.param('email');
-        const { getAccountByEmail, setProviderState } = await import('../../services/accountManager.ts');
+        const { getAccountByEmail, setProviderState, setProviderStateLastError } = await import('../../services/accountManager.ts');
         const acct = getAccountByEmail(email);
         if (!acct) return c.json({ error: 'Account not found' }, 404);
 
@@ -433,11 +433,14 @@ export function registerDashboardRoutes(app: Hono): void {
 
         const result = await loginDeepseekAuto(email, acct.password);
         if (result.status === 'success' && result.result) {
+          setProviderStateLastError(email, 'deepseek', null);
           setProviderState(email, 'deepseek', result.result);
           return c.json({ ok: true, status: 'success' });
         } else if (result.status === 'captcha') {
+          setProviderStateLastError(email, 'deepseek', 'captcha: bot detection on auto-login');
           return c.json({ ok: true, status: 'captcha', message: 'CAPTCHA or bot detection — click Login for manual browser' });
         } else {
+          setProviderStateLastError(email, 'deepseek', 'auto-login failed');
           return c.json({ ok: true, status: 'error', message: 'Auto-login failed — click Login for manual browser' });
         }
       } catch (err: any) {
@@ -452,7 +455,7 @@ export function registerDashboardRoutes(app: Hono): void {
     async (c) => {
       try {
         const email = c.req.param('email');
-        const { getAccountByEmail, setProviderState } = await import('../../services/accountManager.ts');
+        const { getAccountByEmail, setProviderState, setProviderStateLastError } = await import('../../services/accountManager.ts');
         const acct = getAccountByEmail(email);
         if (!acct) return c.json({ error: 'Account not found' }, 404);
 
@@ -460,15 +463,34 @@ export function registerDashboardRoutes(app: Hono): void {
 
         const result = await loginGlmAuto(email, acct.password);
         if (result.status === 'success' && result.result) {
+          setProviderStateLastError(email, 'glm', null);
           setProviderState(email, 'glm', result.result);
           return c.json({ ok: true, status: 'success' });
         } else if (result.status === 'captcha') {
+          setProviderStateLastError(email, 'glm', 'captcha: bot detection on auto-login');
           return c.json({ ok: true, status: 'captcha', message: 'CAPTCHA or bot detection — click Login for manual browser' });
         } else {
+          setProviderStateLastError(email, 'glm', 'auto-login failed');
           return c.json({ ok: true, status: 'error', message: 'Auto-login failed — click Login for manual browser' });
         }
       } catch (err: any) {
         return c.json({ error: err.message }, 500);
+      }
+    },
+  );
+
+  app.delete(
+    '/api/accounts/:email/provider/:provider',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const email = c.req.param('email');
+        const provider = c.req.param('provider');
+        const { removeProviderFromAccount } = await import('../../services/accountManager.ts');
+        const result = await removeProviderFromAccount(email, provider);
+        return c.json({ ok: true, accountDeleted: result.accountDeleted });
+      } catch (err: any) {
+        return c.json({ error: err.message }, err.message.includes('not found') ? 404 : 500);
       }
     },
   );

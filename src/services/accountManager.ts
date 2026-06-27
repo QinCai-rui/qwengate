@@ -338,6 +338,31 @@ export async function removeAccount(email: string): Promise<void> {
     }
   }
 }
+export async function removeProviderFromAccount(email: string, provider: string): Promise<{ accountDeleted: boolean }> {
+  const normalizedEmail = email.toLowerCase().trim();
+  const acct = getAccountByEmail(normalizedEmail);
+  if (!acct) {
+    throw new Error(`Account not found: ${normalizedEmail}`);
+  }
+  delete acct.providerStates[provider];
+  if (acct.providers) {
+    acct.providers = acct.providers.filter((p) => p !== provider);
+  }
+  if (acct.disabledProviders) {
+    acct.disabledProviders = acct.disabledProviders.filter((p) => p !== provider);
+  }
+  saveAccountsToFile(accounts);
+
+  const hasOnlyDefaultProviders =
+    !acct.providers || acct.providers.length === 0 || (acct.providers.length === 1 && acct.providers[0] === 'qwen');
+  const isEmpty = Object.keys(acct.providerStates).length === 0 && hasOnlyDefaultProviders;
+  if (isEmpty) {
+    await removeAccount(normalizedEmail);
+    return { accountDeleted: true };
+  }
+  return { accountDeleted: false };
+}
+
 /**
  * Re-scan accounts and merge changes into the live accounts array.
  */
@@ -555,6 +580,26 @@ export function setProviderDisabled(email: string, provider: string, disabled: b
   saveAccountsToFile(accounts);
   return true;
 }
+export function setProviderStateLastError(email: string, provider: string, errorMsg: string | null): boolean {
+  const acct = getAccountByEmail(email);
+  if (!acct) return false;
+  if (!acct.providerStates[provider]) {
+    acct.providerStates[provider] = {
+      token: null,
+      expiresAt: null,
+      refreshToken: null,
+      lastLoginAttempt: null,
+    };
+  }
+  if (errorMsg) {
+    acct.providerStates[provider]!.lastError = errorMsg;
+  } else {
+    delete acct.providerStates[provider]!.lastError;
+  }
+  saveAccountsToFile(accounts);
+  return true;
+}
+
 export function setProviderState(email: string, provider: string, state: ProviderAuthState | null): boolean {
   const acct = getAccountByEmail(email);
   if (!acct) return false;
@@ -589,6 +634,7 @@ export function isAccountThrottled(email: string): boolean {
   return acct.throttledUntil > Date.now();
 }
 export function getAuthStatus(state: ProviderAuthState | undefined): string {
+  if (state?.lastError && /captcha|bot|waf/i.test(state.lastError)) return 'captcha';
   if (!state?.token) return 'disconnected';
   if (state.startupStatus === 'connecting') return 'connecting';
   if (state.startupStatus === 'initializing' || state.startupStatus === 'pending') return 'pending';
@@ -615,9 +661,9 @@ export function getAccountStats(): Array<{
   };
   configuredProviders: string[];
   providerAuth: {
-    qwen: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null } | null;
-    deepseek: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null } | null;
-    glm: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null } | null;
+    qwen: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null; lastError?: string } | null;
+    deepseek: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null; lastError?: string } | null;
+    glm: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null; lastError?: string } | null;
   };
 }> {
   const now = Date.now();
@@ -645,6 +691,7 @@ export function getAccountStats(): Array<{
             status: getAuthStatus(a.providerStates.qwen),
             tokenExpiresInMs: a.providerStates.qwen.expiresAt ? Math.max(0, a.providerStates.qwen.expiresAt - now) : 0,
             lastLoginAttempt: a.providerStates.qwen.lastLoginAttempt,
+            lastError: a.providerStates.qwen.lastError,
           }
         : null,
       deepseek: a.providerStates.deepseek
@@ -652,6 +699,7 @@ export function getAccountStats(): Array<{
             status: getAuthStatus(a.providerStates.deepseek),
             tokenExpiresInMs: a.providerStates.deepseek.expiresAt ? Math.max(0, a.providerStates.deepseek.expiresAt - now) : 0,
             lastLoginAttempt: a.providerStates.deepseek.lastLoginAttempt,
+            lastError: a.providerStates.deepseek.lastError,
           }
         : null,
       glm: a.providerStates.glm
@@ -659,6 +707,7 @@ export function getAccountStats(): Array<{
             status: getAuthStatus(a.providerStates.glm),
             tokenExpiresInMs: a.providerStates.glm.expiresAt ? Math.max(0, a.providerStates.glm.expiresAt - now) : 0,
             lastLoginAttempt: a.providerStates.glm.lastLoginAttempt,
+            lastError: a.providerStates.glm.lastError,
           }
         : null,
     },
