@@ -40,14 +40,20 @@ const powResponseCache = new Map<string, PowCacheEntry>();
  * Request a new PoW challenge from DeepSeek.
  * Requires Bearer token in authorization header.
  */
-export async function getPowChallenge(bearerToken: string, targetPath: string = '/api/v0/chat/completion'): Promise<PowChallenge | null> {
+export async function getPowChallenge(
+  bearerToken: string,
+  targetPath: string = '/api/v0/chat/completion',
+  cookies?: string,
+): Promise<PowChallenge | null> {
   try {
+    const headers: Record<string, string> = {
+      Authorization: 'Bearer ' + bearerToken,
+      'Content-Type': 'application/json',
+    };
+    if (cookies) headers['cookie'] = cookies;
     const res = await fetch(DEEPSEEK_BASE_URL + POW_ENDPOINT, {
       method: 'POST',
-      headers: {
-        Authorization: 'Bearer ' + bearerToken,
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({ target_path: targetPath }),
       signal: AbortSignal.timeout(10000),
     });
@@ -289,6 +295,7 @@ export async function getPowResponseHeader(
   email: string,
   bearerToken: string,
   targetPath: string = '/api/v0/chat/completion',
+  cookies?: string,
 ): Promise<string | null> {
   var cacheKey = email + ':' + targetPath;
   var cached = powResponseCache.get(cacheKey);
@@ -296,7 +303,7 @@ export async function getPowResponseHeader(
     return cached.header;
   }
 
-  var challenge = await getPowChallenge(bearerToken, targetPath);
+  var challenge = await getPowChallenge(bearerToken, targetPath, cookies);
   if (!challenge) return null;
 
   var answer: number | null = null;

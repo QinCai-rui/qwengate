@@ -84,10 +84,14 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, a
   var ctx = createDeepSeekContext(bearerToken);
   logStore.log('debug', 'deepseek-pipeline', `email=${email} model=${model} stream=${isStream}`);
 
+  // Get provider state (cookies, wafToken)
+  var providerState = getProviderState(email, 'deepseek');
+
   // 3. Solve PoW challenge
   var powHeader: string | null = null;
+  var cookies = providerState?.cookies || undefined;
   try {
-    powHeader = await getPowResponseHeader(email || 'unknown', bearerToken);
+    powHeader = await getPowResponseHeader(email || 'unknown', bearerToken, '/api/v0/chat/completion', cookies);
     logStore.log('debug', 'deepseek-pipeline', `PoW solved: ${powHeader ? 'yes (' + powHeader.length + ' chars)' : 'no'}`);
   } catch (err: any) {
     logStore.log('warn', 'deepseek-pow', 'PoW solving failed: ' + err.message + ' — proceeding without PoW');
