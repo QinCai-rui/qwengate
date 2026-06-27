@@ -61,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - fix: DeepSeek handler arg mismatch (token passed as accountEmail) (#deepseek, handler.ts:15)
 - fix: GLM pipeline body shape (features/background_tasks objects, signature_prompt) and query version constant (#glm, pipeline.ts+spoofing.ts)
 - fix: DeepSeek session creation needs spoofed browser headers + error logging (#deepseek, session.ts)
+- fix: GLM login now only uses existing browser session (no fresh login attempt that triggers Aliyun captcha) (#glm, glmLogin.ts, browserProfiles.ts)
 
 
 ## [0.7.1] - 2026-06-23

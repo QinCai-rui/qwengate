@@ -153,6 +153,7 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, a
     // Non-streaming: buffer entire SSE response and extract content
     if (!isStream) {
       var text = await resp.text();
+      logStore.log('debug', 'deepseek-raw', 'CT=' + contentType + ' len=' + text.length + ' head=' + text.slice(0, 1000));
       var state: DeepSeekStreamState = createStreamState();
       var lines = text.split('\n').filter(function (l) {
         return l.startsWith('data: ');

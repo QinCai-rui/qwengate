@@ -161,6 +161,12 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
     if (!resp.ok) {
       const errText = await resp.text().catch(() => 'unknown error');
       logStore.log('warn', 'glm-pipeline', `GLM API error (${resp.status}): ${errText.slice(0, 1000)}`);
+      logStore.log('warn', 'glm-pipeline', `GLM request URL: ${url.slice(0, 500)}`);
+      logStore.log(
+        'warn',
+        'glm-pipeline',
+        `GLM request headers: ${JSON.stringify(Object.fromEntries(Object.entries(headers).filter(([k]) => !k.toLowerCase().includes('auth') && !k.toLowerCase().includes('token'))))}`,
+      );
       return c.json(
         {
           error: {
@@ -177,6 +183,7 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
     if (!isStream || contentType.includes('json')) {
       // Non-streaming: read entire body
       const text = await resp.text();
+      logStore.log('debug', 'glm-raw', 'CT=' + contentType + ' len=' + text.length + ' head=' + text.slice(0, 1000));
 
       const lines = text.split('\n').filter((l) => l.startsWith('data: '));
       let fullContent = '';

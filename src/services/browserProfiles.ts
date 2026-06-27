@@ -248,6 +248,8 @@ export interface AutoLoginOptions {
   beforeFill?: (page: any) => Promise<void>;
   /** If true, capture the provider-specific token (Bearer for DeepSeek, JWT for GLM) instead of just cookies. */
   extractToken?: boolean;
+  /** If true, only use existing session — never attempt fresh login (e.g. GLM triggers captcha). */
+  skipFreshLogin?: boolean;
 }
 
 /**
@@ -443,11 +445,29 @@ export async function autoLoginViaBrowser(email: string, password: string | unde
         };
       }
       // No valid provider-specific token — proceed with fresh login
+      if (opts.skipFreshLogin) {
+        await context.close().catch(() => {});
+        logStore.log(
+          'warn',
+          'browser',
+          `No existing ${opts.provider} session for ${email} and skipFreshLogin is set — user must login manually`,
+        );
+        return { status: 'captcha' };
+      }
       logStore.log(
         'info',
         'browser',
         `Existing cookies found but no valid ${opts.provider} token for ${email} — proceeding with fresh login`,
       );
+    } else if (opts.skipFreshLogin) {
+      // No auth cookies at all and skipFreshLogin is set — don't attempt fresh login
+      await context.close().catch(() => {});
+      logStore.log(
+        'warn',
+        'browser',
+        `No existing ${opts.provider} session for ${email} and skipFreshLogin is set — user must login manually`,
+      );
+      return { status: 'captcha' };
     }
 
     // Create fresh page

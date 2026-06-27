@@ -25,6 +25,7 @@ export async function loginGlmAuto(
     provider: 'glm',
     authUrl: GLM_LOGIN_URL,
     authPagePaths: ['/auth'],
+    skipFreshLogin: true, // GLM triggers Aliyun captcha on fresh login — only use existing session
     beforeFill: async (page: any) => {
       // Click "Continue with Email" button to reveal the email/password form
       try {
