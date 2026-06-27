@@ -104,19 +104,33 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
   const history = messagesToGlmFormat(body.messages || []);
   const variables = buildGlmVariables(ctx);
 
+  // ponytail: features and background_tasks must be objects, not arrays — GLM crashes (500) on array types
+  const glmFeatures: Record<string, any> = {
+    image_generation: false,
+    web_search: false,
+    auto_web_search: false,
+    preview_mode: true,
+    flags: [],
+    vlm_tools_enable: false,
+    vlm_web_search_enable: false,
+    vlm_website_mode: false,
+    enable_thinking: model.includes('glm-5') || model.includes('glm-4'),
+  };
+
   const glmBody: Record<string, any> = {
     stream: isStream,
     model,
     messages: body.messages || [],
-    signature_prompt: '',
+    signature_prompt: (body.messages && body.messages[0]?.content) || '',
     params: {},
     extra: {},
-    features: [],
+    features: glmFeatures,
     variables,
     chat_id: session.id,
     id: session.id,
     current_user_message_id: history.currentId,
-    background_tasks: [],
+    current_user_message_parent_id: null,
+    background_tasks: { title_generation: true, tags_generation: true },
   };
 
   // 4. Build fingerprint query string
@@ -156,6 +170,7 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
     if (!isStream || contentType.includes('json')) {
       // Non-streaming: read entire body
       const text = await resp.text();
+
       const lines = text.split('\n').filter((l) => l.startsWith('data: '));
       let fullContent = '';
       let fullThinking = '';

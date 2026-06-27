@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - fix: DeepSeek handler arg mismatch (token passed as accountEmail) (#deepseek, handler.ts:15)
+- fix: GLM pipeline body shape (features/background_tasks objects, signature_prompt) and query version constant (#glm, pipeline.ts+spoofing.ts)
 
 ## [0.8.0] - 2026-06-27
 

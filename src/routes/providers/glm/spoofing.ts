@@ -6,6 +6,9 @@
 export const GLM_BASE_URL = 'https://chat.z.ai';
 export const GLM_FE_VERSION = 'prod-fe-1.1.67';
 
+// Query string version differs from header x-fe-version (AUTH.md live capture: query version=0.0.1, header x-fe-version=prod-fe-1.1.67)
+const GLM_QUERY_VERSION = '0.0.1';
+
 export interface GlmContext {
   jwt: string;
   userId: string;
@@ -24,7 +27,7 @@ export function buildFingerprintParams(ctx: GlmContext): URLSearchParams {
   params.set('timestamp', String(ts));
   params.set('requestId', uuid);
   params.set('user_id', ctx.userId || '');
-  params.set('version', GLM_FE_VERSION);
+  params.set('version', GLM_QUERY_VERSION);
   params.set('platform', 'web');
   params.set('token', ctx.jwt);
   params.set('user_agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36');
@@ -131,7 +134,7 @@ export async function buildGlmHeaders(ctx: GlmContext, body: string, requestId: 
     'x-fe-version': GLM_FE_VERSION,
     'x-region': 'overseas',
     'x-request-id': requestId,
-    Accept: 'text/event-stream',
+    Accept: '*/*',
     'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36',
     Origin: 'https://chat.z.ai',
     Referer: 'https://chat.z.ai/',
