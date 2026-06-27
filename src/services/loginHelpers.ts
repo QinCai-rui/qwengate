@@ -6,7 +6,7 @@
  */
 
 import crypto from 'crypto';
-import { chromium, Page } from 'playwright';
+import type { Page } from 'playwright';
 import type { AuthState, ProviderAuthState } from '../types/auth.ts';
 import { checkPlaywrightSession, getAuthTokenMaxAgeMs } from './auth.ts';
 import { logStore } from './logStore.ts';
@@ -378,39 +378,74 @@ export interface ManualLoginOptions {
  * Returns ProviderAuthState on success, null on timeout or error.
  */
 export async function manualBrowserLogin(email: string, password: string, opts: ManualLoginOptions): Promise<ProviderAuthState | null> {
-  let browser;
+  let context: any = null;
   try {
-    browser = await chromium.launch({ headless: false });
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    });
-    const page = await context.newPage();
+    const { setupBrowserContext } = await import('./browserProfiles.ts');
 
-    await page.goto(opts.loginUrl, { waitUntil: 'networkidle', timeout: 30000 });
+    // Use persistent browser profile with humanize: true — same as Qwen's openBrowserProfile
+    // Cookies survive in the profile directory across restarts, so users don't need to
+    // re-login every time opengate restarts. humanize: true adds random mouse movements,
+    // viewport jitter, and other anti-bot signals that ephemeral chromium.launch() doesn't.
+    context = await setupBrowserContext(email, false);
+
+    // Check for existing valid session cookies before opening browser
+    const existingCookies = await context.cookies();
+    const hasSession = existingCookies.some(
+      (c: any) => c.value && (c.name.includes('session') || c.name.includes('token') || c.name.includes('auth')),
+    );
+    const allValid = existingCookies.every((c: any) => !c.expires || c.expires * 1000 > Date.now());
+    if (hasSession && allValid) {
+      logStore.log('info', `${opts.provider}-login`, `Existing valid session found for ${email} — using profile cookies`);
+      const tokenStr = existingCookies.map((c: any) => `${c.name}=${c.value}`).join('; ');
+      return {
+        token: tokenStr,
+        expiresAt:
+          existingCookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
+          Date.now() + 7 * 24 * 60 * 60 * 1000,
+        refreshToken: null,
+        lastLoginAttempt: null,
+      };
+    }
+
+    const page = context.pages()[0] || (await context.newPage());
+    await page.goto(opts.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
     // Optional pre-fill setup (e.g., click "Continue with Email")
     if (opts.beforeFill) {
       await opts.beforeFill(page, email, password);
     }
 
-    // Auto-fill credentials (best-effort) — human-like typing
+    // Human-like form filling — matches Qwen's fillLoginForm() timing
     try {
       const emailInput = page.locator('input[type="email"], input[name="email"], input[placeholder*="email" i]');
       if (await emailInput.isVisible({ timeout: 8000 }).catch(() => false)) {
-        await emailInput.click();
+        await emailInput.first().click();
         await page.waitForTimeout(100 + Math.random() * 200);
-        await emailInput.pressSequentially(email, { delay: 30 + Math.random() * 50 });
+        await emailInput.first().pressSequentially(email, { delay: 30 + Math.random() * 50 });
       }
+
       const passwordInput = page.locator('input[type="password"]');
       if (await passwordInput.isVisible({ timeout: 5000 }).catch(() => false)) {
         await page.waitForTimeout(100 + Math.random() * 150);
-        await passwordInput.click();
+        await passwordInput.first().click();
         await page.waitForTimeout(100 + Math.random() * 150);
-        await passwordInput.pressSequentially(password, { delay: 25 + Math.random() * 40 });
+        await passwordInput.first().pressSequentially(password, { delay: 25 + Math.random() * 40 });
         await page.waitForTimeout(200 + Math.random() * 300);
       }
+
+      // Try clicking submit button
+      try {
+        const submitBtn = page
+          .locator(
+            'button[type="submit"], button:has-text("Sign in"), button:has-text("Login"), button:has-text("Log in"), button:has-text("Continue")',
+          )
+          .first();
+        await submitBtn.click({ timeout: 3000 });
+      } catch {
+        logStore.log('warn', `${opts.provider}-login`, 'submit button click failed — user may need to click manually');
+      }
     } catch {
-      // Form fill failed — user will do it manually
+      logStore.log('warn', `${opts.provider}-login`, 'form fill failed — user can fill credentials manually');
     }
 
     logStore.log('info', `${opts.provider}-login`, `Browser opened for ${email} at ${opts.loginUrl} — complete login manually`);
@@ -436,24 +471,27 @@ export async function manualBrowserLogin(email: string, password: string, opts: 
 
     if (!loggedIn) {
       logStore.log('warn', `${opts.provider}-login`, `Manual login timed out for ${email}`);
-      await browser.close();
+      if (context) await context.close().catch(() => {});
       return null;
     }
 
-    // Capture cookies as token
-    const cookies = await context.cookies();
-    const token = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
-    await browser.close();
+    // Capture cookies — they are now persisted in the browser profile automatically,
+    // so next restart will find them and skip re-login
+    const finalCookies = await context.cookies();
+    const tokenStr = finalCookies.map((c: any) => `${c.name}=${c.value}`).join('; ');
+    if (context) await context.close().catch(() => {});
 
     return {
-      token,
-      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      token: tokenStr,
+      expiresAt:
+        finalCookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
+        Date.now() + 7 * 24 * 60 * 60 * 1000,
       refreshToken: null,
       lastLoginAttempt: Date.now(),
     };
   } catch (err: any) {
     logStore.log('error', `${opts.provider}-login`, `${opts.provider} manual login error for ${email}: ${err.message}`);
-    if (browser) await browser.close().catch(() => {});
+    if (context) await context.close().catch(() => {});
     return null;
   }
 }

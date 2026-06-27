@@ -54,7 +54,7 @@ function getBrowserArgs(): string[] {
   return [...BROWSER_DEFAULT_ARGS];
 }
 
-async function setupBrowserContext(email: string, headless: boolean): Promise<any> {
+export async function setupBrowserContext(email: string, headless: boolean): Promise<any> {
   const profileDir = getProfileDir(email);
   cleanupSingletonLock(profileDir);
   return await cloakPersistentContext({
@@ -73,7 +73,7 @@ async function checkExistingToken(context: any): Promise<boolean> {
   return !!(existingToken && existingToken.expires && existingToken.expires * 1000 > Date.now());
 }
 
-async function fillLoginForm(page: any, email: string, password: string): Promise<void> {
+export async function fillLoginForm(page: any, email: string, password: string): Promise<void> {
   try {
     await page.waitForSelector('input[type="email"], input[placeholder*="Email"], input[name="email"], input[name="login"]', {
       timeout: 5000,
