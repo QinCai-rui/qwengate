@@ -26,25 +26,6 @@ export function getProfileDir(email: string): string {
   return dir;
 }
 
-/** Save provider-specific session data (e.g. captchaVerifyParam) to the browser profile dir. */
-export function saveProviderProfileData(email: string, provider: string, data: Record<string, any>): void {
-  const dir = getProfileDir(email);
-  const file = join(dir, `${provider}-session.json`);
-  writeFileSync(file, JSON.stringify(data, null, 2), 'utf-8');
-}
-
-/** Load provider-specific session data from the browser profile dir. */
-export function loadProviderProfileData(email: string, provider: string): Record<string, any> | null {
-  const dir = getProfileDir(email);
-  const file = join(dir, `${provider}-session.json`);
-  if (!existsSync(file)) return null;
-  try {
-    return JSON.parse(readFileSync(file, 'utf-8'));
-  } catch {
-    return null;
-  }
-}
-
 /** Remove stale Chrome singleton files that block new instances from starting on this profile. */
 function cleanupSingletonLock(profileDir: string): void {
   for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
@@ -455,6 +436,16 @@ export async function extractProviderToken(
         } catch {
           // Non-critical
         }
+        // Persist captchaVerifyParam to localStorage so it survives browser profile restarts
+        if (captchaVerifyParam && page) {
+          try {
+            await page.evaluate((val: string) => {
+              localStorage.setItem('opengate_captchaVerifyParam', val);
+            }, captchaVerifyParam);
+          } catch {
+            // Non-critical
+          }
+        }
         return {
           token: tokenCookie.value,
           expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
@@ -737,13 +728,30 @@ export async function loadSessionFromProfile(
         .join('; ');
 
       logStore.log('info', 'browser', `Loaded GLM JWT from profile cookie for ${email}`);
-      const profileData = loadProviderProfileData(email, 'glm');
+
+      // Read captchaVerifyParam from localStorage (persisted by extractProviderToken)
+      let captchaVerifyParam: string | undefined;
+      try {
+        const page = await context.newPage();
+        await page.goto('https://chat.z.ai', { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => {});
+        captchaVerifyParam = await page.evaluate(() => {
+          try {
+            return localStorage.getItem('opengate_captchaVerifyParam') || undefined;
+          } catch {
+            return undefined;
+          }
+        });
+        await page.close().catch(() => {});
+      } catch {
+        // Non-critical
+      }
+
       await context.close().catch(() => {});
       return {
         token: tokenCookie.value,
         expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
         cookieStr,
-        captchaVerifyParam: profileData?.captchaVerifyParam || undefined,
+        captchaVerifyParam,
       };
     } else {
       // Qwen: existing cookie-based check

@@ -269,10 +269,6 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
         const result = await loginGlmAuto(acct.email, acct.password);
         if (result.status === 'success' && result.result) {
           acct.providerStates.glm = result.result;
-          if (result.result.captchaVerifyParam) {
-            const { saveProviderProfileData } = await import('./browserProfiles.ts');
-            saveProviderProfileData(acct.email, 'glm', { captchaVerifyParam: result.result.captchaVerifyParam });
-          }
         }
         // captcha/error — user clicks Login button later
       } catch (err: any) {
