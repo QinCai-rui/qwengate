@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dead Code**: Removed unused `loginDeepSeek()` headless auto-login function (no longer called from any route). (#auth, deepseekLogin.ts)
 
 ### Fixed
+- fix: DeepSeek non-streaming response extraction now handles JSON-patch APPEND format (#deepseek, pipeline.ts)
 - **wreq-js Session Leak**: Explicitly close wreq-js sessions after every use to prevent tokio epoll `Bad file descriptor` crash. Sessions were created per-request (5-10 per request) but never disposed — the Rust tokio runtime continued polling on epoll fds after JS GC'd the wrapper objects. Now all sessions are closed on completion, error, and background timer paths.
 - **All Providers Use Persistent Browser Profile**: `manualBrowserLogin()` now uses `setupBrowserContext()` (persistent profile + `humanize:true`) instead of ephemeral `chromium.launch()`. DeepSeek and GLM login now persist cookies to disk like Qwen — no re-login on restart. Also checks for existing valid session cookies to skip re-login entirely when profile has live session. (#auth, browserProfiles.ts/loginHelpers.ts)
 - **manualBrowserLogin Blank Page Fix**: Use `context.newPage()` instead of `context.pages()[0]` to avoid stale about:blank pages from persistent context session restore. Use `waitUntil: 'networkidle'` instead of `'domcontentloaded'` — DeepSeek is an SPA that renders after DOM parse. (#auth, loginHelpers.ts)

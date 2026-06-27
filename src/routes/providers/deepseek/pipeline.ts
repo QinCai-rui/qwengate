@@ -148,31 +148,17 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, a
 
     var contentType = resp.headers.get('content-type') || '';
 
-    // Non-streaming: buffer entire SSE and extract content
+    // Non-streaming: buffer entire SSE and extract content via stream parser
     if (!isStream || contentType.includes('json')) {
       var text = await resp.text();
       var lines = text.split('\n').filter(function (l) {
         return l.startsWith('data: ');
       });
-      var content = '';
+      var state: DeepSeekStreamState = createStreamState();
       for (var i = 0; i < lines.length; i++) {
         var lineData = lines[i].slice(6);
         if (lineData === '[DONE]') continue;
-        try {
-          var parsed = JSON.parse(lineData);
-          // Extract content from various formats
-          if (parsed.v && typeof parsed.v === 'string') {
-            content += parsed.v;
-          } else if (parsed.v && parsed.v.response && parsed.v.response.fragments) {
-            for (var f = 0; f < parsed.v.response.fragments.length; f++) {
-              content += parsed.v.response.fragments[f].content || '';
-            }
-          } else if (parsed.content) {
-            content += parsed.content;
-          }
-        } catch {
-          // Skip unparseable lines
-        }
+        parseDeepSeekData(lineData, state, body.model, session.id);
       }
 
       return c.json(
@@ -186,12 +172,12 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, a
               index: 0,
               message: {
                 role: 'assistant',
-                content: content || ' ',
+                content: state.content || ' ',
               },
               finish_reason: 'stop',
             },
           ],
-          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          usage: state.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
         },
         { headers: { 'content-type': 'application/json' } },
       );
