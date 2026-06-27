@@ -164,8 +164,8 @@ async function loadAccounts() {
   var provKeys = ['qwen', 'deepseek', 'glm'];
   var configs = {
     qwen: { tableBodyId: 'qwenBody', countId: 'qwenCount', emptyId: 'qwenEmpty', showStats: true, showTokenTTL: true },
-    deepseek: { tableBodyId: 'deepseekBody', countId: 'deepseekCount', emptyId: 'deepseekEmpty', showStats: false, showTokenTTL: false },
-    glm: { tableBodyId: 'glmBody', countId: 'glmCount', emptyId: 'glmEmpty', showStats: false, showTokenTTL: false },
+    deepseek: { tableBodyId: 'deepseekBody', countId: 'deepseekCount', emptyId: 'deepseekEmpty', showStats: true, showTokenTTL: true },
+    glm: { tableBodyId: 'glmBody', countId: 'glmCount', emptyId: 'glmEmpty', showStats: true, showTokenTTL: true },
   };
   for (var i = 0; i < provKeys.length; i++) {
     var pk = provKeys[i];
