@@ -143,9 +143,6 @@ function renderProviderTable(accts, pk, cfg) {
     cols +=
       '<td><div class="action-cell">' +
       loginBtn +
-      '<button class="account-btn small" data-email="' +
-      escHtml(a.email) +
-      '" data-action="configure">Keys</button>' +
       '<button class="account-btn small danger" data-email="' +
       escHtml(a.email) +
       '" data-action="remove">Remove</button>' +
@@ -386,53 +383,6 @@ async function handleToggleProviderDisabled(event, email, provider, currentlyDis
   }
 }
 
-/* ── Configure Provider Keys ── */
-var currentConfigEmail = null;
-
-function handleOpenConfig(email) {
-  currentConfigEmail = email;
-  document.getElementById('configEmail').textContent = email;
-  document.getElementById('deepseekKeyInput').value = '';
-  document.getElementById('glmKeyInput').value = '';
-  document.getElementById('configOverlay').classList.add('open');
-}
-
-function handleSaveConfig() {
-  var deepseekKey = document.getElementById('deepseekKeyInput').value.trim();
-  var glmKey = document.getElementById('glmKeyInput').value.trim();
-  if (!deepseekKey && !glmKey) {
-    showToast('Enter at least one API key', 'error');
-    return;
-  }
-  var body = {
-    providerKeys: {},
-  };
-  if (deepseekKey) body.providerKeys.deepseek = deepseekKey;
-  if (glmKey) body.providerKeys.glm = glmKey;
-
-  document.getElementById('configSave').disabled = true;
-  document.getElementById('configSave').textContent = 'Saving...';
-
-  (async function () {
-    try {
-      var res = await fetch('/api/accounts/' + encodeURIComponent(currentConfigEmail), {
-        method: 'PATCH',
-        headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) throw new Error('Failed to save keys (' + res.status + ')');
-      showToast('Provider keys saved for ' + currentConfigEmail, 'success');
-      document.getElementById('configOverlay').classList.remove('open');
-      loadAccounts();
-    } catch (e) {
-      showToast(e.message, 'error');
-    } finally {
-      document.getElementById('configSave').disabled = false;
-      document.getElementById('configSave').textContent = 'Save Keys';
-    }
-  })();
-}
-
 /* ── Init ── */
 function init() {
   /* Load on start */
@@ -464,7 +414,6 @@ function init() {
     var provider = btn.getAttribute('data-provider');
     if (!email && !action && !provider) return;
     if (action === 'remove') handleRemove(email);
-    else if (action === 'configure') handleOpenConfig(email);
     else if (provider) handleProviderLogin(email, provider);
   });
 
@@ -472,15 +421,6 @@ function init() {
   document.getElementById('confirmOverlay').addEventListener('click', function (e) {
     if (e.target === this) this.classList.remove('open');
   });
-  document.getElementById('configOverlay').addEventListener('click', function (e) {
-    if (e.target === this) this.classList.remove('open');
-  });
-
-  /* Config modal */
-  document.getElementById('configCancel').addEventListener('click', function () {
-    document.getElementById('configOverlay').classList.remove('open');
-  });
-  document.getElementById('configSave').addEventListener('click', handleSaveConfig);
 }
 
 if (document.readyState === 'loading') {

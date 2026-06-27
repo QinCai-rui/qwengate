@@ -150,30 +150,6 @@ ${sidebarHtml('accounts')}
   </div>
 </div>
 
-<!-- Configure Provider Keys Modal -->
-<div class="modal-overlay" id="configOverlay">
-  <div class="modal">
-    <h3>Configure Provider Keys</h3>
-    <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:16px">
-      Set API keys for <strong id="configEmail"></strong>
-    </p>
-    <div class="config-field-group">
-      <label>DeepSeek API Key</label>
-      <input type="password" id="deepseekKeyInput" placeholder="sk-..." autocomplete="off">
-      <div class="field-hint">Required for DeepSeek provider access</div>
-    </div>
-    <div class="config-field-group">
-      <label>GLM API Key</label>
-      <input type="password" id="glmKeyInput" placeholder="xxx..." autocomplete="off">
-      <div class="field-hint">Required for GLM provider access</div>
-    </div>
-    <div class="modal-actions">
-      <button class="modal-cancel" id="configCancel">Cancel</button>
-      <button class="modal-confirm" id="configSave">Save Keys</button>
-    </div>
-  </div>
-</div>
-
 <!-- Toast Container -->
 <div class="toast-container" id="toastContainer"></div>
 
