@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **wreq-js Session Leak**: Explicitly close wreq-js sessions after every use to prevent tokio epoll `Bad file descriptor` crash. Sessions were created per-request (5-10 per request) but never disposed — the Rust tokio runtime continued polling on epoll fds after JS GC'd the wrapper objects. Now all sessions are closed on completion, error, and background timer paths.
+- **All Providers Use Persistent Browser Profile**: `manualBrowserLogin()` now uses `setupBrowserContext()` (persistent profile + `humanize:true`) instead of ephemeral `chromium.launch()`. DeepSeek and GLM login now persist cookies to disk like Qwen — no re-login on restart. Also checks for existing valid session cookies to skip re-login entirely when profile has live session. (#auth, browserProfiles.ts/loginHelpers.ts)
 
 ## [0.7.1] - 2026-06-23
 
