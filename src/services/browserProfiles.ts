@@ -678,7 +678,7 @@ export async function loadSessionFromProfile(
     context = await setupBrowserContext(email, true); // headless: true — no UI
 
     if (provider === 'deepseek') {
-      // DeepSeek: token is in localStorage.userToken
+      // DeepSeek: token is in localStorage.userToken, cookies include aws-waf-token
       const page = await context.newPage();
       try {
         await page.goto('https://chat.deepseek.com/', { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => {});
@@ -693,9 +693,15 @@ export async function loadSessionFromProfile(
           }
         });
         if (result && typeof result === 'string' && result.length > 20) {
-          logStore.log('info', 'browser', `Loaded DeepSeek token from profile localStorage for ${email}`);
+          // Extract all cookies from the context (includes aws-waf-token)
+          const cookies = await context.cookies('https://chat.deepseek.com');
+          const cookieStr = cookies
+            .filter((c: any) => c.value)
+            .map((c: any) => `${c.name}=${c.value}`)
+            .join('; ');
+          logStore.log('info', 'browser', `Loaded DeepSeek token from profile localStorage for ${email} (${cookies.length} cookies)`);
           await context.close().catch(() => {});
-          return { token: result, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 };
+          return { token: result, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, cookieStr };
         }
       } finally {
         await page.close().catch(() => {});

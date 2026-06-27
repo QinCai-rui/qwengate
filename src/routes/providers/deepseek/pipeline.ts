@@ -126,7 +126,13 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, a
   };
 
   // 6. Build spoofed browser headers (include wafToken from provider state)
-  var wafToken = getProviderState(email, 'deepseek')?.wafToken || undefined;
+  var providerState = getProviderState(email, 'deepseek');
+  var wafToken = providerState?.wafToken || undefined;
+  // Extract aws-waf-token from cookies if not explicitly stored
+  if (!wafToken && providerState?.cookies) {
+    var wafMatch = providerState.cookies.match(/aws-waf-token=([^;]+)/);
+    if (wafMatch) wafToken = wafMatch[1];
+  }
   var headers = buildDeepSeekHeaders(ctx, {
     powResponse: powHeader || undefined,
     hifLeim: ctx.hifLeim,

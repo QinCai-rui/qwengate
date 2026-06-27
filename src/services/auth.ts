@@ -192,6 +192,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
               expiresAt: session.expiresAt,
               refreshToken: null,
               lastLoginAttempt: null,
+              cookies: session.cookieStr || undefined,
             };
             logStore.log('info', 'auth', `\u2713 DeepSeek session loaded from profile for ${acct.email}`);
           }
