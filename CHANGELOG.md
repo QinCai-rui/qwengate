@@ -13,12 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Scoped Provider Removal**: `removeProviderFromAccount(email, provider)` removes one provider; calls `removeAccount()` (deletes email + password + browser profile) if no providers remain. (#accounts, accountManager.ts)
 - **DELETE `/api/accounts/:email/provider/:provider`**: New endpoint for provider-scoped removal. Returns `{ok, accountDeleted}`. (#api, dashboardRoutes.ts)
 
-### Fixed
-- fix: DeepSeek handler arg mismatch (token passed as accountEmail) (#deepseek, handler.ts:15)
-- fix: GLM pipeline body shape (features/background_tasks objects, signature_prompt) and query version constant (#glm, pipeline.ts+spoofing.ts)
-
-## [0.8.0] - 2026-06-27
-
 ### Added
 - **DeepSeek Spoofing Module**: New `providers/deepseek/spoofing.ts` — builds browser-like headers (sec-ch-ua, user-agent, accept-language, cookies) and spoofed cookie strings with smidV2, ds_session_id, .thumbcache, and aws-waf-token. (#deepseek, spoofing.ts)
 - **DeepSeek PoW Solver**: New `providers/deepseek/pow.ts` — solves DeepSeekHashV1 PoW via WASM (WebAssembly.instantiate) or browser profile fallback (page.evaluate). Uses SHA3 WASM from fe-static.deepseek.com. Caches solutions within expire_after TTL. (#deepseek, pow.ts)
@@ -57,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **All Providers Use Persistent Browser Profile**: `manualBrowserLogin()` now uses `setupBrowserContext()` (persistent profile + `humanize:true`) instead of ephemeral `chromium.launch()`. DeepSeek and GLM login now persist cookies to disk like Qwen — no re-login on restart. Also checks for existing valid session cookies to skip re-login entirely when profile has live session. (#auth, browserProfiles.ts/loginHelpers.ts)
 - **manualBrowserLogin Blank Page Fix**: Use `context.newPage()` instead of `context.pages()[0]` to avoid stale about:blank pages from persistent context session restore. Use `waitUntil: 'networkidle'` instead of `'domcontentloaded'` — DeepSeek is an SPA that renders after DOM parse. (#auth, loginHelpers.ts)
 - **DeepSeek/GLM Headless Auto-Login**: Added `autoLoginViaBrowser()` in `browserProfiles.ts` — generic stealth headless auto-login (persistent profile, `humanize:true`, credential fill, captcha detection). DeepSeek and GLM now auto-login silently at startup and dashboard load. Manual headed login only fires on "Login" button click. (#auth, browserProfiles.ts/deepseekLogin.ts/glmLogin.ts/auth.ts/dashboardRoutes.ts/accounts.js)
+- fix: DeepSeek handler arg mismatch (token passed as accountEmail) (#deepseek, handler.ts:15)
+- fix: GLM pipeline body shape (features/background_tasks objects, signature_prompt) and query version constant (#glm, pipeline.ts+spoofing.ts)
+- fix: DeepSeek session creation needs spoofed browser headers + error logging (#deepseek, session.ts)
+
 
 ## [0.7.1] - 2026-06-23
 
