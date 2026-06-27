@@ -225,7 +225,7 @@ export async function openBrowserProfile(email: string, password?: string, optio
 }
 
 export type AutoLoginOutcome =
-  | { status: 'success'; cookieStr: string; token: string; expiresAt: number }
+  | { status: 'success'; cookieStr: string; token: string; expiresAt: number; wafToken?: string; captchaVerifyParam?: string }
   | { status: 'captcha' | 'closed' | 'error' };
 
 export interface AutoLoginOptions {
@@ -245,7 +245,7 @@ export async function extractProviderToken(
   context: any,
   page: any,
   provider: 'qwen' | 'deepseek' | 'glm' | undefined,
-): Promise<{ token: string; expiresAt: number } | null> {
+): Promise<{ token: string; expiresAt: number; wafToken?: string; captchaVerifyParam?: string } | null> {
   if (!provider || provider === 'qwen') {
     // Qwen: use cookies (existing behavior)
     const cookies = await context.cookies();
@@ -260,7 +260,7 @@ export async function extractProviderToken(
   }
 
   if (provider === 'deepseek') {
-    // DeepSeek: fetch Bearer token from /api/v0/users/current
+    // DeepSeek: fetch Bearer token from /api/v0/users/current + extract aws-waf-token cookie
     try {
       const result = await page.evaluate(async () => {
         const res = await fetch('https://chat.deepseek.com/api/v0/users/current', {
@@ -268,10 +268,14 @@ export async function extractProviderToken(
         });
         if (!res.ok) return null;
         const data = await res.json();
-        return data?.data?.biz_data?.token || null;
+        const token = data?.data?.biz_data?.token || null;
+        // Extract aws-waf-token from cookies
+        const wafCookie = document.cookie.split('; ').find((c) => c.startsWith('aws-waf-token='));
+        const wafToken = wafCookie ? wafCookie.split('=')[1] : null;
+        return { token, wafToken };
       });
-      if (result) {
-        return { token: result, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 };
+      if (result?.token) {
+        return { token: result.token, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, wafToken: result.wafToken };
       }
     } catch (err: any) {
       logStore.log('warn', 'browser', `Failed to extract DeepSeek token: ${err.message}`);
@@ -341,7 +345,14 @@ export async function autoLoginViaBrowser(email: string, password: string | unde
         Date.now() + 7 * 24 * 60 * 60 * 1000;
       await context.close().catch(() => {});
       logStore.log('info', 'browser', `Existing valid session for ${email} — skipping auto-login`);
-      return { status: 'success', cookieStr, token: tokenResult?.token || cookieStr, expiresAt: tokenResult?.expiresAt || expiresAt };
+      return {
+        status: 'success',
+        cookieStr,
+        token: tokenResult?.token || cookieStr,
+        expiresAt: tokenResult?.expiresAt || expiresAt,
+        wafToken: tokenResult?.wafToken,
+        captchaVerifyParam: tokenResult?.captchaVerifyParam,
+      };
     }
 
     // Create fresh page
@@ -378,7 +389,14 @@ export async function autoLoginViaBrowser(email: string, password: string | unde
           if (tokenResult) {
             await context.close().catch(() => {});
             logStore.log('info', 'browser', `✓ Auto-login success for ${email}`);
-            return { status: 'success', cookieStr: '', token: tokenResult.token, expiresAt: tokenResult.expiresAt };
+            return {
+              status: 'success',
+              cookieStr: '',
+              token: tokenResult.token,
+              expiresAt: tokenResult.expiresAt,
+              wafToken: tokenResult.wafToken,
+              captchaVerifyParam: tokenResult.captchaVerifyParam,
+            };
           }
           // Fallback: use cookies
           const fallback = await buildCookieFallback(context);
@@ -403,7 +421,14 @@ export async function autoLoginViaBrowser(email: string, password: string | unde
         if (tokenResult) {
           await context.close().catch(() => {});
           logStore.log('info', 'browser', `✓ Auto-login success (cookie-based) for ${email}`);
-          return { status: 'success', cookieStr: '', token: tokenResult.token, expiresAt: tokenResult.expiresAt };
+          return {
+            status: 'success',
+            cookieStr: '',
+            token: tokenResult.token,
+            expiresAt: tokenResult.expiresAt,
+            wafToken: tokenResult.wafToken,
+            captchaVerifyParam: tokenResult.captchaVerifyParam,
+          };
         }
         // Fallback: use cookies
         const fallback = await buildCookieFallback(context);
@@ -577,4 +602,71 @@ async function refreshViaProfile(email: string): Promise<boolean> {
     }
     return false;
   }
+}
+
+/**
+ * Extract GLM captcha_verify_param from a fresh browser page.
+ * Navigates to chat.z.ai, waits for the Aliyun captcha SDK to initialize,
+ * and captures the captcha_verify_param from the page's first /api/v2/chat/completions request
+ * or from a global variable set by the Aliyun SDK.
+ */
+export async function extractGlmCaptchaFields(page: any): Promise<{ captchaVerifyParam?: string }> {
+  try {
+    await page.goto('https://chat.z.ai', { waitUntil: 'networkidle', timeout: 30000 }).catch(() => {});
+
+    const captchaVerifyParam = await page.evaluate(async () => {
+      return new Promise<string | null>((resolve) => {
+        let resolved = false;
+        const done = (val: string | null) => {
+          if (resolved) return;
+          resolved = true;
+          resolve(val);
+        };
+
+        // Strategy 1: intercept fetch calls to /chat/completions
+        const origFetch = window.fetch.bind(window);
+        window.fetch = function (url: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+          try {
+            const urlStr = typeof url === 'string' ? url : url.toString();
+            if (urlStr.includes('/api/v2/chat/completions') && init?.body) {
+              const body = JSON.parse(typeof init.body === 'string' ? init.body : '{}');
+              if (body.captcha_verify_param) {
+                done(body.captcha_verify_param);
+              }
+            }
+          } catch {
+            /* ignore parse errors */
+          }
+          return origFetch(url, init);
+        } as typeof window.fetch;
+
+        // Strategy 2: poll for globals set by Aliyun captcha SDK
+        let pollCount = 0;
+        const poll = setInterval(() => {
+          pollCount++;
+          for (const key of ['captchaVerifyParam', '__captchaVerifyParam']) {
+            const val = (window as any)[key];
+            if (val && typeof val === 'string' && val.length > 50) {
+              clearInterval(poll);
+              done(val);
+              return;
+            }
+          }
+          if (pollCount > 30) {
+            // 30 * 500ms = 15s timeout
+            clearInterval(poll);
+            done(null);
+          }
+        }, 500);
+      });
+    });
+
+    if (captchaVerifyParam) {
+      return { captchaVerifyParam };
+    }
+  } catch (err: any) {
+    logStore.log('warn', 'browser', `Failed to extract GLM captcha fields: ${err.message}`);
+  }
+
+  return {};
 }

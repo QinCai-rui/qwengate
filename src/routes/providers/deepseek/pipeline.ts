@@ -110,16 +110,18 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, a
     prompt: prompt,
     ref_file_ids: [],
     thinking_enabled: model === 'deepseek-reasoner',
-    search_enabled: false,
+    search_enabled: true,
     action: null,
     preempt: false,
   };
 
-  // 6. Build spoofed browser headers
+  // 6. Build spoofed browser headers (include wafToken from provider state)
+  var wafToken = getProviderState(email, 'deepseek')?.wafToken || undefined;
   var headers = buildDeepSeekHeaders(ctx, {
     powResponse: powHeader || undefined,
     hifLeim: ctx.hifLeim,
     dsSessionId: session.id,
+    wafToken: wafToken,
   });
 
   // 7. Send request to DeepSeek web chat API
@@ -148,13 +150,13 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, a
 
     var contentType = resp.headers.get('content-type') || '';
 
-    // Non-streaming: buffer entire SSE and extract content via stream parser
-    if (!isStream || contentType.includes('json')) {
+    // Non-streaming: buffer entire SSE response and extract content
+    if (!isStream) {
       var text = await resp.text();
+      var state: DeepSeekStreamState = createStreamState();
       var lines = text.split('\n').filter(function (l) {
         return l.startsWith('data: ');
       });
-      var state: DeepSeekStreamState = createStreamState();
       for (var i = 0; i < lines.length; i++) {
         var lineData = lines[i].slice(6);
         if (lineData === '[DONE]') continue;

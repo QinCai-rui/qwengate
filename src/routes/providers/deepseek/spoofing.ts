@@ -68,7 +68,7 @@ export function buildDeepSeekHeaders(
     accept: 'text/event-stream',
     'user-agent': USER_AGENT,
     origin: DEEPSEEK_BASE_URL,
-    referer: `${DEEPSEEK_BASE_URL}/`,
+    referer: opts?.dsSessionId ? `${DEEPSEEK_BASE_URL}/a/chat/s/${opts.dsSessionId}` : `${DEEPSEEK_BASE_URL}/`,
     'accept-language': 'en-US,en;q=0.9',
     'accept-encoding': 'gzip, deflate, br',
     'sec-fetch-dest': 'empty',

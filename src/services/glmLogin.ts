@@ -48,6 +48,24 @@ export async function loginGlmAuto(
   if (outcome.status === 'success' && outcome.token) {
     // GLM uses JWT returned from signin API — the cookieStr contains all cookies but
     // the actual JWT is in the `token` cookie value, which autoLoginViaBrowser now extracts
+
+    // Try to extract captcha_verify_param from a fresh browser session
+    let captchaVerifyParam: string | undefined = outcome.captchaVerifyParam;
+    if (!captchaVerifyParam) {
+      try {
+        const { setupBrowserContext, extractGlmCaptchaFields } = await import('./browserProfiles.ts');
+        const ctx = await setupBrowserContext(email, true);
+        const page = ctx.pages()[0] || (await ctx.newPage().catch(() => null));
+        if (page) {
+          const fields = await extractGlmCaptchaFields(page);
+          captchaVerifyParam = fields.captchaVerifyParam;
+        }
+        await ctx.close().catch(() => {});
+      } catch {
+        // Non-critical — pipeline works without it
+      }
+    }
+
     return {
       status: 'success',
       result: {
@@ -55,6 +73,7 @@ export async function loginGlmAuto(
         expiresAt: outcome.expiresAt,
         refreshToken: null,
         lastLoginAttempt: Date.now(),
+        captchaVerifyParam,
       },
     };
   }

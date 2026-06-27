@@ -21,6 +21,10 @@ export interface ProviderAuthState {
   startupStatus?: 'pending' | 'initializing' | 'connecting' | 'ready';
   /** Last error message from auto-login attempts (e.g., 'captcha: bot detection on auto-login'). Checked by getAuthStatus() for bot/WAF detection. */
   lastError?: string;
+  /** GLM captcha verify param (base64 token from Aliyun captcha, required on every chat call) */
+  captchaVerifyParam?: string;
+  /** DeepSeek AWS WAF token (extracted from document.cookie, required to bypass WAF) */
+  wafToken?: string;
 }
 
 export interface AccountEntry {

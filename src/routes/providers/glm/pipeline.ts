@@ -104,6 +104,11 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
   const history = messagesToGlmFormat(body.messages || []);
   const variables = buildGlmVariables(ctx);
 
+  // Extract captcha_verify_param from provider state (required by GLM on every chat call)
+  const { getProviderState } = await import('../../../services/accountManager.ts');
+  const acct = (await import('../../../services/accountManager.ts')).accounts.find((a: any) => a.providerStates.glm?.token === jwt);
+  const captchaVerifyParam = acct?.providerStates.glm?.captchaVerifyParam;
+
   // ponytail: features and background_tasks must be objects, not arrays — GLM crashes (500) on array types
   const glmFeatures: Record<string, any> = {
     image_generation: false,
@@ -115,10 +120,11 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
     vlm_web_search_enable: false,
     vlm_website_mode: false,
     enable_thinking: model.includes('glm-5') || model.includes('glm-4'),
+    reasoning_effort: 'max',
   };
 
   const glmBody: Record<string, any> = {
-    stream: isStream,
+    stream: true,
     model,
     messages: body.messages || [],
     signature_prompt: (body.messages && body.messages[0]?.content) || '',
@@ -127,10 +133,11 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
     features: glmFeatures,
     variables,
     chat_id: session.id,
-    id: session.id,
+    id: crypto.randomUUID(),
     current_user_message_id: history.currentId,
     current_user_message_parent_id: null,
     background_tasks: { title_generation: true, tags_generation: true },
+    ...(captchaVerifyParam ? { captcha_verify_param: captchaVerifyParam } : {}),
   };
 
   // 4. Build fingerprint query string

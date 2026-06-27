@@ -82,6 +82,7 @@ export async function loginDeepseekAuto(
         expiresAt: outcome.expiresAt,
         refreshToken: null,
         lastLoginAttempt: Date.now(),
+        wafToken: outcome.wafToken,
       },
     };
   }
