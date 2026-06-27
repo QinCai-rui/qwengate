@@ -26,6 +26,25 @@ export function getProfileDir(email: string): string {
   return dir;
 }
 
+/** Save provider-specific session data (e.g. captchaVerifyParam) to the browser profile dir. */
+export function saveProviderProfileData(email: string, provider: string, data: Record<string, any>): void {
+  const dir = getProfileDir(email);
+  const file = join(dir, `${provider}-session.json`);
+  writeFileSync(file, JSON.stringify(data, null, 2), 'utf-8');
+}
+
+/** Load provider-specific session data from the browser profile dir. */
+export function loadProviderProfileData(email: string, provider: string): Record<string, any> | null {
+  const dir = getProfileDir(email);
+  const file = join(dir, `${provider}-session.json`);
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
 /** Remove stale Chrome singleton files that block new instances from starting on this profile. */
 function cleanupSingletonLock(profileDir: string): void {
   for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
@@ -662,7 +681,7 @@ export async function autoLoginViaBrowser(email: string, password: string | unde
 export async function loadSessionFromProfile(
   email: string,
   provider: 'qwen' | 'deepseek' | 'glm',
-): Promise<{ token: string; expiresAt: number; cookieStr?: string } | null> {
+): Promise<{ token: string; expiresAt: number; cookieStr?: string; captchaVerifyParam?: string } | null> {
   let context: any = null;
   try {
     context = await setupBrowserContext(email, true); // headless: true — no UI
@@ -718,11 +737,13 @@ export async function loadSessionFromProfile(
         .join('; ');
 
       logStore.log('info', 'browser', `Loaded GLM JWT from profile cookie for ${email}`);
+      const profileData = loadProviderProfileData(email, 'glm');
       await context.close().catch(() => {});
       return {
         token: tokenCookie.value,
         expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
         cookieStr,
+        captchaVerifyParam: profileData?.captchaVerifyParam || undefined,
       };
     } else {
       // Qwen: existing cookie-based check

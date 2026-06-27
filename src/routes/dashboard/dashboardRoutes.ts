@@ -406,9 +406,14 @@ export function registerDashboardRoutes(app: Hono): void {
         const { loginGlmManual } = await import('../../services/glmLogin.ts');
 
         // Run async — return immediately, let the user poll for completion
-        loginGlmManual(email, acct.password).then((result) => {
+        loginGlmManual(email, acct.password).then(async (result) => {
           if (result) {
             setProviderState(email, 'glm', result);
+            // Persist captchaVerifyParam to browser profile dir for boot-time restoration
+            if (result.captchaVerifyParam) {
+              const { saveProviderProfileData } = await import('../../services/browserProfiles.ts');
+              saveProviderProfileData(email, 'glm', { captchaVerifyParam: result.captchaVerifyParam });
+            }
           }
         });
 
