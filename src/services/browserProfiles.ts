@@ -672,7 +672,7 @@ export async function autoLoginViaBrowser(email: string, password: string | unde
 export async function loadSessionFromProfile(
   email: string,
   provider: 'qwen' | 'deepseek' | 'glm',
-): Promise<{ token: string; expiresAt: number; cookieStr?: string; captchaVerifyParam?: string } | null> {
+): Promise<{ token: string; expiresAt: number; cookieStr?: string } | null> {
   let context: any = null;
   try {
     context = await setupBrowserContext(email, true); // headless: true — no UI
@@ -728,30 +728,11 @@ export async function loadSessionFromProfile(
         .join('; ');
 
       logStore.log('info', 'browser', `Loaded GLM JWT from profile cookie for ${email}`);
-
-      // Read captchaVerifyParam from localStorage (persisted by extractProviderToken)
-      let captchaVerifyParam: string | undefined;
-      try {
-        const page = await context.newPage();
-        await page.goto('https://chat.z.ai', { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => {});
-        captchaVerifyParam = await page.evaluate(() => {
-          try {
-            return localStorage.getItem('opengate_captchaVerifyParam') || undefined;
-          } catch {
-            return undefined;
-          }
-        });
-        await page.close().catch(() => {});
-      } catch {
-        // Non-critical
-      }
-
       await context.close().catch(() => {});
       return {
         token: tokenCookie.value,
         expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
         cookieStr,
-        captchaVerifyParam,
       };
     } else {
       // Qwen: existing cookie-based check

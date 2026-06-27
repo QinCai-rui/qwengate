@@ -57,8 +57,15 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, a
   if (email) {
     bearerToken = getDeepSeekTokenForEmail(email);
   } else {
-    // Fall back to any account with deepseek token
+    // Fall back to any account with deepseek token — also track the email
     bearerToken = getProviderToken('deepseek');
+    if (bearerToken) {
+      var { accounts } = await import('../../../services/accountManager.ts');
+      var dsAccount = accounts.find(
+        (a) => !a.disabled && !(a.disabledProviders || []).includes('deepseek') && a.providerStates.deepseek?.token === bearerToken,
+      );
+      if (dsAccount) email = dsAccount.email;
+    }
   }
 
   if (!bearerToken) {
@@ -75,11 +82,13 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, a
 
   // 2. Build spoofing context
   var ctx = createDeepSeekContext(bearerToken);
+  logStore.log('debug', 'deepseek-pipeline', `email=${email} model=${model} stream=${isStream}`);
 
   // 3. Solve PoW challenge
   var powHeader: string | null = null;
   try {
     powHeader = await getPowResponseHeader(email || 'unknown', bearerToken);
+    logStore.log('debug', 'deepseek-pipeline', `PoW solved: ${powHeader ? 'yes (' + powHeader.length + ' chars)' : 'no'}`);
   } catch (err: any) {
     logStore.log('warn', 'deepseek-pow', 'PoW solving failed: ' + err.message + ' — proceeding without PoW');
   }
@@ -98,6 +107,7 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, a
       { status: 503, headers: { 'content-type': 'application/json' } },
     );
   }
+  logStore.log('debug', 'deepseek-pipeline', `Session: ${session.id}`);
 
   // 5. Build the DeepSeek web chat request body
   var prompt = messagesToPrompt(body.messages || []);
@@ -125,13 +135,19 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, a
   });
 
   // 7. Send request to DeepSeek web chat API
+  logStore.log(
+    'debug',
+    'deepseek-pipeline',
+    `Fetching ${DEEPSEEK_BASE_URL + CHAT_ENDPOINT} (wafToken=${wafToken ? 'yes' : 'no'}, pow=${powHeader ? 'yes' : 'no'})`,
+  );
   try {
     var resp = await fetch(DEEPSEEK_BASE_URL + CHAT_ENDPOINT, {
       method: 'POST',
       headers: headers as unknown as Record<string, string>,
       body: JSON.stringify(deepseekBody),
-      signal: AbortSignal.timeout(120000),
+      signal: AbortSignal.timeout(30000),
     });
+    logStore.log('debug', 'deepseek-pipeline', `Response: ${resp.status} ${resp.headers.get('content-type')}`);
 
     if (!resp.ok) {
       var errText = await resp.text().catch(function () {

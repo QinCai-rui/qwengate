@@ -212,7 +212,6 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
               refreshToken: null,
               lastLoginAttempt: null,
               cookies: session.cookieStr || undefined,
-              captchaVerifyParam: session.captchaVerifyParam || undefined,
             };
             logStore.log('info', 'auth', `\u2713 GLM session loaded from profile for ${acct.email}`);
           }
