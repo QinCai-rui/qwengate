@@ -19,33 +19,27 @@ const CREATED = 1_782_414_000; // 2026-06-25
 
 export const PROVIDER_MODELS: ProviderModelEntry[] = [
   // ── DeepSeek ────────────────────────────────────────────
+  // ponytail: upstream model IDs as of 2026-06 from GET /models
   {
-    id: 'deepseek/instant',
+    id: 'deepseek/deepseek-chat',
     object: 'model',
     created: CREATED,
     owned_by: 'deepseek',
-    description: 'DeepSeek Instant mode — fast responses',
+    description: 'DeepSeek Chat — general-purpose chat',
   },
   {
-    id: 'deepseek/expert',
+    id: 'deepseek/deepseek-reasoner',
     object: 'model',
     created: CREATED,
     owned_by: 'deepseek',
-    description: 'DeepSeek Expert mode — deeper reasoning',
+    description: 'DeepSeek Reasoner — chain-of-thought reasoning (R1)',
   },
   {
-    id: 'deepseek/vision',
+    id: 'deepseek/deepseek-vl2',
     object: 'model',
     created: CREATED,
     owned_by: 'deepseek',
-    description: 'DeepSeek Vision mode — image understanding',
-  },
-  {
-    id: 'deepseek/reasoner',
-    object: 'model',
-    created: CREATED,
-    owned_by: 'deepseek',
-    description: 'DeepSeek Reasoner — Expert + DeepThink (R1)',
+    description: 'DeepSeek VL2 — vision-language understanding',
   },
   // ── Z.ai (Zhipu GLM) ────────────────────────────────────
   {
@@ -56,19 +50,66 @@ export const PROVIDER_MODELS: ProviderModelEntry[] = [
     description: 'Z.ai GLM-5.2 — flagship model, excels at coding and long-horizon tasks',
   },
   {
+    id: 'zai/glm-5.1',
+    object: 'model',
+    created: CREATED,
+    owned_by: 'zai',
+    description: 'Z.ai GLM-5.1',
+  },
+  {
+    id: 'zai/glm-5',
+    object: 'model',
+    created: CREATED,
+    owned_by: 'zai',
+    description: 'Z.ai GLM-5',
+  },
+  {
+    id: 'zai/glm-4.7-flash',
+    object: 'model',
+    created: CREATED,
+    owned_by: 'zai',
+    description: 'Z.ai GLM-4.7 Flash — fast and efficient',
+  },
+  {
     id: 'zai/glm-4.7',
     object: 'model',
     created: CREATED,
     owned_by: 'zai',
-    description: 'Z.ai GLM-4.7 — fast and efficient',
+    description: 'Z.ai GLM-4.7',
+  },
+  {
+    id: 'zai/glm-4.6',
+    object: 'model',
+    created: CREATED,
+    owned_by: 'zai',
+    description: 'Z.ai GLM-4.6',
+  },
+  {
+    id: 'zai/glm-4.5-air',
+    object: 'model',
+    created: CREATED,
+    owned_by: 'zai',
+    description: 'Z.ai GLM-4.5 Air — lightweight',
+  },
+  {
+    id: 'zai/glm-4.5',
+    object: 'model',
+    created: CREATED,
+    owned_by: 'zai',
+    description: 'Z.ai GLM-4.5',
   },
 ];
 
 const PROVIDER_MODEL_SPECS: Record<string, { max_context: number; max_output: number; modalities: string[] }> = {
-  'deepseek/instant': { max_context: 32000, max_output: 8000, modalities: ['text'] },
-  'deepseek/expert': { max_context: 64000, max_output: 8000, modalities: ['text'] },
-  'deepseek/vision': { max_context: 32000, max_output: 8000, modalities: ['text', 'image'] },
-  'deepseek/reasoner': { max_context: 64000, max_output: 8000, modalities: ['text'] },
-  'zai/glm-5.2': { max_context: 32000, max_output: 16000, modalities: ['text', 'image'] },
-  'zai/glm-4.7': { max_context: 32000, max_output: 16000, modalities: ['text', 'image'] },
+  'deepseek/deepseek-chat': { max_context: 128000, max_output: 8192, modalities: ['text'] },
+  'deepseek/deepseek-reasoner': { max_context: 128000, max_output: 8192, modalities: ['text'] },
+  'deepseek/deepseek-vl2': { max_context: 32000, max_output: 8192, modalities: ['text', 'image'] },
+  'zai/glm-5.2': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'zai/glm-5.1': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'zai/glm-5': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'zai/glm-4.7-flash': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'zai/glm-4.7': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'zai/glm-4.6': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'zai/glm-4.5-air': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'zai/glm-4.5': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
 };

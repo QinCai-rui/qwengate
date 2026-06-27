@@ -50,6 +50,7 @@ export {
   reloadAccounts,
   removeAccount,
   setAccountDisabled,
+  setAccountProviders,
   throttleAccount,
 } from './accountManager.ts';
 export { ensureAccountFresh, needsRefresh, tryRefreshToken } from './tokenRefresh.ts';
@@ -122,16 +123,23 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
     accounts.push({
       email: a.email,
       password: a.password,
-      state: null,
+      providerStates: {
+        qwen: {
+          token: null,
+          expiresAt: null,
+          refreshToken: null,
+          lastLoginAttempt: null,
+          cookies: a.profileCookies,
+          startupStatus: 'initializing',
+        },
+      },
       lastUsed: 0,
       throttledUntil: persistedUntil > Date.now() ? persistedUntil : 0,
       refreshInFlight: null,
       loginAttempt: 0,
       inFlight: 0,
       totalRequests: 0,
-      profileCookies: a.profileCookies,
       disabled: (a as any).disabled ?? false,
-      startupStatus: 'initializing',
     });
   }
   rebuildEmailIndex();
@@ -147,7 +155,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
         batch.map(async (acct) => {
           const profileState = await loadCookiesFromProfile(acct.email);
           if (profileState) {
-            acct.state = profileState;
+            acct.providerStates.qwen = { ...profileState, lastLoginAttempt: null };
             return { acct, source: 'profile' as const };
           }
           return { acct, source: null as string | null };
@@ -159,7 +167,8 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
     }
 
     // Phase 2: Login accounts that don't have tokens yet — max 3 concurrent
-    const needLogin = accounts.filter((a) => !a.state?.token && a.password);
+    // Only login accounts configured for qwen (checked via providers array)
+    const needLogin = accounts.filter((a) => (a.providers || ['qwen']).includes('qwen') && !a.providerStates.qwen?.token && a.password);
     if (needLogin.length > 0) {
       logStore.log('info', 'auth', `Logging in ${needLogin.length} accounts (max ${MAX_CONCURRENT_PROFILE_LOADS} concurrent)...`);
       for (let i = 0; i < needLogin.length; i += MAX_CONCURRENT_PROFILE_LOADS) {
@@ -168,7 +177,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
           batch.map(async (acct) => {
             const newState = await loginFresh(acct.email, acct.password);
             if (newState) {
-              acct.state = newState;
+              acct.providerStates.qwen = { ...newState, lastLoginAttempt: null };
               await saveCookies(acct.email, newState.token, newState.refreshToken, newState.expiresAt);
             }
           }),
@@ -179,7 +188,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
     // Phase 3: Run post-login callbacks in parallel
     if (onAccountReady) {
       const readyPromises = accounts
-        .filter((a) => a.state?.token)
+        .filter((a) => a.providerStates.qwen?.token)
         .map(async (acct) => {
           try {
             await onAccountReady(acct.email);
@@ -190,7 +199,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       await Promise.allSettled(readyPromises);
     }
 
-    const successCount = accounts.filter((a) => a.state !== null && a.state.token).length;
+    const successCount = accounts.filter((a) => a.providerStates.qwen != null && a.providerStates.qwen.token).length;
     logStore.log('info', 'auth', successCount + '/' + accounts.length + ' accounts authenticated');
 
     setupAccountWatcherImpl();
@@ -204,7 +213,10 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
 
 export function setStartupStatus(email: string, status: 'initializing' | 'pending' | 'connecting' | 'ready'): void {
   const account = getAccountByEmail(email);
-  if (account) account.startupStatus = status;
+  if (account) {
+    account.providerStates.qwen ??= { token: null, expiresAt: null, refreshToken: null, lastLoginAttempt: null };
+    account.providerStates.qwen.startupStatus = status;
+  }
 }
 
 export async function loadCookiesFromProfile(email: string): Promise<AuthState | null> {
@@ -226,7 +238,7 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
         }
         if (result === 'success') {
           logStore.log('info', 'auth', `✓ Profile created for ${email} via browser login`);
-          if (acct?.state) return acct.state;
+          if (acct?.providerStates.qwen) return acct.providerStates.qwen as unknown as AuthState;
         } else {
           logStore.log('warn', 'auth', `Profile creation failed for ${email}: ${result}`);
         }
@@ -276,9 +288,9 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
 
         if (result === 'success') {
           const updated = accounts.find((a) => a.email.toLowerCase().trim() === email.toLowerCase().trim());
-          if (updated?.state) {
+          if (updated?.providerStates.qwen) {
             logStore.log('info', 'auth', `✓ Authorized ${email} via browser profile`);
-            return updated.state;
+            return updated.providerStates.qwen as unknown as AuthState;
           }
           logStore.log('warn', 'auth', `Profile auth succeeded but no state for ${email}, letting caller retry`);
           return null;
@@ -297,7 +309,8 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
           .map((c: Cookie) => `${c.name}=${c.value}`)
           .join('; ');
         if (cookieStr && acct) {
-          acct.profileCookies = cookieStr;
+          acct.providerStates.qwen ??= { token: null, expiresAt: null, refreshToken: null, lastLoginAttempt: null };
+          acct.providerStates.qwen.cookies = cookieStr;
           const { saveAccountsToFile } = await import('./accountManager.ts');
           saveAccountsToFile(accounts);
           logStore.log('info', 'auth', `Saved ${cookies.length} cookies as profile for ${email.split('@')[0]}`);
@@ -369,10 +382,11 @@ export async function saveCookies(email: string, token: string, refreshToken?: s
 
     const acct = accounts.find((a) => a.email.toLowerCase().trim() === normalizedEmail);
     if (acct && token) {
-      acct.state = {
+      acct.providerStates.qwen = {
         token,
         expiresAt: jwtExpiresAt,
-        refreshToken: refreshToken || acct.state?.refreshToken || null,
+        refreshToken: refreshToken || acct.providerStates.qwen?.refreshToken || null,
+        lastLoginAttempt: null,
       };
       if (acct.throttledUntil > Date.now()) {
         acct.throttledUntil = 0;

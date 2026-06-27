@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
-import type { AccountEntry } from '../types/auth.ts';
+import type { AccountEntry, AuthState, ProviderAuthState } from '../types/auth.ts';
 import { projectPath } from '../utils/paths.ts';
 import { config } from './configService.ts';
 import { loginFresh } from './loginService.ts';
@@ -220,7 +220,11 @@ export function loadAccountsFromFile(): Array<{ email: string; password: string;
 
   return tryLoad(ACCOUNTS_FILE) ?? tryLoad(FALLBACK_ACCOUNTS_FILE) ?? [];
 }
-export async function addAccount(email: string, password: string): Promise<{ loginSucceeded: boolean; loginError?: string }> {
+export async function addAccount(
+  email: string,
+  password: string,
+  providers?: string[],
+): Promise<{ loginSucceeded: boolean; loginError?: string }> {
   const normalizedEmail = email.toLowerCase().trim();
   const existing = accounts.find((a) => a.email.toLowerCase().trim() === normalizedEmail);
   if (existing) {
@@ -229,7 +233,8 @@ export async function addAccount(email: string, password: string): Promise<{ log
   const entry: AccountEntry = {
     email: normalizedEmail,
     password,
-    state: null,
+    providerStates: {},
+    providers: providers || ['qwen'],
     lastUsed: 0,
     throttledUntil: 0,
     refreshInFlight: null,
@@ -255,7 +260,7 @@ export async function addAccount(email: string, password: string): Promise<{ log
     const { loadCookiesFromProfile } = await import('./auth.ts');
     const profileState = await loadCookiesFromProfile(normalizedEmail);
     if (profileState) {
-      entry.state = profileState;
+      entry.providerStates.qwen = { ...profileState, lastLoginAttempt: null };
       await configureAccount(normalizedEmail).catch((err) =>
         logStore.log('error', 'account', `Failed to configure ${normalizedEmail}: ${err.message}`),
       );
@@ -266,7 +271,7 @@ export async function addAccount(email: string, password: string): Promise<{ log
   // Fallback: try API login if profile authorization failed
   const newState = await loginFresh(normalizedEmail, password);
   if (newState) {
-    entry.state = newState;
+    entry.providerStates.qwen = { ...newState, lastLoginAttempt: null };
     await configureAccount(normalizedEmail).catch((err) =>
       logStore.log('error', 'account', `Failed to configure ${normalizedEmail}: ${err.message}`),
     );
@@ -315,7 +320,7 @@ export async function reloadAccounts(): Promise<void> {
       const entry: AccountEntry = {
         email,
         password: d.password,
-        state: null,
+        providerStates: {},
         lastUsed: 0,
         throttledUntil: 0,
         refreshInFlight: null,
@@ -327,7 +332,7 @@ export async function reloadAccounts(): Promise<void> {
       const { loadCookiesFromProfile } = await import('./auth.ts');
       const profileState = await loadCookiesFromProfile(email);
       if (profileState) {
-        entry.state = profileState;
+        entry.providerStates.qwen = { ...profileState, lastLoginAttempt: null };
       }
       accounts.push(entry);
       added++;
@@ -410,8 +415,9 @@ export function resetWatcherState(): void {
 }
 export function isAvailable(acct: AccountEntry): boolean {
   if (acct.disabled) return false;
-  if (!acct.state) return false;
   if (acct.throttledUntil > Date.now()) return false;
+  // For now, "available" means Qwen authenticated (primary routing)
+  if (!acct.providerStates.qwen?.token) return false;
   return true;
 }
 export async function pickAccount(excludeEmail?: string): Promise<AccountEntry | null> {
@@ -431,7 +437,7 @@ export async function pickAccount(excludeEmail?: string): Promise<AccountEntry |
         return null;
       }
       const throttled = accounts.filter((a) => a.throttledUntil > Date.now()).length;
-      const noState = accounts.filter((a) => !a.state).length;
+      const noState = accounts.filter((a) => !a.providerStates.qwen?.token).length;
       logStore.log('warn', 'auth', `All ${accounts.length} accounts exhausted — ${throttled} throttled, ${noState} unauthenticated`);
       return null;
     }
@@ -491,6 +497,30 @@ export function setAccountDisabled(email: string, disabled: boolean): void {
   acct.disabled = disabled;
   saveAccountsToFile(accounts);
 }
+export function setAccountProviders(email: string, providers: string[]): boolean {
+  const acct = getAccountByEmail(email);
+  if (!acct) return false;
+  acct.providers = providers.length > 0 ? [...new Set(providers)] : ['qwen'];
+  saveAccountsToFile(accounts);
+  return true;
+}
+export function setProviderState(email: string, provider: string, state: ProviderAuthState | null): boolean {
+  const acct = getAccountByEmail(email);
+  if (!acct) return false;
+  if (state) {
+    acct.providerStates[provider] = state;
+  } else {
+    delete acct.providerStates[provider];
+  }
+  saveAccountsToFile(accounts);
+  return true;
+}
+
+export function getProviderState(email: string, provider: string): ProviderAuthState | null {
+  const acct = getAccountByEmail(email);
+  if (!acct) return null;
+  return acct.providerStates[provider] ?? null;
+}
 export function throttleAccount(email: string, durationMs?: number): void {
   const acct = getAccountByEmail(email);
   if (!acct) return;
@@ -507,6 +537,14 @@ export function isAccountThrottled(email: string): boolean {
   if (!acct) return true;
   return acct.throttledUntil > Date.now();
 }
+export function getAuthStatus(state: ProviderAuthState | undefined): string {
+  if (!state?.token) return 'disconnected';
+  if (state.startupStatus === 'connecting') return 'connecting';
+  if (state.startupStatus === 'initializing' || state.startupStatus === 'pending') return 'pending';
+  if (state.expiresAt != null && state.expiresAt < Date.now()) return 'expired';
+  return 'live';
+}
+
 export function getAccountStats(): Array<{
   email: string;
   authenticated: boolean;
@@ -518,19 +556,59 @@ export function getAccountStats(): Array<{
   lastUsedAgoMs: number;
   inFlight: number;
   totalRequests: number;
+  providers: {
+    qwen: boolean;
+    deepseek: boolean;
+    zai: boolean;
+  };
+  configuredProviders: string[];
+  providerAuth: {
+    qwen: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null } | null;
+    deepseek: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null } | null;
+    zai: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null } | null;
+  };
 }> {
   const now = Date.now();
   return accounts.map((a) => ({
     email: a.email,
-    authenticated: a.state !== null,
+    authenticated: a.providerStates.qwen?.token != null,
     throttled: a.throttledUntil > now,
     disabled: a.disabled ?? false,
     throttledRemainingMs: Math.max(0, a.throttledUntil - now),
     throttledUnlockAt: a.throttledUntil > now ? new Date(a.throttledUntil).toISOString() : null,
-    tokenExpiresInMs: a.state ? Math.max(0, a.state.expiresAt - now) : 0,
+    tokenExpiresInMs: a.providerStates.qwen?.expiresAt ? Math.max(0, a.providerStates.qwen.expiresAt - now) : 0,
     lastUsedAgoMs: a.lastUsed ? now - a.lastUsed : -1,
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
+    providers: {
+      qwen: a.providerStates.qwen?.token != null,
+      deepseek: a.providerStates.deepseek?.token != null,
+      zai: a.providerStates.zai?.token != null,
+    },
+    configuredProviders: a.providers || ['qwen'],
+    providerAuth: {
+      qwen: a.providerStates.qwen
+        ? {
+            status: getAuthStatus(a.providerStates.qwen),
+            tokenExpiresInMs: a.providerStates.qwen.expiresAt ? Math.max(0, a.providerStates.qwen.expiresAt - now) : 0,
+            lastLoginAttempt: a.providerStates.qwen.lastLoginAttempt,
+          }
+        : null,
+      deepseek: a.providerStates.deepseek
+        ? {
+            status: getAuthStatus(a.providerStates.deepseek),
+            tokenExpiresInMs: a.providerStates.deepseek.expiresAt ? Math.max(0, a.providerStates.deepseek.expiresAt - now) : 0,
+            lastLoginAttempt: a.providerStates.deepseek.lastLoginAttempt,
+          }
+        : null,
+      zai: a.providerStates.zai
+        ? {
+            status: getAuthStatus(a.providerStates.zai),
+            tokenExpiresInMs: a.providerStates.zai.expiresAt ? Math.max(0, a.providerStates.zai.expiresAt - now) : 0,
+            lastLoginAttempt: a.providerStates.zai.lastLoginAttempt,
+          }
+        : null,
+    },
   }));
 }
 export function getAccountCount(): number {
@@ -545,11 +623,23 @@ export function getAllAccountEmails(): string[] {
 export function getAccounts(): readonly AccountEntry[] {
   return [...accounts];
 }
+/**
+ * Get a stored auth token for a specific provider from any available account.
+ * Used by provider handlers that want per-account auth instead of env var API keys.
+ * Returns the token string, or null if no account has a valid token for this provider.
+ */
+export function getProviderToken(provider: string): string | null {
+  const available = accounts.filter((a) => !a.disabled && a.providerStates[provider]?.token != null);
+  if (available.length === 0) return null;
+  const acct = available[Math.floor(Math.random() * available.length)];
+  return acct.providerStates[provider]!.token!;
+}
+
 export async function getToken(): Promise<string | null> {
   const acct = await pickAccount();
   if (acct) {
     decrementInFlight(acct.email);
-    return acct.state?.token || null;
+    return acct.providerStates.qwen?.token || null;
   }
   return null;
 }
@@ -558,18 +648,18 @@ export async function getTokenWithAccount(email?: string): Promise<{ token: stri
   let picked = false;
   if (email) {
     acct = getAccountByEmail(email);
-    if (acct && !isAvailable(acct) && acct.state) {
+    if (acct && !isAvailable(acct) && acct.providerStates.qwen?.token) {
       // Account exists but throttled — still return it
     }
   } else {
     acct = await pickAccount();
     picked = true;
   }
-  if (!acct?.state?.token) {
+  if (!acct?.providerStates?.qwen?.token) {
     if (picked && acct) decrementInFlight(acct.email);
     return null;
   }
   acct.lastUsed = Date.now();
   if (picked) decrementInFlight(acct.email);
-  return { token: acct.state.token, email: acct.email };
+  return { token: acct.providerStates.qwen.token, email: acct.email };
 }

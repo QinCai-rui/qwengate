@@ -1,9 +1,32 @@
 /*
  * File: providers/deepseek/handler.ts
- * DeepSeek provider -- OpenAI-compatible fetch proxy via factory.
+ * DeepSeek provider — uses per-account browser JWT via web chat API.
+ * No API key fallback — accounts only.
  */
 
 import { registerProvider } from '../../providerRegistry.ts';
-import { createOpenAIProxyHandler } from '../openaiProxy.ts';
 
-registerProvider('deepseek/', createOpenAIProxyHandler('deepseek', 'DEEPSEEK_API_KEY', 'DEEPSEEK_BASE_URL', 'https://api.deepseek.com'));
+export async function deepseekHandler(c: any, body: any): Promise<Response> {
+  try {
+    const { getProviderToken } = await import('../../../services/accountManager.ts');
+    const token = getProviderToken('deepseek');
+    if (token) {
+      const { proxyViaDeepSeekWebChat } = await import('./pipeline.ts');
+      return await proxyViaDeepSeekWebChat(c, body, token);
+    }
+  } catch {
+    // Fall through to error
+  }
+
+  return c.json(
+    {
+      error: {
+        message: 'No DeepSeek account logged in. Login via dashboard first.',
+        type: 'auth_error',
+      },
+    },
+    503,
+  );
+}
+
+registerProvider('deepseek/', deepseekHandler);

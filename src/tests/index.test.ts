@@ -298,14 +298,21 @@ test('Chat completions with image uploads attaches files (t2t chat_type, vision 
   accounts.push({
     email: 'test@opengate.dev',
     password: 'test',
-    state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
+    providerStates: {
+      qwen: {
+        token: 'mock-token',
+        expiresAt: Date.now() + 3600000,
+        refreshToken: null,
+        lastLoginAttempt: null,
+        startupStatus: 'ready',
+      },
+    },
     lastUsed: 0,
     throttledUntil: 0,
     refreshInFlight: null,
     loginAttempt: 0,
     inFlight: 0,
     totalRequests: 0,
-    startupStatus: 'ready',
   });
 
   let stsCalled = false;
@@ -494,14 +501,21 @@ test('Anthropic streaming strips XML artifacts from text deltas', async () => {
   accounts.push({
     email: 'xml-test@opengate.dev',
     password: 'test',
-    state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
+    providerStates: {
+      qwen: {
+        token: 'mock-token',
+        expiresAt: Date.now() + 3600000,
+        refreshToken: null,
+        lastLoginAttempt: null,
+        startupStatus: 'ready',
+      },
+    },
     lastUsed: 0,
     throttledUntil: 0,
     refreshInFlight: null,
     loginAttempt: 0,
     inFlight: 0,
     totalRequests: 0,
-    startupStatus: 'ready',
   });
 
   (globalThis as any).fetch = async (input: any) => {
@@ -621,14 +635,21 @@ test('Anthropic /v1/messages streaming with local_mcp tool call emits correct to
   accounts.push({
     email: 'test@opengate.dev',
     password: 'test',
-    state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
+    providerStates: {
+      qwen: {
+        token: 'mock-token',
+        expiresAt: Date.now() + 3600000,
+        refreshToken: null,
+        lastLoginAttempt: null,
+        startupStatus: 'ready',
+      },
+    },
     lastUsed: 0,
     throttledUntil: 0,
     refreshInFlight: null,
     loginAttempt: 0,
     inFlight: 0,
     totalRequests: 0,
-    startupStatus: 'ready',
   });
 
   (globalThis as any).fetch = async (input: any) => {

@@ -11,19 +11,19 @@ import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
 
 export function needsRefresh(acct: AccountEntry): boolean {
-  if (!acct.state) return true;
-  return acct.state.expiresAt - getAuthRefreshBeforeMs() < Date.now();
+  if (!acct.providerStates.qwen) return true;
+  return acct.providerStates.qwen.expiresAt! - getAuthRefreshBeforeMs() < Date.now();
 }
 
 const QWEN_CHAT_URL = 'https://chat.qwen.ai';
 
 export async function tryRefreshToken(acct: AccountEntry): Promise<boolean> {
-  if (!acct.state?.refreshToken) return false;
+  if (!acct.providerStates.qwen?.refreshToken) return false;
 
   try {
     const resp = await browserlessFetch(`${QWEN_CHAT_URL}/api/v2/auths/refresh`, {
       method: 'POST',
-      body: JSON.stringify({ refresh_token: acct.state.refreshToken }),
+      body: JSON.stringify({ refresh_token: acct.providerStates.qwen!.refreshToken }),
     });
 
     if (!resp.ok) return false;
@@ -32,12 +32,18 @@ export async function tryRefreshToken(acct: AccountEntry): Promise<boolean> {
     const data = JSON.parse(body);
     if (!data.data?.token) return false;
 
-    acct.state = {
+    acct.providerStates.qwen = {
       token: data.data.token,
       expiresAt: Date.now() + getAuthTokenMaxAgeMs(),
-      refreshToken: data.data.refresh_token || acct.state.refreshToken,
+      refreshToken: data.data.refresh_token || acct.providerStates.qwen!.refreshToken,
+      lastLoginAttempt: null,
     };
-    await saveCookies(acct.email, acct.state.token, acct.state.refreshToken, acct.state.expiresAt);
+    await saveCookies(
+      acct.email,
+      acct.providerStates.qwen.token!,
+      acct.providerStates.qwen.refreshToken!,
+      acct.providerStates.qwen.expiresAt!,
+    );
     if (acct.throttledUntil > Date.now()) {
       acct.throttledUntil = 0;
     }
@@ -49,7 +55,7 @@ export async function tryRefreshToken(acct: AccountEntry): Promise<boolean> {
 }
 
 export async function ensureAccountFresh(acct: AccountEntry): Promise<boolean> {
-  if (acct.state && !needsRefresh(acct)) return true;
+  if (acct.providerStates.qwen && !needsRefresh(acct)) return true;
 
   // Avoid concurrent refresh for same account
   if (acct.refreshInFlight) {
@@ -58,7 +64,7 @@ export async function ensureAccountFresh(acct: AccountEntry): Promise<boolean> {
 
   acct.refreshInFlight = (async () => {
     try {
-      if (acct.state?.refreshToken) {
+      if (acct.providerStates.qwen?.refreshToken) {
         if (await tryRefreshToken(acct)) return true;
         logStore.log('warn', 'auth', `Refresh token failed for ${acct.email}`);
       }
@@ -71,7 +77,7 @@ export async function ensureAccountFresh(acct: AccountEntry): Promise<boolean> {
 
       const newState = await loginFresh(acct.email, acct.password);
       if (newState) {
-        acct.state = newState;
+        acct.providerStates.qwen = { ...newState, lastLoginAttempt: null };
         await saveCookies(acct.email, newState.token, newState.refreshToken, newState.expiresAt);
         return true;
       }

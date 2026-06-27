@@ -349,11 +349,66 @@ export function registerDashboardRoutes(app: Hono): void {
     async (c) => {
       try {
         const body = await c.req.json();
-        const { setAccountDisabled } = await import('../../services/accountManager.ts');
-        setAccountDisabled(c.req.param('email'), body.disabled === true);
+        const mod = await import('../../services/accountManager.ts');
+        if (body.disabled !== undefined) {
+          mod.setAccountDisabled(c.req.param('email'), body.disabled === true);
+        }
         return c.json({ ok: true });
       } catch (err: any) {
         return c.json({ error: err.message }, 404);
+      }
+    },
+  );
+
+  app.get(
+    '/api/accounts/:email/login/deepseek',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const email = c.req.param('email');
+        const { getAccountByEmail, setProviderState } = await import('../../services/accountManager.ts');
+        const acct = getAccountByEmail(email);
+        if (!acct) return c.json({ error: 'Account not found' }, 404);
+
+        // Launch headless:false — user must complete captcha manually
+        const { loginDeepSeekManual } = await import('../../services/deepseekLogin.ts');
+
+        loginDeepSeekManual(email, acct.password).then((result) => {
+          if (result) {
+            setProviderState(email, 'deepseek', result);
+          }
+        });
+
+        return c.json({ ok: true, message: `Browser opened for ${email}. Complete login in the browser window.` });
+      } catch (err: any) {
+        return c.json({ error: err.message }, 500);
+      }
+    },
+  );
+
+  app.get(
+    '/api/accounts/:email/login/zai',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const email = c.req.param('email');
+        const { getAccountByEmail, setProviderState } = await import('../../services/accountManager.ts');
+        const acct = getAccountByEmail(email);
+        if (!acct) return c.json({ error: 'Account not found' }, 404);
+
+        // Launch headless:false — user must complete captcha manually
+        const { loginZaiManual } = await import('../../services/zaiLogin.ts');
+
+        // Run async — return immediately, let the user poll for completion
+        loginZaiManual(email, acct.password).then((result) => {
+          if (result) {
+            setProviderState(email, 'zai', result);
+          }
+        });
+
+        return c.json({ ok: true, message: `Browser opened for ${email}. Complete login in the browser window.` });
+      } catch (err: any) {
+        return c.json({ error: err.message }, 500);
       }
     },
   );

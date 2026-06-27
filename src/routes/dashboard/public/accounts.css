@@ -195,6 +195,55 @@
   flex-wrap: nowrap;
 }
 
+/* ── Provider Login Buttons ── */
+.provider-login-btns {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.provider-login-btn {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  cursor: pointer;
+  line-height: 1.6;
+  transition: all 0.15s ease;
+}
+.provider-login-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.provider-login-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.provider-login-btn.q {
+  border-color: rgba(0, 113, 227, 0.3);
+}
+.provider-login-btn.q:hover:not(:disabled) {
+  background: #0071e3;
+  border-color: #0071e3;
+}
+.provider-login-btn.d {
+  border-color: rgba(255, 107, 53, 0.3);
+}
+.provider-login-btn.d:hover:not(:disabled) {
+  background: #ff6b35;
+  border-color: #ff6b35;
+}
+.provider-login-btn.g {
+  border-color: rgba(52, 199, 89, 0.3);
+}
+.provider-login-btn.g:hover:not(:disabled) {
+  background: #34c759;
+  border-color: #34c759;
+}
+
 /* Error / Empty */
 .error-box {
   display: none;
@@ -331,6 +380,66 @@
   opacity: 0.85;
 }
 
+/* ── Provider Checkboxes ── */
+.provider-checks {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+}
+.provider-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  transition: all 0.15s;
+  user-select: none;
+}
+.provider-check:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.provider-check input {
+  display: none;
+}
+.provider-check.checked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.provider-check.checked.qwen {
+  border-color: #0071e3;
+  background: rgba(0, 113, 227, 0.08);
+  color: #0071e3;
+}
+.provider-check.checked.deepseek {
+  border-color: #ff6b35;
+  background: rgba(255, 107, 53, 0.08);
+  color: #ff6b35;
+}
+.provider-check.checked.zai {
+  border-color: #34c759;
+  background: rgba(52, 199, 89, 0.08);
+  color: #34c759;
+}
+.provider-check-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.provider-check.checked .provider-check-dot {
+  background: currentColor;
+}
+
 /* Responsive */
 @media (max-width: 600px) {
   .account-form {
@@ -348,6 +457,189 @@
     padding: 12px;
   }
 }
+/* ── Provider Indicators ── */
+.providers-cell {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.provider-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  line-height: 1.5;
+}
+.provider-badge.connected {
+  background: rgba(52, 199, 89, 0.12);
+  color: #34c759;
+  border-color: rgba(52, 199, 89, 0.25);
+}
+.provider-badge.disconnected {
+  background: rgba(142, 142, 147, 0.08);
+  color: var(--text-secondary);
+  border-color: rgba(142, 142, 147, 0.15);
+}
+.provider-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.provider-dot.connected {
+  background: #34c759;
+}
+.provider-dot.disconnected {
+  background: var(--text-secondary);
+  opacity: 0.4;
+}
+
+/* ── Configure Modal ── */
+.config-field-group {
+  margin-bottom: 16px;
+}
+.config-field-group:last-child {
+  margin-bottom: 0;
+}
+.config-field-group label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--text-primary);
+}
+.config-field-group input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-family: var(--mono);
+}
+.config-field-group input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+.config-field-group .field-hint {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+/* Per-Provider Columns */
+.prov-col {
+  text-align: center !important;
+  min-width: 90px;
+}
+.prov-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+.prov-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.prov-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.prov-dot.live {
+  background: var(--success);
+  box-shadow: 0 0 0 2px var(--success-soft);
+}
+.prov-dot.expired {
+  background: var(--text-secondary);
+}
+.prov-dot.connecting {
+  background: #eab308;
+  box-shadow: 0 0 4px rgba(234, 179, 8, 0.5);
+}
+.prov-dot.pending {
+  background: var(--text-secondary);
+  box-shadow: 0 0 4px rgba(136, 136, 136, 0.3);
+}
+.prov-dot.disconnected {
+  background: transparent;
+  border: 1.5px solid var(--border);
+}
+.prov-dot.unknown {
+  background: var(--border);
+}
+
+.prov-login-btn {
+  font-size: 0.6rem;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.6;
+}
+.prov-login-btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.prov-login-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.prov-login-btn.logged-in {
+  border-color: var(--success);
+  color: var(--success);
+  background: var(--success-soft);
+  opacity: 0.7;
+  cursor: default;
+}
+.prov-login-btn.q {
+  border-color: rgba(0, 113, 227, 0.3);
+}
+.prov-login-btn.q:hover:not(:disabled) {
+  background: #0071e3;
+  border-color: #0071e3;
+}
+.prov-login-btn.d {
+  border-color: rgba(255, 107, 53, 0.3);
+}
+.prov-login-btn.d:hover:not(:disabled) {
+  background: #ff6b35;
+  border-color: #ff6b35;
+}
+.prov-login-btn.g {
+  border-color: rgba(52, 199, 89, 0.3);
+}
+.prov-login-btn.g:hover:not(:disabled) {
+  background: #34c759;
+  border-color: #34c759;
+}
+
+.email-cell {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Toggle switch for disabled column */
 .toggle-trigger {
   display: inline-flex;

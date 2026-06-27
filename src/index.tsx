@@ -15,6 +15,7 @@ import { getAccountCount, getAccountStats, getAccounts, getAvailableCount, initA
 import { config, updateClaudeCodeSettings } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
 import { configureAccount, fetchQwenModels } from './services/qwen.ts';
+import { fetchProviderModels } from './services/providerModelsService.ts';
 import { PROVIDER_MODELS } from './utils/providerModels.ts';
 import { safeCompare } from './utils/auth.ts';
 import { isBun } from './utils/env.ts';
@@ -224,14 +225,18 @@ app.get(
   },
   async (c) => {
     try {
-      const qwenModels = await fetchQwenModels();
-      const allModels = [...qwenModels, ...PROVIDER_MODELS];
+      const [qwenModels, deepseekModels, zaiModels] = await Promise.all([
+        fetchQwenModels(),
+        fetchProviderModels('deepseek'),
+        fetchProviderModels('zai'),
+      ]);
+      const allModels = [...qwenModels, ...deepseekModels, ...zaiModels, ...PROVIDER_MODELS];
       return c.json({
         object: 'list',
         data: allModels,
       });
     } catch (err: any) {
-      // If Qwen fetch fails, still return provider models
+      // If any fetch fails, still return provider models
       return c.json({
         object: 'list',
         data: PROVIDER_MODELS,
@@ -366,7 +371,7 @@ if (import.meta.main) {
       // ── Phase 2b: Configure loaded accounts ──
       logStore.log('info', 'boot', '[2/5] Configuring accounts...');
       try {
-        const acctList = getAccounts().filter((a) => a.state?.token);
+        const acctList = getAccounts().filter((a) => a.providerStates.qwen?.token);
         for (const acct of acctList) {
           setStartupStatus(acct.email, 'ready');
           configureAccount(acct.email).catch((err: any) =>

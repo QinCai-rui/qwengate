@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { addAccount, getAccountByEmail, getAccounts, removeAccount, setAccountDisabled } from '../services/auth.ts';
+import { addAccount, getAccountByEmail, getAccounts, removeAccount, setAccountDisabled, setAccountProviders } from '../services/auth.ts';
 import { logStore } from '../services/logStore.ts';
 
 const accountActionRateLimit = new Map<string, number[]>();
@@ -21,14 +21,14 @@ accountsRouter.get('/', (c) => {
   const masked = accounts.map((a) => ({
     email: a.email,
     passwordMasked: a.password ? '••••••••' : '',
-    authenticated: a.state !== null && a.state.token !== '',
-    tokenExpiresAt: a.state?.expiresAt || null,
+    authenticated: a.providerStates.qwen != null && a.providerStates.qwen.token !== '',
+    tokenExpiresAt: a.providerStates.qwen?.expiresAt || null,
     throttled: a.throttledUntil > Date.now(),
     throttledUntil: a.throttledUntil > Date.now() ? a.throttledUntil : null,
     throttledUnlockAt: a.throttledUntil > Date.now() ? new Date(a.throttledUntil).toISOString() : null,
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
-    startupStatus: a.startupStatus || null,
+    startupStatus: a.providerStates.qwen?.startupStatus || null,
   }));
   return c.json({ count: masked.length, accounts: masked });
 });
@@ -39,7 +39,7 @@ accountsRouter.post('/', async (c) => {
       return c.json({ error: 'Rate limit exceeded' }, 429);
     }
     const body = await c.req.json();
-    const { email, password } = body;
+    const { email, password, providers } = body;
 
     if (!email || !password) {
       return c.json({ error: { message: 'email and password are required' } }, 400);
@@ -49,7 +49,11 @@ accountsRouter.post('/', async (c) => {
       return c.json({ error: { message: 'email and password must be strings' } }, 400);
     }
 
-    const result = await addAccount(email, password);
+    if (providers !== undefined && (!Array.isArray(providers) || providers.some((p: any) => typeof p !== 'string'))) {
+      return c.json({ error: { message: 'providers must be an array of strings' } }, 400);
+    }
+
+    const result = await addAccount(email, password, providers);
 
     return c.json(
       { success: true, email: email.toLowerCase().trim(), loginSucceeded: result.loginSucceeded, loginError: result.loginError },
@@ -78,7 +82,13 @@ accountsRouter.patch('/:email', async (c) => {
     if (typeof body.disabled === 'boolean') {
       setAccountDisabled(email, body.disabled);
     }
-    return c.json({ success: true, email, disabled: body.disabled });
+    if (body.providers !== undefined) {
+      if (!Array.isArray(body.providers) || body.providers.some((p: any) => typeof p !== 'string')) {
+        return c.json({ error: { message: 'providers must be an array of strings' } }, 400);
+      }
+      setAccountProviders(email, body.providers);
+    }
+    return c.json({ success: true, email, disabled: body.disabled, providers: body.providers });
   } catch (err: any) {
     if (err.message.includes('not found')) {
       return c.json({ error: { message: err.message } }, 404);
@@ -135,7 +145,7 @@ accountsRouter.get('/:email/login', async (c) => {
       const { loadCookiesFromProfile } = await import('../services/auth.ts');
       const profileState = await loadCookiesFromProfile(account.email);
       if (profileState) {
-        account.state = profileState;
+        account.providerStates.qwen = { ...profileState, lastLoginAttempt: null };
         return c.json({ success: true, email: account.email, authenticated: true });
       }
       return c.json({ success: true, email: account.email, authenticated: true });
@@ -164,7 +174,7 @@ accountsRouter.get('/:email/autofill', async (c) => {
         if (loginResult === 'success') {
           const { loadCookiesFromProfile } = await import('../services/auth.ts');
           const profileState = await loadCookiesFromProfile(account.email);
-          if (profileState) account.state = profileState;
+          if (profileState) account.providerStates.qwen = { ...profileState, lastLoginAttempt: null };
         }
       } catch (err: any) {
         logStore.log('error', 'auth', err.message || String(err));

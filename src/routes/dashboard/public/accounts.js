@@ -33,25 +33,47 @@ function setError(msg) {
   }
 }
 
-/* ── Accounts Table ── */
-function getAuthStatus(acct) {
-  if (acct.startupStatus === 'connecting') return 'connecting';
-  if (acct.startupStatus === 'initializing' || acct.startupStatus === 'pending') {
-    return 'pending';
+/* ── Provider Checkbox Toggle ── */
+function updateProvidersInput() {
+  var checks = document.querySelectorAll('#providerChecks .provider-check.checked');
+  var providers = [];
+  for (var i = 0; i < checks.length; i++) {
+    providers.push(checks[i].getAttribute('data-provider'));
   }
-  if (acct.throttled) return 'throttled';
-  if (acct.authenticated) return 'live';
-  if (acct.tokenExpiresInMs != null && acct.tokenExpiresInMs < 0) return 'expired';
-  return 'unknown';
+  document.getElementById('providersInput').value = JSON.stringify(providers);
 }
 
-function getAuthLabel(status) {
-  if (status === 'live') return 'Authenticated';
-  if (status === 'pending') return 'Starting...';
-  if (status === 'connecting') return 'Connecting...';
-  if (status === 'expired') return 'Expired';
-  if (status === 'throttled') return 'Throttled';
-  return 'Not authenticated';
+(function initProviderChecks() {
+  var container = document.getElementById('providerChecks');
+  if (!container) return;
+  container.addEventListener('click', function (e) {
+    var label = e.target.closest('.provider-check');
+    if (!label) return;
+    label.classList.toggle('checked');
+    updateProvidersInput();
+  });
+})();
+
+/* ── Per-Provider Helpers ── */
+var PROV_META = {
+  qwen: { label: 'Qwen', btnClass: 'q', dotClass: 'qwen-dot' },
+  deepseek: { label: 'DeepSeek', btnClass: 'd', dotClass: 'deepseek-dot' },
+  zai: { label: 'GLM', btnClass: 'g', dotClass: 'zai-dot' },
+};
+
+function providerStatusBadge(status) {
+  var dots = {
+    live: 'live',
+    expired: 'expired',
+    connecting: 'connecting',
+    pending: 'pending',
+    disconnected: 'disconnected',
+    unknown: 'unknown',
+  };
+  var dotClass = dots[status] || 'unknown';
+  var labels = { live: 'Live', expired: 'Expired', connecting: 'Connecting', pending: 'Pending', disconnected: '—', unknown: 'Unknown' };
+  var label = labels[status] || 'Unknown';
+  return '<span class="prov-status"><span class="prov-dot ' + dotClass + '"></span>' + label + '</span>';
 }
 
 function makeThrottleBadge(acct) {
@@ -69,6 +91,22 @@ function makeThrottleBadge(acct) {
   return '<span class="badge badge-neutral">OK</span>';
 }
 
+function renderProviderCell(email, providerKey, auth) {
+  var meta = PROV_META[providerKey];
+  var status = (auth && auth.status) || 'disconnected';
+  var isLive = status === 'live';
+  var btn = isLive
+    ? '<button class="prov-login-btn logged-in" disabled>Logged In</button>'
+    : '<button class="prov-login-btn ' +
+      meta.btnClass +
+      '" data-email="' +
+      escHtml(email) +
+      '" data-provider="' +
+      providerKey +
+      '">Login</button>';
+  return '<div class="prov-cell">' + providerStatusBadge(status) + btn + '</div>';
+}
+
 function renderAccountsTable(accts) {
   if (!Array.isArray(accts) || accts.length === 0) {
     document.getElementById('acctBody').innerHTML = '';
@@ -81,19 +119,11 @@ function renderAccountsTable(accts) {
   var rows = '';
   for (var i = 0; i < accts.length; i++) {
     var a = accts[i];
-    var status = getAuthStatus(a);
-    var label = getAuthLabel(status);
-    var hideLogin = status === 'live' ? ' style="display:none"' : '';
     rows +=
       '<tr>' +
-      '<td>' +
+      '<td class="email-cell">' +
       escHtml(a.email) +
       '</td>' +
-      '<td><div class="auth-status"><span class="auth-dot ' +
-      status +
-      '"></span>' +
-      label +
-      '</div></td>' +
       '<td>' +
       (a.inFlight || 0) +
       '</td>' +
@@ -102,9 +132,6 @@ function renderAccountsTable(accts) {
       '</td>' +
       '<td>' +
       makeThrottleBadge(a) +
-      '</td>' +
-      '<td style="font-family:var(--mono);font-size:0.75rem">' +
-      fmtTTL(a.tokenExpiresInMs) +
       '</td>' +
       '<td>' +
       '<span class="toggle-trigger" onclick="handleToggleDisabled(event,\'' +
@@ -118,15 +145,22 @@ function renderAccountsTable(accts) {
       '<span class="toggle-thumb"></span>' +
       '</span></span>' +
       '</td>' +
+      '<td>' +
+      renderProviderCell(a.email, 'qwen', a.providerAuth && a.providerAuth.qwen) +
+      '</td>' +
+      '<td>' +
+      renderProviderCell(a.email, 'deepseek', a.providerAuth && a.providerAuth.deepseek) +
+      '</td>' +
+      '<td>' +
+      renderProviderCell(a.email, 'zai', a.providerAuth && a.providerAuth.zai) +
+      '</td>' +
       '<td><div class="action-cell">' +
+      '<button class="account-btn small" data-email="' +
+      escHtml(a.email) +
+      '" data-action="configure">Keys</button>' +
       '<button class="account-btn small danger" data-email="' +
       escHtml(a.email) +
       '" data-action="remove">Remove</button>' +
-      '<button class="account-btn small primary" data-email="' +
-      escHtml(a.email) +
-      '" data-action="login"' +
-      hideLogin +
-      '>Login</button>' +
       '</div></td></tr>';
   }
   document.getElementById('acctBody').innerHTML = rows;
@@ -149,7 +183,11 @@ function handleAdd(email, password) {
       var res = await fetch('/api/accounts', {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-        body: JSON.stringify({ email: email, password: password }),
+        body: JSON.stringify({
+          email: email,
+          password: password,
+          providers: JSON.parse(document.getElementById('providersInput').value || '["qwen"]'),
+        }),
       });
       var result;
       try {
@@ -164,10 +202,10 @@ function handleAdd(email, password) {
       }
       if (result.loginSucceeded) {
         showToast('Account added and logged in: ' + email, 'success');
-        pollAuth(email, 15);
+        pollProviderLogin(email, 'qwen', 15);
       } else {
         showToast(result.loginError || 'Account added but login failed. Click Login to open browser.', 'warning');
-        pollAuth(email, 15);
+        pollProviderLogin(email, 'qwen', 15);
       }
       loadAccounts();
     } catch (e) {
@@ -215,17 +253,24 @@ function handleRemove(email) {
   };
 }
 
-/* ── Manual Login (Autofill) ── */
-function handleManualLogin(email) {
-  var btn = document.querySelector('button[data-email="' + escHtml(email) + '"][data-action="login"]');
-  if (btn) {
-    btn.textContent = 'Authorizing...';
-    btn.disabled = true;
-  }
+/* ── Provider Manual Login ── */
+var providerEndpoints = {
+  qwen: '/autofill',
+  deepseek: '/login/deepseek',
+  zai: '/login/zai',
+};
+
+function handleProviderLogin(email, provider) {
+  var loginBtns = document.querySelectorAll('button[data-email="' + escHtml(email) + '"][data-provider="' + provider + '"]');
+  loginBtns.forEach(function (b) {
+    b.disabled = true;
+    b.textContent = 'Opening...';
+  });
   setError(null);
   (async function () {
     try {
-      var res = await fetch('/api/accounts/' + encodeURIComponent(email) + '/autofill', {
+      var ep = providerEndpoints[provider] || '/autofill';
+      var res = await fetch('/api/accounts/' + encodeURIComponent(email) + ep, {
         method: 'GET',
         headers: authHeaders(),
       });
@@ -235,24 +280,28 @@ function handleManualLogin(email) {
       } catch {
         result = null;
       }
-      if (!res.ok) {
-        throw new Error(result && result.error && result.error.message ? result.error.message : 'Login failed (' + res.status + ')');
-      }
-      showToast('Browser opened for ' + email + '. Complete login manually.', 'info');
-      pollAuth(email, 30);
+      if (!res.ok) throw new Error(result && result.error ? result.error.message : provider + ' login failed (' + res.status + ')');
+      showToast('Browser opened for ' + email + '. Complete login in the browser window.', 'info');
+      pollProviderLogin(email, provider, 90);
     } catch (e) {
       setError(e.message);
       showToast(e.message, 'error');
+    } finally {
+      loginBtns.forEach(function (b) {
+        b.disabled = false;
+        b.textContent = 'Login';
+      });
     }
   })();
 }
 
-/* ── Poll Auth ── */
-var activePollTimers = {};
-function pollAuth(email, maxAttempts) {
-  if (activePollTimers[email]) {
-    clearInterval(activePollTimers[email]);
-    delete activePollTimers[email];
+/* ── Poll Provider Login ── */
+var activeProviderPollTimers = {};
+function pollProviderLogin(email, provider, maxAttempts) {
+  var timerId = email + '-' + provider;
+  if (activeProviderPollTimers[timerId]) {
+    clearInterval(activeProviderPollTimers[timerId]);
+    delete activeProviderPollTimers[timerId];
   }
   var attempt = 0;
   var timer = setInterval(async function () {
@@ -261,29 +310,34 @@ function pollAuth(email, maxAttempts) {
       var data = await apiFetch('/accounts');
       if (!Array.isArray(data)) {
         clearInterval(timer);
-        delete activePollTimers[email];
+        delete activeProviderPollTimers[timerId];
         return;
       }
       for (var i = 0; i < data.length; i++) {
-        if (data[i].email === email && data[i].authenticated) {
+        if (
+          data[i].email === email &&
+          data[i].providerAuth &&
+          data[i].providerAuth[provider] &&
+          data[i].providerAuth[provider].status === 'live'
+        ) {
           clearInterval(timer);
-          delete activePollTimers[email];
-          showToast('Login completed for ' + email, 'success');
+          delete activeProviderPollTimers[timerId];
+          showToast(provider.charAt(0).toUpperCase() + provider.slice(1) + ' login completed for ' + email, 'success');
           loadAccounts();
           return;
         }
       }
     } catch {
       clearInterval(timer);
-      delete activePollTimers[email];
+      delete activeProviderPollTimers[timerId];
     }
     if (attempt >= maxAttempts) {
       clearInterval(timer);
-      delete activePollTimers[email];
+      delete activeProviderPollTimers[timerId];
       loadAccounts();
     }
   }, 2000);
-  activePollTimers[email] = timer;
+  activeProviderPollTimers[timerId] = timer;
 }
 
 /* ── Toggle Disabled ── */
@@ -306,6 +360,53 @@ async function handleToggleDisabled(event, email, currentlyDisabled) {
   }
 }
 
+/* ── Configure Provider Keys ── */
+var currentConfigEmail = null;
+
+function handleOpenConfig(email) {
+  currentConfigEmail = email;
+  document.getElementById('configEmail').textContent = email;
+  document.getElementById('deepseekKeyInput').value = '';
+  document.getElementById('zaiKeyInput').value = '';
+  document.getElementById('configOverlay').classList.add('open');
+}
+
+function handleSaveConfig() {
+  var deepseekKey = document.getElementById('deepseekKeyInput').value.trim();
+  var zaiKey = document.getElementById('zaiKeyInput').value.trim();
+  if (!deepseekKey && !zaiKey) {
+    showToast('Enter at least one API key', 'error');
+    return;
+  }
+  var body = {
+    providerKeys: {},
+  };
+  if (deepseekKey) body.providerKeys.deepseek = deepseekKey;
+  if (zaiKey) body.providerKeys.zai = zaiKey;
+
+  document.getElementById('configSave').disabled = true;
+  document.getElementById('configSave').textContent = 'Saving...';
+
+  (async function () {
+    try {
+      var res = await fetch('/api/accounts/' + encodeURIComponent(currentConfigEmail), {
+        method: 'PATCH',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error('Failed to save keys (' + res.status + ')');
+      showToast('Provider keys saved for ' + currentConfigEmail, 'success');
+      document.getElementById('configOverlay').classList.remove('open');
+      loadAccounts();
+    } catch (e) {
+      showToast(e.message, 'error');
+    } finally {
+      document.getElementById('configSave').disabled = false;
+      document.getElementById('configSave').textContent = 'Save Keys';
+    }
+  })();
+}
+
 /* ── Init ── */
 function init() {
   /* Load on start */
@@ -325,6 +426,7 @@ function init() {
     }
     handleAdd(email, password);
     this.reset();
+    updateProvidersInput();
   });
 
   /* Table button delegation */
@@ -333,15 +435,26 @@ function init() {
     if (btn.tagName !== 'BUTTON') return;
     var email = btn.getAttribute('data-email');
     var action = btn.getAttribute('data-action');
-    if (!email || !action) return;
-    if (action === 'login') handleManualLogin(email);
-    else if (action === 'remove') handleRemove(email);
+    var provider = btn.getAttribute('data-provider');
+    if (!email && !action && !provider) return;
+    if (action === 'remove') handleRemove(email);
+    else if (action === 'configure') handleOpenConfig(email);
+    else if (provider) handleProviderLogin(email, provider);
   });
 
   /* Close modal on overlay click */
   document.getElementById('confirmOverlay').addEventListener('click', function (e) {
     if (e.target === this) this.classList.remove('open');
   });
+  document.getElementById('configOverlay').addEventListener('click', function (e) {
+    if (e.target === this) this.classList.remove('open');
+  });
+
+  /* Config modal */
+  document.getElementById('configCancel').addEventListener('click', function () {
+    document.getElementById('configOverlay').classList.remove('open');
+  });
+  document.getElementById('configSave').addEventListener('click', handleSaveConfig);
 }
 
 if (document.readyState === 'loading') {

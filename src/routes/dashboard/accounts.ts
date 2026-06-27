@@ -30,6 +30,18 @@ ${sidebarHtml('accounts')}
         <form class="account-form" id="addForm">
           <input type="email" class="account-input" id="emailInput" placeholder="Email" required autocomplete="email">
           <input type="password" class="account-input" id="passwordInput" placeholder="Password" required autocomplete="new-password">
+          <input type="hidden" id="providersInput" value='["qwen"]'>
+          <div class="provider-checks" id="providerChecks">
+            <label class="provider-check checked qwen" data-provider="qwen">
+              <span class="provider-check-dot"></span> Qwen
+            </label>
+            <label class="provider-check" data-provider="deepseek">
+              <span class="provider-check-dot"></span> DeepSeek
+            </label>
+            <label class="provider-check" data-provider="zai">
+              <span class="provider-check-dot"></span> GLM
+            </label>
+          </div>
           <button type="submit" class="account-btn" id="addBtn">Add Account</button>
         </form>
       </div>
@@ -47,12 +59,13 @@ ${sidebarHtml('accounts')}
             <thead>
               <tr>
                 <th>Email</th>
-                <th>Auth Status</th>
                 <th>In Flight</th>
                 <th>Total Reqs</th>
                 <th>Throttle</th>
-                <th>Token TTL</th>
                 <th>Disabled</th>
+                <th class="prov-col">Qwen</th>
+                <th class="prov-col">DeepSeek</th>
+                <th class="prov-col">GLM</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -73,6 +86,30 @@ ${sidebarHtml('accounts')}
     <div class="modal-actions">
       <button class="modal-cancel" id="confirmNo">Cancel</button>
       <button class="modal-confirm" id="confirmYes">Remove</button>
+    </div>
+  </div>
+</div>
+
+<!-- Configure Provider Keys Modal -->
+<div class="modal-overlay" id="configOverlay">
+  <div class="modal">
+    <h3>Configure Provider Keys</h3>
+    <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:16px">
+      Set API keys for <strong id="configEmail"></strong>
+    </p>
+    <div class="config-field-group">
+      <label>DeepSeek API Key</label>
+      <input type="password" id="deepseekKeyInput" placeholder="sk-..." autocomplete="off">
+      <div class="field-hint">Required for DeepSeek provider access</div>
+    </div>
+    <div class="config-field-group">
+      <label>Z.ai (GLM) API Key</label>
+      <input type="password" id="zaiKeyInput" placeholder="xxx..." autocomplete="off">
+      <div class="field-hint">Required for Z.ai / GLM provider access</div>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-cancel" id="configCancel">Cancel</button>
+      <button class="modal-confirm" id="configSave">Save Keys</button>
     </div>
   </div>
 </div>

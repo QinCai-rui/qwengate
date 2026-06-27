@@ -10,9 +10,27 @@ import type { ProviderHandler } from '../providerRegistry.ts';
 
 export function createOpenAIProxyHandler(prefix: string, envApiKey: string, envBaseUrl: string, defaultBaseUrl: string): ProviderHandler {
   return async (c: Context, body: OpenAIRequest): Promise<Response> => {
-    const apiKey = process.env[envApiKey];
+    // Try per-account stored token first (like Qwen's model)
+    let apiKey = process.env[envApiKey];
     if (!apiKey) {
-      return c.json({ error: { message: `${envApiKey} environment variable not set`, type: 'server_error' } }, 503);
+      try {
+        const { getProviderToken } = await import('../../services/accountManager.ts');
+        const providerName = prefix.replace('/', '');
+        apiKey = getProviderToken(providerName) ?? undefined;
+      } catch {
+        // Dynamic import failed, use env var
+      }
+    }
+    if (!apiKey) {
+      return c.json(
+        {
+          error: {
+            message: `No credentials configured for ${prefix} — set ${envApiKey} env var or login via dashboard`,
+            type: 'server_error',
+          },
+        },
+        503,
+      );
     }
 
     const baseUrl = (process.env[envBaseUrl] || defaultBaseUrl).replace(/\/$/, '');

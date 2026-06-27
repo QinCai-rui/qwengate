@@ -1,7 +1,7 @@
 /*
  * File: auth.ts
  * Shared authentication types used across auth.ts, accountManager.ts, and playwright.ts.
- * Extracted to break circular dependency chains.
+ * Provider-agnostic — each account stores per-provider auth state in providerStates map.
  */
 
 export interface AuthState {
@@ -10,20 +10,30 @@ export interface AuthState {
   refreshToken: string | null;
 }
 
+export interface ProviderAuthState {
+  token: string | null;
+  expiresAt: number | null;
+  refreshToken: string | null;
+  lastLoginAttempt: number | null;
+  /** Browser cookies for this provider (e.g., Qwen WAF bypass cookies) */
+  cookies?: string;
+  /** Login lifecycle status (e.g., Qwen startup tracking) */
+  startupStatus?: 'pending' | 'initializing' | 'connecting' | 'ready';
+}
+
 export interface AccountEntry {
   email: string;
   password: string;
-  state: AuthState | null;
+  /** Per-provider auth state — keyed by provider name ('qwen', 'deepseek', 'zai') */
+  providerStates: { [provider: string]: ProviderAuthState | undefined };
+  /** Which providers this account is configured for (shown in dashboard) */
+  providers?: string[];
   lastUsed: number;
   throttledUntil: number;
   refreshInFlight: Promise<boolean> | null;
   loginAttempt: number;
   inFlight: number;
   totalRequests: number;
-  /** Full cookie string from browser profile (cna, ssxmod_itna, tfstk, isg, token, etc.) for WAF bypass */
-  profileCookies?: string;
-  /** Startup lifecycle — 'pending' (added), 'initializing' (boot in progress), 'ready' (fully initialized) */
-  startupStatus?: 'pending' | 'initializing' | 'connecting' | 'ready';
   /** If true, account is excluded from request routing */
   disabled?: boolean;
 }

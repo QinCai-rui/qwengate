@@ -187,7 +187,7 @@ class SessionPool {
 
     const sessionBody = JSON.stringify({
       title: 'New Chat',
-      models: [acct?.state?.token ? 'qwen3.7-plus' : 'qwen3.5-flash'],
+      models: [acct?.providerStates?.qwen?.token ? 'qwen3.7-plus' : 'qwen3.5-flash'],
       chat_mode: 'normal',
       chat_type: 't2t',
       timestamp: Date.now(),
