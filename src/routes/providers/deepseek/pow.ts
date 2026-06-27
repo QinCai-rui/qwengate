@@ -4,6 +4,7 @@
  * DeepSeekHashV1 algorithm uses SHA3 WASM — we solve via browser profile or direct WASM loading.
  */
 
+import { logStore } from '../../../services/logStore.ts';
 import { DEEPSEEK_BASE_URL } from './spoofing.ts';
 
 const POW_ENDPOINT = '/api/v0/chat/create_pow_challenge';
@@ -304,19 +305,28 @@ export async function getPowResponseHeader(
   }
 
   var challenge = await getPowChallenge(bearerToken, targetPath, cookies);
-  if (!challenge) return null;
+  if (!challenge) {
+    logStore.log('warn', 'deepseek-pow', 'Failed to get PoW challenge');
+    return null;
+  }
+  logStore.log('debug', 'deepseek-pow', `Challenge: difficulty=${challenge.difficulty} algorithm=${challenge.algorithm}`);
 
   var answer: number | null = null;
 
   // Try WASM direct first (fastest, no browser needed)
   answer = await solvePowViaWasm(challenge);
+  logStore.log('debug', 'deepseek-pow', `WASM solver: ${answer !== null ? 'success' : 'failed'}`);
 
   // Fallback: try via browser profile
   if (answer === null) {
     answer = await solvePowViaBrowser(email, challenge);
+    logStore.log('debug', 'deepseek-pow', `Browser solver: ${answer !== null ? 'success' : 'failed'}`);
   }
 
-  if (answer === null) return null;
+  if (answer === null) {
+    logStore.log('warn', 'deepseek-pow', 'All PoW solvers failed');
+    return null;
+  }
 
   var solution: PowSolution = {
     algorithm: challenge.algorithm,
