@@ -9,17 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Per-Provider Account Tables**: Three separate panels (Qwen, DeepSeek, GLM) each with their own table filtered by `configuredProviders`. Each shows per-provider auth status, per-provider disable toggle, and dedicated login button. (#accounts, accounts.ts/accounts.js/accounts.css)
-- **Provider Auth Detail API**: `getAccountStats()` now returns per-provider `providerAuth` with status, token expiry, and last login attempt. (#api, accountManager.ts)
+- **Provider Auth Detail API**: `getAccountStats()` now returns per-provider `providerAuth` with `status` (live/expired/disconnected/pending/connecting), `tokenExpiresInMs`, and `lastLoginAttempt`. (#api, accountManager.ts)
 - **Shared Manual Browser Login**: `manualBrowserLogin()` extracted to `loginHelpers.ts` — one reusable function with `beforeFill` callback and `authPagePaths` config for provider-specific login flows. (#auth, loginHelpers.ts)
-- **Per-Provider Disable**: `disabledProviders: string[]` on `AccountEntry` replaces single boolean `disabled`. Each provider table can disable its own provider per account. (#accounts, accountManager.ts)
-- **Provider Persistence**: `providers` and `disabledProviders` arrays now persisted to auth file (were only in-memory). (#accounts, accountManager.ts)
-- **AGENTS.md Rules**: Added "Commit after every logical change" and "Update CHANGELOG.md with every change" to global agent rules. (#config, AGENTS.md)
+- **Per-Provider Disable**: `disabledProviders: string[]` on `AccountEntry` replaces single boolean `disabled`. Each provider table can disable its own provider per account. (#accounts, accountManager.ts/accounts.js)
+- **Provider Persistence**: `providers` and `disabledProviders` arrays now persisted to `auth.json` (were only in-memory). (#accounts, accountManager.ts)
+- **AGENTS.md Rules**: Added "Commit after every logical change" and "Update CHANGELOG.md with every change" to global agent rules. (#config, ~/.config/opencode/AGENTS.md)
+- **Configure Provider Keys Modal**: New modal in accounts page for setting DeepSeek and GLM API keys per account. (#accounts, accounts.ts/accounts.js)
+- **Login Endpoint for Each Provider**: Dedicated GET endpoints for Qwen (`/autofill`), DeepSeek (`/login/deepseek`), GLM (`/login/glm`). (#api, dashboardRoutes.ts/routes/accounts.ts)
+- **Poll Provider Login**: Per-provider polling that watches `providerAuth[provider].status === 'live'` instead of generic auth check. (#accounts, accounts.js)
 
 ### Changed
+- **Project Renamed**: `qwen-gate` → `opengate` across all code, docs, README, package.json, URLs, and config references. No longer Qwen-specific. (#config, all files)
 - **All Providers Use Manual Browser Login**: DeepSeek changed from headless auto-login (`loginDeepSeek()`) to headed browser autofill matching Qwen and GLM approach. User clicks Login → browser opens with credentials filled → user solves captcha → browser closes. (#auth, deepseekLogin.ts/dashboardRoutes.ts)
-- **zai → glm Rename**: Provider key `zai` renamed to `glm` everywhere — files (`zaiLogin.ts` → `glmLogin.ts`, `providerZai.ts` → `providerGlm.ts`, `providers/zai/` → `providers/glm/`), API routes, CSS classes, JS identifiers, model ID prefixes. (#providers, all files)
-- **`.qwen/` → `.auth/` Data Directory**: All auth state files moved from `.qwen/` to `.auth/`. `accounts.json` → `auth.json`, `accounts.jsonc` → `auth.jsonc`. Migration from old paths on startup. (#config, accountManager.ts/auth.ts/browserProfiles.ts/monitorStore.ts/cli.ts)
+- **Provider Key `zai` → `glm`**: Internal provider key renamed from `zai` to `glm` everywhere — files (`zaiLogin.ts` → `glmLogin.ts`), directories (`providers/zai/` → `providers/glm/`), API routes (`/login/zai` → `/login/glm`), CSS classes (`.zai` → `.glm`), JS identifiers, model ID prefixes (`zai/` → `glm/`). Display label unchanged ("GLM"). (#providers, many files)
+- **Data Directory `.qwen/` → `.auth/`**: All auth state files moved to `.auth/`. `accounts.json` → `auth.json`, `accounts.jsonc` → `auth.jsonc`, `master.key`, `browser-profiles/`, `tokens/`, `monitor.json`, `gate.pid` all relocated. Automatic migration from old paths on startup. (#config, accountManager.ts/auth.ts/browserProfiles.ts/monitorStore.ts/cli.ts)
 - **Anti-Bot Typing**: `manualBrowserLogin()` auto-fill uses `pressSequentially()` with random delays (30-80ms per keystroke) instead of instant `fill()` — avoids bot detection that flags paste-based input. (#auth, loginHelpers.ts)
+- **Qwen Login Endpoint Changed**: Qwen manual login now uses `/api/accounts/:email/autofill` (GET, non-blocking) matching DeepSeek and GLM pattern. (#api, dashboardRoutes.ts)
+- **DeepSeek Login Route Changed**: POST `/api/accounts/:email/login/deepseek` changed to GET, returns immediately with async browser launch (non-blocking, user polls for completion). (#api, dashboardRoutes.ts)
 
 ### Removed
 - **Dead Code**: Removed unused `loginDeepSeek()` headless auto-login function (no longer called from any route). (#auth, deepseekLogin.ts)

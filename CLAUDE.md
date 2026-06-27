@@ -1,7 +1,7 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **qwen-gate** (2974 symbols, 6210 relationships, 240 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **opengate** (2974 symbols, 6210 relationships, 240 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
@@ -25,10 +25,10 @@ This project is indexed by GitNexus as **qwen-gate** (2974 symbols, 6210 relatio
 
 | Resource | Use for |
 |----------|---------|
-| `gitnexus://repo/qwen-gate/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/qwen-gate/clusters` | All functional areas |
-| `gitnexus://repo/qwen-gate/processes` | All execution flows |
-| `gitnexus://repo/qwen-gate/process/{name}` | Step-by-step execution trace |
+| `gitnexus://repo/opengate/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/opengate/clusters` | All functional areas |
+| `gitnexus://repo/opengate/processes` | All execution flows |
+| `gitnexus://repo/opengate/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 
