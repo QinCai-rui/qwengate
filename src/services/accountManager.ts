@@ -4,7 +4,7 @@
  * Handles account CRUD, discovery, persistence, and the account file watcher.
  */
 import crypto from 'crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, watch, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import type { AccountEntry, AuthState, ProviderAuthState } from '../types/auth.ts';
@@ -17,37 +17,55 @@ import { configureAccount } from './qwenModels.ts';
 /** In-memory account registry. Mutations must stay synchronous. */
 export const accounts: AccountEntry[] = [];
 
-const ACCOUNTS_FILE = projectPath('.qwen', 'accounts.json');
-const FALLBACK_ACCOUNTS_FILE = projectPath('.qwen', 'accounts.jsonc');
-const QWEN_DIR = projectPath('.qwen');
+const AUTH_FILE = projectPath('.auth', 'auth.json');
+const FALLBACK_AUTH_FILE = projectPath('.auth', 'auth.jsonc');
+const AUTH_DIR = projectPath('.auth');
 
-const OLD_ACCOUNTS_FILE = projectPath('qwen_profile', 'accounts.json');
+const OLD_AUTH_FILE = projectPath('qwen_profile', 'accounts.json');
 
 function getProfileDirForEmail(email: string): string {
   const safe = email
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]/g, '_');
-  return projectPath('.qwen', 'browser-profiles', safe);
+  return projectPath('.auth', 'browser-profiles', safe);
 }
 
 export function migrateFromOldPaths(): void {
   try {
-    if (!existsSync(OLD_ACCOUNTS_FILE)) return;
-    if (existsSync(ACCOUNTS_FILE) || existsSync(FALLBACK_ACCOUNTS_FILE)) return;
+    // Migration v1: qwen_profile/ -> .auth/
+    if (existsSync(OLD_AUTH_FILE) && !existsSync(AUTH_FILE) && !existsSync(FALLBACK_AUTH_FILE)) {
+      logStore.log('info', 'auth', 'Migrating data from qwen_profile/ to .auth/ ...');
 
-    logStore.log('info', 'auth', 'Migrating data from qwen_profile/ to .qwen/ ...');
+      const newDir = path.dirname(AUTH_FILE);
+      if (!existsSync(newDir)) {
+        mkdirSync(newDir, { recursive: true });
+      }
 
-    const newDir = path.dirname(ACCOUNTS_FILE);
-    if (!existsSync(newDir)) {
-      mkdirSync(newDir, { recursive: true });
+      const accountsData = readFileSync(OLD_AUTH_FILE, 'utf-8');
+      writeFileSync(AUTH_FILE, accountsData, 'utf-8');
+      logStore.log('info', 'auth', 'Migrated auth.json from qwen_profile/ to .auth/');
+      logStore.log('info', 'auth', 'Note: old token files are ignored — tokens are now read from browser profiles.');
+      logStore.log('info', 'auth', 'Migration complete. Old files preserved.');
     }
 
-    const accountsData = readFileSync(OLD_ACCOUNTS_FILE, 'utf-8');
-    writeFileSync(ACCOUNTS_FILE, accountsData, 'utf-8');
-    logStore.log('info', 'auth', 'Migrated accounts.json from qwen_profile/ to .qwen/');
-    logStore.log('info', 'auth', 'Note: old token files are ignored — tokens are now read from browser profiles.');
-    logStore.log('info', 'auth', 'Migration complete. Old files preserved.');
+    // Migration v2: .qwen/ -> .auth/ (rename entire directory)
+    const oldQwenDir = projectPath('.qwen');
+    const newAuthDir = projectPath('.auth');
+    if (existsSync(oldQwenDir) && !existsSync(newAuthDir)) {
+      renameSync(oldQwenDir, newAuthDir);
+      logStore.log('info', 'auth', 'Migrated .qwen/ to .auth/');
+    }
+
+    // Migration v3: .qwen/accounts.json -> .auth/auth.json (partial migration)
+    const oldAccountsFile = projectPath('.qwen', 'accounts.json');
+    const newAuthFile = projectPath('.auth', 'auth.json');
+    if (existsSync(oldAccountsFile) && !existsSync(newAuthFile)) {
+      const dir = path.dirname(newAuthFile);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      copyFileSync(oldAccountsFile, newAuthFile);
+      logStore.log('info', 'auth', 'Migrated accounts.json to auth.json');
+    }
   } catch (err: any) {
     logStore.log('error', 'auth', `Migration error: ${err.message}`);
   }
@@ -61,8 +79,9 @@ function stripJsoncComments(text: string): string {
 interface PersistedAccountData {
   email: string;
   password: string;
+  providers?: string[];
   throttledUntil?: number;
-  disabled?: boolean;
+  disabledProviders?: string[];
 }
 function parseAccountsFromEnv(): Array<{ email: string; password: string }> {
   const result: Array<{ email: string; password: string }> = [];
@@ -101,7 +120,7 @@ export function decodeJwt(token: string): Record<string, any> | null {
 /* ── AES-256-GCM password encryption ── */
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
-const MASTER_KEY_FILE = projectPath('.qwen', 'master.key');
+const MASTER_KEY_FILE = projectPath('.auth', 'master.key');
 
 function getEncryptionKey(): string {
   // 1. If a master key file exists, use it (survives API_KEY changes)
@@ -184,7 +203,7 @@ export function rebuildEmailIndex(): void {
 }
 
 export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
-  const dir = path.dirname(ACCOUNTS_FILE);
+  const dir = path.dirname(AUTH_FILE);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
@@ -192,14 +211,29 @@ export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
     .filter((a) => a.password)
     .map((a) => ({
       email: a.email,
-      password: a.password, // plaintext
+      password: a.password,
+      providers: a.providers && a.providers.length > 0 ? a.providers : undefined,
       ...(a.throttledUntil > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
-      ...(a.disabled !== undefined ? { disabled: a.disabled } : {}),
+      disabledProviders: a.disabledProviders && a.disabledProviders.length > 0 ? a.disabledProviders : undefined,
     }));
-  writeFileSync(ACCOUNTS_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  writeFileSync(AUTH_FILE, JSON.stringify(data, null, 2), 'utf-8');
 }
-export function loadAccountsFromFile(): Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean }> {
-  const tryLoad = (filePath: string): Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean }> | null => {
+export function loadAccountsFromFile(): Array<{
+  email: string;
+  password: string;
+  providers?: string[];
+  throttledUntil?: number;
+  disabledProviders?: string[];
+}> {
+  const tryLoad = (
+    filePath: string,
+  ): Array<{
+    email: string;
+    password: string;
+    providers?: string[];
+    throttledUntil?: number;
+    disabledProviders?: string[];
+  }> | null => {
     try {
       if (!existsSync(filePath)) return null;
       const raw = readFileSync(filePath, 'utf-8');
@@ -209,8 +243,9 @@ export function loadAccountsFromFile(): Array<{ email: string; password: string;
         .map((d) => ({
           email: d.email,
           password: decryptPassword(d.password),
+          providers: d.providers,
           throttledUntil: d.throttledUntil,
-          disabled: d.disabled ?? false,
+          disabledProviders: d.disabledProviders,
         }));
     } catch (err: any) {
       logStore.log('error', 'auth', `Failed to load ${filePath}: ${err.message}`);
@@ -218,7 +253,7 @@ export function loadAccountsFromFile(): Array<{ email: string; password: string;
     }
   };
 
-  return tryLoad(ACCOUNTS_FILE) ?? tryLoad(FALLBACK_ACCOUNTS_FILE) ?? [];
+  return tryLoad(AUTH_FILE) ?? tryLoad(FALLBACK_AUTH_FILE) ?? [];
 }
 export async function addAccount(
   email: string,
@@ -235,6 +270,7 @@ export async function addAccount(
     password,
     providerStates: {},
     providers: providers || ['qwen'],
+    disabledProviders: [],
     lastUsed: 0,
     throttledUntil: 0,
     refreshInFlight: null,
@@ -321,6 +357,8 @@ export async function reloadAccounts(): Promise<void> {
         email,
         password: d.password,
         providerStates: {},
+        providers: ['qwen'],
+        disabledProviders: [],
         lastUsed: 0,
         throttledUntil: 0,
         refreshInFlight: null,
@@ -359,16 +397,16 @@ let reloadDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let watcherReady = false;
 let watcherRetryTimer: ReturnType<typeof setTimeout> | null = null;
 /**
- * Set up fs.watch on .qwen/ directory with 500ms debounce to detect accounts.json changes.
+ * Set up fs.watch on .auth/ directory with 500ms debounce to detect auth.json changes.
  */
 export function setupAccountWatcher(): void {
   if (accountWatcher) return;
-  if (!existsSync(QWEN_DIR)) {
-    mkdirSync(QWEN_DIR, { recursive: true });
+  if (!existsSync(AUTH_DIR)) {
+    mkdirSync(AUTH_DIR, { recursive: true });
   }
   try {
-    accountWatcher = watch(QWEN_DIR, (_eventType: string, filename: string | null) => {
-      if (!filename || filename !== 'accounts.json') return;
+    accountWatcher = watch(AUTH_DIR, (_eventType: string, filename: string | null) => {
+      if (!filename || filename !== 'auth.json') return;
       if (reloadDebounceTimer) clearTimeout(reloadDebounceTimer);
       reloadDebounceTimer = setTimeout(() => {
         reloadDebounceTimer = null;
@@ -413,8 +451,9 @@ export function resetWatcherState(): void {
     watcherRetryTimer = null;
   }
 }
-export function isAvailable(acct: AccountEntry): boolean {
+export function isAvailable(acct: AccountEntry, provider?: string): boolean {
   if (acct.disabled) return false;
+  if (provider && acct.disabledProviders?.includes(provider)) return false;
   if (acct.throttledUntil > Date.now()) return false;
   // For now, "available" means Qwen authenticated (primary routing)
   if (!acct.providerStates.qwen?.token) return false;
@@ -425,7 +464,7 @@ export async function pickAccount(excludeEmail?: string): Promise<AccountEntry |
   // Worst case for concurrent access: slightly imbalanced inFlight count,
   // which is acceptable for load-balancing purposes.
   try {
-    let available = accounts.filter(isAvailable);
+    let available = accounts.filter((a) => isAvailable(a));
     if (excludeEmail) {
       available = available.filter((a) => a.email !== excludeEmail);
     }
@@ -504,6 +543,18 @@ export function setAccountProviders(email: string, providers: string[]): boolean
   saveAccountsToFile(accounts);
   return true;
 }
+export function setProviderDisabled(email: string, provider: string, disabled: boolean): boolean {
+  const acct = getAccountByEmail(email);
+  if (!acct) return false;
+  if (!acct.disabledProviders) acct.disabledProviders = [];
+  if (disabled) {
+    if (!acct.disabledProviders.includes(provider)) acct.disabledProviders.push(provider);
+  } else {
+    acct.disabledProviders = acct.disabledProviders.filter((p) => p !== provider);
+  }
+  saveAccountsToFile(accounts);
+  return true;
+}
 export function setProviderState(email: string, provider: string, state: ProviderAuthState | null): boolean {
   const acct = getAccountByEmail(email);
   if (!acct) return false;
@@ -550,6 +601,7 @@ export function getAccountStats(): Array<{
   authenticated: boolean;
   throttled: boolean;
   disabled: boolean;
+  disabledProviders: string[];
   throttledRemainingMs: number;
   throttledUnlockAt: string | null;
   tokenExpiresInMs: number;
@@ -559,13 +611,13 @@ export function getAccountStats(): Array<{
   providers: {
     qwen: boolean;
     deepseek: boolean;
-    zai: boolean;
+    glm: boolean;
   };
   configuredProviders: string[];
   providerAuth: {
     qwen: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null } | null;
     deepseek: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null } | null;
-    zai: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null } | null;
+    glm: { status: string; tokenExpiresInMs: number; lastLoginAttempt: number | null } | null;
   };
 }> {
   const now = Date.now();
@@ -574,6 +626,7 @@ export function getAccountStats(): Array<{
     authenticated: a.providerStates.qwen?.token != null,
     throttled: a.throttledUntil > now,
     disabled: a.disabled ?? false,
+    disabledProviders: a.disabledProviders || [],
     throttledRemainingMs: Math.max(0, a.throttledUntil - now),
     throttledUnlockAt: a.throttledUntil > now ? new Date(a.throttledUntil).toISOString() : null,
     tokenExpiresInMs: a.providerStates.qwen?.expiresAt ? Math.max(0, a.providerStates.qwen.expiresAt - now) : 0,
@@ -583,7 +636,7 @@ export function getAccountStats(): Array<{
     providers: {
       qwen: a.providerStates.qwen?.token != null,
       deepseek: a.providerStates.deepseek?.token != null,
-      zai: a.providerStates.zai?.token != null,
+      glm: a.providerStates.glm?.token != null,
     },
     configuredProviders: a.providers || ['qwen'],
     providerAuth: {
@@ -601,11 +654,11 @@ export function getAccountStats(): Array<{
             lastLoginAttempt: a.providerStates.deepseek.lastLoginAttempt,
           }
         : null,
-      zai: a.providerStates.zai
+      glm: a.providerStates.glm
         ? {
-            status: getAuthStatus(a.providerStates.zai),
-            tokenExpiresInMs: a.providerStates.zai.expiresAt ? Math.max(0, a.providerStates.zai.expiresAt - now) : 0,
-            lastLoginAttempt: a.providerStates.zai.lastLoginAttempt,
+            status: getAuthStatus(a.providerStates.glm),
+            tokenExpiresInMs: a.providerStates.glm.expiresAt ? Math.max(0, a.providerStates.glm.expiresAt - now) : 0,
+            lastLoginAttempt: a.providerStates.glm.lastLoginAttempt,
           }
         : null,
     },
@@ -615,7 +668,7 @@ export function getAccountCount(): number {
   return accounts.length;
 }
 export function getAvailableCount(): number {
-  return accounts.filter(isAvailable).length;
+  return accounts.filter((a) => isAvailable(a)).length;
 }
 export function getAllAccountEmails(): string[] {
   return accounts.map((a) => a.email);
@@ -629,7 +682,9 @@ export function getAccounts(): readonly AccountEntry[] {
  * Returns the token string, or null if no account has a valid token for this provider.
  */
 export function getProviderToken(provider: string): string | null {
-  const available = accounts.filter((a) => !a.disabled && a.providerStates[provider]?.token != null);
+  const available = accounts.filter(
+    (a) => !a.disabled && !(a.disabledProviders || []).includes(provider) && a.providerStates[provider]?.token != null,
+  );
   if (available.length === 0) return null;
   const acct = available[Math.floor(Math.random() * available.length)];
   return acct.providerStates[provider]!.token!;

@@ -82,7 +82,7 @@ async function gracefulShutdown(_signal: string): Promise<void> {
     }
   }
   stopAutoCleanup();
-  const pidFile = projectPath('.qwen', 'gate.pid');
+  const pidFile = projectPath('.auth', 'gate.pid');
   try {
     if (existsSync(pidFile)) unlinkSync(pidFile);
   } catch {
@@ -225,12 +225,12 @@ app.get(
   },
   async (c) => {
     try {
-      const [qwenModels, deepseekModels, zaiModels] = await Promise.all([
+      const [qwenModels, deepseekModels, glmModels] = await Promise.all([
         fetchQwenModels(),
         fetchProviderModels('deepseek'),
-        fetchProviderModels('zai'),
+        fetchProviderModels('glm'),
       ]);
-      const allModels = [...qwenModels, ...deepseekModels, ...zaiModels, ...PROVIDER_MODELS];
+      const allModels = [...qwenModels, ...deepseekModels, ...glmModels, ...PROVIDER_MODELS];
       return c.json({
         object: 'list',
         data: allModels,
@@ -335,7 +335,7 @@ if (import.meta.main) {
       }
     }
 
-    const pidFile = projectPath('.qwen', 'gate.pid');
+    const pidFile = projectPath('.auth', 'gate.pid');
     try {
       writeFileSync(pidFile, String(process.pid));
     } catch {

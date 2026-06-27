@@ -137,7 +137,7 @@ async function checkStatus() {
 }
 
 function getPidFilePath(): string {
-  return resolve(__dirname, '..', '.qwen', 'gate.pid');
+  return resolve(__dirname, '..', '.auth', 'gate.pid');
 }
 
 async function restartServer() {

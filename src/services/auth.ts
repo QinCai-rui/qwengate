@@ -61,7 +61,7 @@ export function getAuthTokenMaxAgeMs(): number {
 export function getAuthRefreshBeforeMs(): number {
   return config.getInt('AUTH_REFRESH_BEFORE_MS', 300000);
 }
-const TOKEN_DIR = join(process.cwd(), '.qwen', 'tokens');
+const TOKEN_DIR = join(process.cwd(), '.auth', 'tokens');
 
 export async function checkPlaywrightSession(): Promise<boolean> {
   try {
@@ -84,10 +84,15 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
   const persisted = loadAccountsFromFile();
   const discovered = discoverSavedAccounts();
 
-  // Merge persisted accounts (which may include throttledUntil and profileCookies) with discovered accounts
-  const merged: Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean; profileCookies?: string }> = [
-    ...discovered,
-  ];
+  // Merge persisted accounts (which may include throttledUntil, providers, disabledProviders, and profileCookies) with discovered accounts
+  const merged: Array<{
+    email: string;
+    password: string;
+    providers?: string[];
+    throttledUntil?: number;
+    disabledProviders?: string[];
+    profileCookies?: string;
+  }> = [...discovered];
   for (const p of persisted) {
     const existing = merged.find((a) => a.email.toLowerCase().trim() === p.email.toLowerCase().trim());
     if (existing) {
@@ -98,8 +103,11 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       if (p.throttledUntil) {
         existing.throttledUntil = p.throttledUntil;
       }
-      if (p.disabled !== undefined) {
-        existing.disabled = p.disabled;
+      if (p.providers) {
+        existing.providers = p.providers;
+      }
+      if (p.disabledProviders) {
+        existing.disabledProviders = p.disabledProviders;
       }
     } else if (p.password) {
       merged.push(p);
@@ -133,6 +141,8 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
           startupStatus: 'initializing',
         },
       },
+      providers: (a as any).providers || ['qwen'],
+      disabledProviders: (a as any).disabledProviders || [],
       lastUsed: 0,
       throttledUntil: persistedUntil > Date.now() ? persistedUntil : 0,
       refreshInFlight: null,

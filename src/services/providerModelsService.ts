@@ -1,6 +1,6 @@
 /*
  * File: providerModelsService.ts
- * Fetches models from OpenAI-compatible provider APIs (DeepSeek, Z.ai).
+ * Fetches models from OpenAI-compatible provider APIs (DeepSeek, GLM).
  * ponytail: simple fetch + cache for OpenAI-compatible provider models
  */
 
@@ -23,7 +23,7 @@ const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
     modelsPath: '/models',
     apiKeyVar: 'DEEPSEEK_API_KEY',
   },
-  zai: {
+  glm: {
     baseUrl: 'https://open.bigmodel.cn',
     modelsPath: '/api/paas/v4/models',
     apiKeyVar: 'ZAI_API_KEY',

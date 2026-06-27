@@ -5,7 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7.2] - 2026-06-23
+## [0.8.0] - 2026-06-27
+
+### Added
+- **Per-Provider Account Tables**: Three separate panels (Qwen, DeepSeek, GLM) each with their own table filtered by `configuredProviders`. Each shows per-provider auth status, per-provider disable toggle, and dedicated login button. (#accounts, accounts.ts/accounts.js/accounts.css)
+- **Provider Auth Detail API**: `getAccountStats()` now returns per-provider `providerAuth` with status, token expiry, and last login attempt. (#api, accountManager.ts)
+- **Shared Manual Browser Login**: `manualBrowserLogin()` extracted to `loginHelpers.ts` — one reusable function with `beforeFill` callback and `authPagePaths` config for provider-specific login flows. (#auth, loginHelpers.ts)
+- **Per-Provider Disable**: `disabledProviders: string[]` on `AccountEntry` replaces single boolean `disabled`. Each provider table can disable its own provider per account. (#accounts, accountManager.ts)
+- **Provider Persistence**: `providers` and `disabledProviders` arrays now persisted to auth file (were only in-memory). (#accounts, accountManager.ts)
+- **AGENTS.md Rules**: Added "Commit after every logical change" and "Update CHANGELOG.md with every change" to global agent rules. (#config, AGENTS.md)
+
+### Changed
+- **All Providers Use Manual Browser Login**: DeepSeek changed from headless auto-login (`loginDeepSeek()`) to headed browser autofill matching Qwen and GLM approach. User clicks Login → browser opens with credentials filled → user solves captcha → browser closes. (#auth, deepseekLogin.ts/dashboardRoutes.ts)
+- **zai → glm Rename**: Provider key `zai` renamed to `glm` everywhere — files (`zaiLogin.ts` → `glmLogin.ts`, `providerZai.ts` → `providerGlm.ts`, `providers/zai/` → `providers/glm/`), API routes, CSS classes, JS identifiers, model ID prefixes. (#providers, all files)
+- **`.qwen/` → `.auth/` Data Directory**: All auth state files moved from `.qwen/` to `.auth/`. `accounts.json` → `auth.json`, `accounts.jsonc` → `auth.jsonc`. Migration from old paths on startup. (#config, accountManager.ts/auth.ts/browserProfiles.ts/monitorStore.ts/cli.ts)
+- **Anti-Bot Typing**: `manualBrowserLogin()` auto-fill uses `pressSequentially()` with random delays (30-80ms per keystroke) instead of instant `fill()` — avoids bot detection that flags paste-based input. (#auth, loginHelpers.ts)
+
+### Removed
+- **Dead Code**: Removed unused `loginDeepSeek()` headless auto-login function (no longer called from any route). (#auth, deepseekLogin.ts)
 
 ### Fixed
 - **wreq-js Session Leak**: Explicitly close wreq-js sessions after every use to prevent tokio epoll `Bad file descriptor` crash. Sessions were created per-request (5-10 per request) but never disposed — the Rust tokio runtime continued polling on epoll fds after JS GC'd the wrapper objects. Now all sessions are closed on completion, error, and background timer paths.

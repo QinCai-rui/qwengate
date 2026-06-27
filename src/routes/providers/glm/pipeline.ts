@@ -1,6 +1,6 @@
 /*
- * File: providers/zai/pipeline.ts
- * Z.ai (GLM) Open WebUI pipeline -- converts OpenAI requests to Open WebUI format.
+ * File: providers/glm/pipeline.ts
+ * GLM Open WebUI pipeline -- converts OpenAI requests to Open WebUI format.
  * Session management, fingerprint params, SSE streaming.
  */
 
@@ -15,7 +15,7 @@ const sessions = new Map<string, { id: string; userId: string; timestamp: number
 const SESSION_TTL = 30 * 60 * 1000; // 30 minutes
 
 /**
- * Build browser fingerprint query parameters for Z.ai API.
+ * Build browser fingerprint query parameters for GLM API.
  * These are required by Open WebUI for anti-bot correlation.
  */
 function buildFingerprintParams(token: string, userId: string): URLSearchParams {
@@ -36,7 +36,7 @@ function buildFingerprintParams(token: string, userId: string): URLSearchParams 
 
 /**
  * Get or create a chat session for this user.
- * Z.ai needs a session to be created via POST /api/v1/chats/new.
+ * GLM needs a session to be created via POST /api/v1/chats/new.
  */
 async function getOrCreateSession(bearerToken: string): Promise<{ sessionId: string; userId: string } | null> {
   // Check cache
@@ -108,7 +108,7 @@ async function getOrCreateSession(bearerToken: string): Promise<{ sessionId: str
     sessions.set(bearerToken, session);
     return { sessionId: newId, userId };
   } catch (err: any) {
-    logStore.log('warn', 'zai-session', `Session error: ${err.message}`);
+    logStore.log('warn', 'glm-session', `Session error: ${err.message}`);
     return null;
   }
 }
@@ -142,11 +142,11 @@ function messagesToOpenWebUIHistory(
 }
 
 /**
- * Proxy a request through Z.ai's Open WebUI API.
+ * Proxy a request through GLM's Open WebUI API.
  */
-export async function proxyViaZaiWebChat(c: Context, body: OpenAIRequest, bearerToken: string): Promise<Response> {
+export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, bearerToken: string): Promise<Response> {
   const isStream = body.stream === true;
-  const model = body.model.replace(/^zai\//, '');
+  const model = body.model.replace(/^glm\//, '');
 
   // 1. Get or create chat session
   const session = await getOrCreateSession(bearerToken);
@@ -154,7 +154,7 @@ export async function proxyViaZaiWebChat(c: Context, body: OpenAIRequest, bearer
     return c.json(
       {
         error: {
-          message: 'Cannot create Z.ai chat session. Login via dashboard first.',
+          message: 'Cannot create GLM chat session. Login via dashboard first.',
           type: 'auth_error',
         },
       },
@@ -216,7 +216,7 @@ export async function proxyViaZaiWebChat(c: Context, body: OpenAIRequest, bearer
       return c.json(
         {
           error: {
-            message: `Z.ai API error (${resp.status}): ${errText}`,
+            message: `GLM API error (${resp.status}): ${errText}`,
             type: 'upstream_error',
           },
         },
@@ -309,7 +309,7 @@ export async function proxyViaZaiWebChat(c: Context, body: OpenAIRequest, bearer
           }
         }
       } catch (err: any) {
-        logStore.log('error', 'zai-stream', `Stream error: ${err.message}`);
+        logStore.log('error', 'glm-stream', `Stream error: ${err.message}`);
         await writer.close().catch(() => {});
       }
     })();
@@ -326,7 +326,7 @@ export async function proxyViaZaiWebChat(c: Context, body: OpenAIRequest, bearer
     return c.json(
       {
         error: {
-          message: `Z.ai proxy error: ${err.message}`,
+          message: `GLM proxy error: ${err.message}`,
           type: 'proxy_error',
         },
       },

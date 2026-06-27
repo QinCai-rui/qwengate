@@ -3,7 +3,7 @@
  * Static model definitions for third-party providers.
  *
  * These models are merged with Qwen's dynamic model list in the /v1/models response.
- * Update this file when adding or removing provider models.
+ * Update this file when adding or removing GLM models.
  */
 
 export interface ProviderModelEntry {
@@ -41,62 +41,62 @@ export const PROVIDER_MODELS: ProviderModelEntry[] = [
     owned_by: 'deepseek',
     description: 'DeepSeek VL2 — vision-language understanding',
   },
-  // ── Z.ai (Zhipu GLM) ────────────────────────────────────
+  // ── GLM (Zhipu) ──────────────────────────────────────────
   {
-    id: 'zai/glm-5.2',
+    id: 'glm/glm-5.2',
     object: 'model',
     created: CREATED,
-    owned_by: 'zai',
-    description: 'Z.ai GLM-5.2 — flagship model, excels at coding and long-horizon tasks',
+    owned_by: 'glm',
+    description: 'GLM-5.2 — flagship model, excels at coding and long-horizon tasks',
   },
   {
-    id: 'zai/glm-5.1',
+    id: 'glm/glm-5.1',
     object: 'model',
     created: CREATED,
-    owned_by: 'zai',
-    description: 'Z.ai GLM-5.1',
+    owned_by: 'glm',
+    description: 'GLM-5.1',
   },
   {
-    id: 'zai/glm-5',
+    id: 'glm/glm-5',
     object: 'model',
     created: CREATED,
-    owned_by: 'zai',
-    description: 'Z.ai GLM-5',
+    owned_by: 'glm',
+    description: 'GLM-5',
   },
   {
-    id: 'zai/glm-4.7-flash',
+    id: 'glm/glm-4.7-flash',
     object: 'model',
     created: CREATED,
-    owned_by: 'zai',
-    description: 'Z.ai GLM-4.7 Flash — fast and efficient',
+    owned_by: 'glm',
+    description: 'GLM-4.7 Flash — fast and efficient',
   },
   {
-    id: 'zai/glm-4.7',
+    id: 'glm/glm-4.7',
     object: 'model',
     created: CREATED,
-    owned_by: 'zai',
-    description: 'Z.ai GLM-4.7',
+    owned_by: 'glm',
+    description: 'GLM-4.7',
   },
   {
-    id: 'zai/glm-4.6',
+    id: 'glm/glm-4.6',
     object: 'model',
     created: CREATED,
-    owned_by: 'zai',
-    description: 'Z.ai GLM-4.6',
+    owned_by: 'glm',
+    description: 'GLM-4.6',
   },
   {
-    id: 'zai/glm-4.5-air',
+    id: 'glm/glm-4.5-air',
     object: 'model',
     created: CREATED,
-    owned_by: 'zai',
-    description: 'Z.ai GLM-4.5 Air — lightweight',
+    owned_by: 'glm',
+    description: 'GLM-4.5 Air — lightweight',
   },
   {
-    id: 'zai/glm-4.5',
+    id: 'glm/glm-4.5',
     object: 'model',
     created: CREATED,
-    owned_by: 'zai',
-    description: 'Z.ai GLM-4.5',
+    owned_by: 'glm',
+    description: 'GLM-4.5',
   },
 ];
 
@@ -104,12 +104,12 @@ const PROVIDER_MODEL_SPECS: Record<string, { max_context: number; max_output: nu
   'deepseek/deepseek-chat': { max_context: 128000, max_output: 8192, modalities: ['text'] },
   'deepseek/deepseek-reasoner': { max_context: 128000, max_output: 8192, modalities: ['text'] },
   'deepseek/deepseek-vl2': { max_context: 32000, max_output: 8192, modalities: ['text', 'image'] },
-  'zai/glm-5.2': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
-  'zai/glm-5.1': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
-  'zai/glm-5': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
-  'zai/glm-4.7-flash': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
-  'zai/glm-4.7': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
-  'zai/glm-4.6': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
-  'zai/glm-4.5-air': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
-  'zai/glm-4.5': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'glm/glm-5.2': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'glm/glm-5.1': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'glm/glm-5': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'glm/glm-4.7-flash': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'glm/glm-4.7': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'glm/glm-4.6': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'glm/glm-4.5-air': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
+  'glm/glm-4.5': { max_context: 131072, max_output: 16384, modalities: ['text', 'image'] },
 };

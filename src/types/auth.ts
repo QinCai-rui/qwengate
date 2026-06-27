@@ -24,7 +24,7 @@ export interface ProviderAuthState {
 export interface AccountEntry {
   email: string;
   password: string;
-  /** Per-provider auth state — keyed by provider name ('qwen', 'deepseek', 'zai') */
+  /** Per-provider auth state — keyed by provider name ('qwen', 'deepseek', 'glm') */
   providerStates: { [provider: string]: ProviderAuthState | undefined };
   /** Which providers this account is configured for (shown in dashboard) */
   providers?: string[];
@@ -36,4 +36,6 @@ export interface AccountEntry {
   totalRequests: number;
   /** If true, account is excluded from request routing */
   disabled?: boolean;
+  /** Providers specifically disabled for this account (e.g. ['deepseek']) */
+  disabledProviders?: string[];
 }

@@ -123,12 +123,12 @@
   -webkit-overflow-scrolling: touch;
   margin-bottom: 0;
 }
-#acctTable {
+.prov-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.8125rem;
 }
-#acctTable th {
+.prov-table th {
   text-align: left;
   padding: 10px 8px;
   font-size: 0.7rem;
@@ -139,16 +139,16 @@
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
 }
-#acctTable td {
+.prov-table td {
   padding: 10px 8px;
   border-bottom: 1px solid var(--border);
   color: var(--text-primary);
   vertical-align: middle;
 }
-#acctTable tbody tr:hover td {
+.prov-table tbody tr:hover td {
   background: var(--bg-elevated);
 }
-#acctTable tbody tr:last-child td {
+.prov-table tbody tr:last-child td {
   border-bottom: none;
 }
 
@@ -424,7 +424,7 @@
   background: rgba(255, 107, 53, 0.08);
   color: #ff6b35;
 }
-.provider-check.checked.zai {
+.provider-check.checked.glm {
   border-color: #34c759;
   background: rgba(52, 199, 89, 0.08);
   color: #34c759;
@@ -533,17 +533,15 @@
   margin-top: 4px;
 }
 
-/* Per-Provider Columns */
-.prov-col {
-  text-align: center !important;
-  min-width: 90px;
+/* Panel header provider dots */
+.panel-title .prov-dot {
+  background: var(--text-secondary);
+  opacity: 0.4;
 }
-.prov-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 0;
+.panel-title .prov-dot.live {
+  background: var(--success, #22c55e);
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--success-soft);
 }
 .prov-status {
   display: flex;

@@ -39,6 +39,7 @@ playwright-report/
 
 # Runtime and browser automation
 .qwen/
+.auth/
 browser-profile/
 cookies/
 sessions/
@@ -91,3 +92,4 @@ toolcall_study
 extract output qwen/
 research
 token-usage-output.txt
+AGENTS.TEMP.md

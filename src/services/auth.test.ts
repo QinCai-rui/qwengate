@@ -111,4 +111,4 @@ describe('getAccountByEmail', () => {
 });
 
 // throttleAccount test intentionally removed — it called saveAccountsToFile
-// which wrote test data to the real .qwen/accounts.json
+// which wrote test data to the real .auth/auth.json

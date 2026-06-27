@@ -54,11 +54,11 @@ function updateProvidersInput() {
   });
 })();
 
-/* ── Per-Provider Helpers ── */
-var PROV_META = {
-  qwen: { label: 'Qwen', btnClass: 'q', dotClass: 'qwen-dot' },
-  deepseek: { label: 'DeepSeek', btnClass: 'd', dotClass: 'deepseek-dot' },
-  zai: { label: 'GLM', btnClass: 'g', dotClass: 'zai-dot' },
+/* ── Provider Metadata ── */
+var PROVIDERS = {
+  qwen: { label: 'Qwen', key: 'qwen' },
+  deepseek: { label: 'DeepSeek', key: 'deepseek' },
+  glm: { label: 'GLM', key: 'glm' },
 };
 
 function providerStatusBadge(status) {
@@ -91,85 +91,92 @@ function makeThrottleBadge(acct) {
   return '<span class="badge badge-neutral">OK</span>';
 }
 
-function renderProviderCell(email, providerKey, auth) {
-  var meta = PROV_META[providerKey];
-  var status = (auth && auth.status) || 'disconnected';
-  var isLive = status === 'live';
-  var btn = isLive
-    ? '<button class="prov-login-btn logged-in" disabled>Logged In</button>'
-    : '<button class="prov-login-btn ' +
-      meta.btnClass +
-      '" data-email="' +
-      escHtml(email) +
-      '" data-provider="' +
-      providerKey +
-      '">Login</button>';
-  return '<div class="prov-cell">' + providerStatusBadge(status) + btn + '</div>';
-}
-
-function renderAccountsTable(accts) {
+function renderProviderTable(accts, pk, cfg) {
+  var tableBody = document.getElementById(cfg.tableBodyId);
+  var emptyEl = document.getElementById(cfg.emptyId);
   if (!Array.isArray(accts) || accts.length === 0) {
-    document.getElementById('acctBody').innerHTML = '';
-    document.getElementById('emptyState').style.display = '';
-    setText('acctCount', '');
+    tableBody.innerHTML = '';
+    emptyEl.style.display = '';
+    setText(cfg.countId, '');
     return;
   }
-  document.getElementById('emptyState').style.display = 'none';
-  setText('acctCount', accts.length + ' total');
+  emptyEl.style.display = 'none';
+  setText(cfg.countId, accts.length + ' total');
+  var colorMap = { qwen: 'q', deepseek: 'd', glm: 'g' };
+  var colorClass = colorMap[pk] || '';
   var rows = '';
   for (var i = 0; i < accts.length; i++) {
     var a = accts[i];
-    rows +=
-      '<tr>' +
-      '<td class="email-cell">' +
+    var provAuth = a.providerAuth && a.providerAuth[pk];
+    var status = (provAuth && provAuth.status) || 'disconnected';
+    var isLive = status === 'live';
+    var loginBtn = isLive
+      ? '<button class="prov-login-btn logged-in" disabled>Logged In</button>'
+      : '<button class="prov-login-btn ' + colorClass + '" data-email="' + escHtml(a.email) + '" data-provider="' + pk + '">Login</button>';
+    var cols = '';
+    cols += '<td class="email-cell">' + escHtml(a.email) + '</td>';
+    cols += '<td>' + providerStatusBadge(status) + '</td>';
+    if (cfg.showStats) {
+      cols += '<td>' + (a.inFlight || 0) + '</td>';
+      cols += '<td>' + (a.totalRequests || 0) + '</td>';
+    }
+    if (cfg.showTokenTTL) {
+      var ttl = provAuth && provAuth.tokenExpiresInMs;
+      cols += '<td>' + (ttl != null ? fmtTTL(ttl) : '\u2014') + '</td>';
+    }
+    cols += '<td>' + makeThrottleBadge(a) + '</td>';
+    var providerDisabled = a.disabledProviders && a.disabledProviders.indexOf(pk) !== -1;
+    cols +=
+      '<td>' +
+      '<span class="toggle-trigger" onclick="handleToggleProviderDisabled(event,\'' +
       escHtml(a.email) +
-      '</td>' +
-      '<td>' +
-      (a.inFlight || 0) +
-      '</td>' +
-      '<td>' +
-      (a.totalRequests || 0) +
-      '</td>' +
-      '<td>' +
-      makeThrottleBadge(a) +
-      '</td>' +
-      '<td>' +
-      '<span class="toggle-trigger" onclick="handleToggleDisabled(event,\'' +
-      escHtml(a.email) +
+      "','" +
+      pk +
       "'," +
-      a.disabled +
+      providerDisabled +
       ')">' +
       '<span class="toggle-track' +
-      (a.disabled ? ' active' : '') +
+      (providerDisabled ? ' active' : '') +
       '">' +
       '<span class="toggle-thumb"></span>' +
-      '</span></span>' +
-      '</td>' +
-      '<td>' +
-      renderProviderCell(a.email, 'qwen', a.providerAuth && a.providerAuth.qwen) +
-      '</td>' +
-      '<td>' +
-      renderProviderCell(a.email, 'deepseek', a.providerAuth && a.providerAuth.deepseek) +
-      '</td>' +
-      '<td>' +
-      renderProviderCell(a.email, 'zai', a.providerAuth && a.providerAuth.zai) +
-      '</td>' +
+      '</span></span></td>';
+    cols +=
       '<td><div class="action-cell">' +
+      loginBtn +
       '<button class="account-btn small" data-email="' +
       escHtml(a.email) +
       '" data-action="configure">Keys</button>' +
       '<button class="account-btn small danger" data-email="' +
       escHtml(a.email) +
       '" data-action="remove">Remove</button>' +
-      '</div></td></tr>';
+      '</div></td>';
+    rows += '<tr>' + cols + '</tr>';
   }
-  document.getElementById('acctBody').innerHTML = rows;
+  tableBody.innerHTML = rows;
 }
 
 /* ── Load Accounts ── */
 async function loadAccounts() {
   var data = await apiFetch('/accounts');
-  renderAccountsTable(data);
+  if (!Array.isArray(data)) {
+    document.getElementById('qwenBody').innerHTML = '';
+    document.getElementById('deepseekBody').innerHTML = '';
+    document.getElementById('glmBody').innerHTML = '';
+    return;
+  }
+  var provKeys = ['qwen', 'deepseek', 'glm'];
+  var configs = {
+    qwen: { tableBodyId: 'qwenBody', countId: 'qwenCount', emptyId: 'qwenEmpty', showStats: true, showTokenTTL: true },
+    deepseek: { tableBodyId: 'deepseekBody', countId: 'deepseekCount', emptyId: 'deepseekEmpty', showStats: false, showTokenTTL: false },
+    glm: { tableBodyId: 'glmBody', countId: 'glmCount', emptyId: 'glmEmpty', showStats: false, showTokenTTL: false },
+  };
+  for (var i = 0; i < provKeys.length; i++) {
+    var pk = provKeys[i];
+    var filtered = data.filter(function (a) {
+      return a.configuredProviders && a.configuredProviders.indexOf(pk) !== -1;
+    });
+    renderProviderTable(filtered, pk, configs[pk]);
+  }
 }
 
 /* ── Add Account ── */
@@ -257,7 +264,7 @@ function handleRemove(email) {
 var providerEndpoints = {
   qwen: '/autofill',
   deepseek: '/login/deepseek',
-  zai: '/login/zai',
+  glm: '/login/glm',
 };
 
 function handleProviderLogin(email, provider) {
@@ -360,6 +367,25 @@ async function handleToggleDisabled(event, email, currentlyDisabled) {
   }
 }
 
+/* ── Toggle Provider Disabled ── */
+async function handleToggleProviderDisabled(event, email, provider, currentlyDisabled) {
+  event.stopPropagation();
+  var res = await fetch('/api/accounts/' + encodeURIComponent(email), {
+    method: 'PATCH',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+    body: JSON.stringify({ disabledProviders: currentlyDisabled ? [] : [provider] }),
+  });
+  if (res.ok) {
+    showToast(email + ' ' + provider + (currentlyDisabled ? ' enabled' : ' disabled'), 'success');
+    loadAccounts();
+  } else {
+    var err = await res.json().catch(function () {
+      return { error: 'Failed' };
+    });
+    showToast(err.error || 'Failed to toggle', 'error');
+  }
+}
+
 /* ── Configure Provider Keys ── */
 var currentConfigEmail = null;
 
@@ -367,14 +393,14 @@ function handleOpenConfig(email) {
   currentConfigEmail = email;
   document.getElementById('configEmail').textContent = email;
   document.getElementById('deepseekKeyInput').value = '';
-  document.getElementById('zaiKeyInput').value = '';
+  document.getElementById('glmKeyInput').value = '';
   document.getElementById('configOverlay').classList.add('open');
 }
 
 function handleSaveConfig() {
   var deepseekKey = document.getElementById('deepseekKeyInput').value.trim();
-  var zaiKey = document.getElementById('zaiKeyInput').value.trim();
-  if (!deepseekKey && !zaiKey) {
+  var glmKey = document.getElementById('glmKeyInput').value.trim();
+  if (!deepseekKey && !glmKey) {
     showToast('Enter at least one API key', 'error');
     return;
   }
@@ -382,7 +408,7 @@ function handleSaveConfig() {
     providerKeys: {},
   };
   if (deepseekKey) body.providerKeys.deepseek = deepseekKey;
-  if (zaiKey) body.providerKeys.zai = zaiKey;
+  if (glmKey) body.providerKeys.glm = glmKey;
 
   document.getElementById('configSave').disabled = true;
   document.getElementById('configSave').textContent = 'Saving...';
@@ -430,7 +456,7 @@ function init() {
   });
 
   /* Table button delegation */
-  document.getElementById('acctTable').addEventListener('click', function (e) {
+  document.getElementById('providerPanels').addEventListener('click', function (e) {
     var btn = e.target;
     if (btn.tagName !== 'BUTTON') return;
     var email = btn.getAttribute('data-email');

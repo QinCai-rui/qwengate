@@ -2,10 +2,12 @@
  * File: loginHelpers.ts
  * Login implementation helpers extracted from auth.ts.
  * Contains the three login strategies: browser context, fetch, and temp context.
+ * Also provides shared manual browser login for provider accounts.
  */
 
 import crypto from 'crypto';
-import type { AuthState } from '../types/auth.ts';
+import { chromium, Page } from 'playwright';
+import type { AuthState, ProviderAuthState } from '../types/auth.ts';
 import { checkPlaywrightSession, getAuthTokenMaxAgeMs } from './auth.ts';
 import { logStore } from './logStore.ts';
 import { AccountContext, createAccountContext, getActivePage, getBrowser, Mutex, removeAccountContext } from './playwright.ts';
@@ -348,5 +350,110 @@ export async function loginViaTempContext(
       }
     }
     release();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared manual browser login for third-party providers (DeepSeek, GLM, etc.)
+// ---------------------------------------------------------------------------
+
+export interface ManualLoginOptions {
+  loginUrl: string;
+  /** Used for log messages */
+  provider: string;
+  /**
+   * URL path segments that indicate still on the auth page.
+   * Login is considered complete when the URL no longer contains any of these.
+   */
+  authPagePaths: string[];
+  /**
+   * Optional pre-fill actions (e.g., clicking "Continue with Email" for GLM).
+   * Called after navigation to loginUrl, before the password fill attempt.
+   */
+  beforeFill?: (page: Page, email: string, password: string) => Promise<void>;
+}
+
+/**
+ * Open a headed browser, let the user log in manually, capture cookies.
+ * Returns ProviderAuthState on success, null on timeout or error.
+ */
+export async function manualBrowserLogin(email: string, password: string, opts: ManualLoginOptions): Promise<ProviderAuthState | null> {
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: false });
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    });
+    const page = await context.newPage();
+
+    await page.goto(opts.loginUrl, { waitUntil: 'networkidle', timeout: 30000 });
+
+    // Optional pre-fill setup (e.g., click "Continue with Email")
+    if (opts.beforeFill) {
+      await opts.beforeFill(page, email, password);
+    }
+
+    // Auto-fill credentials (best-effort) — human-like typing
+    try {
+      const emailInput = page.locator('input[type="email"], input[name="email"], input[placeholder*="email" i]');
+      if (await emailInput.isVisible({ timeout: 8000 }).catch(() => false)) {
+        await emailInput.click();
+        await page.waitForTimeout(100 + Math.random() * 200);
+        await emailInput.pressSequentially(email, { delay: 30 + Math.random() * 50 });
+      }
+      const passwordInput = page.locator('input[type="password"]');
+      if (await passwordInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+        await page.waitForTimeout(100 + Math.random() * 150);
+        await passwordInput.click();
+        await page.waitForTimeout(100 + Math.random() * 150);
+        await passwordInput.pressSequentially(password, { delay: 25 + Math.random() * 40 });
+        await page.waitForTimeout(200 + Math.random() * 300);
+      }
+    } catch {
+      // Form fill failed — user will do it manually
+    }
+
+    logStore.log('info', `${opts.provider}-login`, `Browser opened for ${email} at ${opts.loginUrl} — complete login manually`);
+
+    // Wait up to 5 minutes for manual login
+    const startTime = Date.now();
+    const timeout = 5 * 60 * 1000;
+    let loggedIn = false;
+
+    while (Date.now() - startTime < timeout) {
+      await page.waitForTimeout(3000);
+      try {
+        const currentUrl = page.url();
+        // Login is complete when URL no longer contains any auth page path
+        if (!opts.authPagePaths.some((p) => currentUrl.includes(p))) {
+          loggedIn = true;
+          break;
+        }
+      } catch {
+        break; // Page was closed
+      }
+    }
+
+    if (!loggedIn) {
+      logStore.log('warn', `${opts.provider}-login`, `Manual login timed out for ${email}`);
+      await browser.close();
+      return null;
+    }
+
+    // Capture cookies as token
+    const cookies = await context.cookies();
+    const token = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+    await browser.close();
+
+    return {
+      token,
+      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      refreshToken: null,
+      lastLoginAttempt: Date.now(),
+    };
+  } catch (err: any) {
+    logStore.log('error', `${opts.provider}-login`, `${opts.provider} manual login error for ${email}: ${err.message}`);
+    if (browser) await browser.close().catch(() => {});
+    return null;
   }
 }

@@ -38,7 +38,7 @@ ${sidebarHtml('accounts')}
             <label class="provider-check" data-provider="deepseek">
               <span class="provider-check-dot"></span> DeepSeek
             </label>
-            <label class="provider-check" data-provider="zai">
+            <label class="provider-check" data-provider="glm">
               <span class="provider-check-dot"></span> GLM
             </label>
           </div>
@@ -47,33 +47,93 @@ ${sidebarHtml('accounts')}
       </div>
     </div>
 
-    <!-- Accounts Table -->
+    <!-- Provider Tables -->
+    <div id="providerPanels">
+
+    <!-- Qwen Accounts -->
     <div class="panel">
       <div class="panel-header open">
-        <span class="panel-title">Accounts</span>
-        <span id="acctCount" style="font-size:0.7rem;color:var(--text-secondary);font-weight:500"></span>
+        <span class="panel-title">
+          <span class="prov-dot live"></span> Qwen
+        </span>
+        <span id="qwenCount" style="font-size:0.7rem;color:var(--text-secondary);font-weight:500"></span>
       </div>
       <div class="panel-body open">
         <div class="tbl-wrap">
-          <table id="acctTable">
+          <table class="prov-table" id="qwenTable">
             <thead>
               <tr>
                 <th>Email</th>
+                <th>Auth Status</th>
                 <th>In Flight</th>
                 <th>Total Reqs</th>
+                <th>Token TTL</th>
                 <th>Throttle</th>
                 <th>Disabled</th>
-                <th class="prov-col">Qwen</th>
-                <th class="prov-col">DeepSeek</th>
-                <th class="prov-col">GLM</th>
                 <th>Actions</th>
               </tr>
             </thead>
-            <tbody id="acctBody"></tbody>
+            <tbody id="qwenBody"></tbody>
           </table>
         </div>
-        <div class="empty-state" id="emptyState">No accounts configured. Add one above.</div>
+        <div class="empty-state" id="qwenEmpty">No accounts configured.</div>
       </div>
+    </div>
+
+    <!-- DeepSeek Accounts -->
+    <div class="panel">
+      <div class="panel-header open">
+        <span class="panel-title">
+          <span class="prov-dot"></span> DeepSeek
+        </span>
+        <span id="deepseekCount" style="font-size:0.7rem;color:var(--text-secondary);font-weight:500"></span>
+      </div>
+      <div class="panel-body open">
+        <div class="tbl-wrap">
+          <table class="prov-table" id="deepseekTable">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Auth Status</th>
+                <th>Throttle</th>
+                <th>Disabled</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="deepseekBody"></tbody>
+          </table>
+        </div>
+        <div class="empty-state" id="deepseekEmpty">No accounts configured.</div>
+      </div>
+    </div>
+
+    <!-- GLM Accounts -->
+    <div class="panel">
+      <div class="panel-header open">
+        <span class="panel-title">
+          <span class="prov-dot"></span> GLM
+        </span>
+        <span id="glmCount" style="font-size:0.7rem;color:var(--text-secondary);font-weight:500"></span>
+      </div>
+      <div class="panel-body open">
+        <div class="tbl-wrap">
+          <table class="prov-table" id="glmTable">
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Auth Status</th>
+                <th>Throttle</th>
+                <th>Disabled</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="glmBody"></tbody>
+          </table>
+        </div>
+        <div class="empty-state" id="glmEmpty">No accounts configured.</div>
+      </div>
+    </div>
+
     </div>
   </main>
 </div>
@@ -103,9 +163,9 @@ ${sidebarHtml('accounts')}
       <div class="field-hint">Required for DeepSeek provider access</div>
     </div>
     <div class="config-field-group">
-      <label>Z.ai (GLM) API Key</label>
-      <input type="password" id="zaiKeyInput" placeholder="xxx..." autocomplete="off">
-      <div class="field-hint">Required for Z.ai / GLM provider access</div>
+      <label>GLM API Key</label>
+      <input type="password" id="glmKeyInput" placeholder="xxx..." autocomplete="off">
+      <div class="field-hint">Required for GLM provider access</div>
     </div>
     <div class="modal-actions">
       <button class="modal-cancel" id="configCancel">Cancel</button>

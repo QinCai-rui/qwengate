@@ -10,7 +10,7 @@ import { getModelSpecs, handleImageModelFallback } from './modelSpecs.ts';
 import { providerForModel } from './providerRegistry.ts';
 // Side-effect imports — provider modules self-register with the registry at import time.
 import './providerDeepSeek.ts';
-import './providerZai.ts';
+import './providerGlm.ts';
 import { handleQwen } from './providers/qwen/handler.ts';
 
 export {

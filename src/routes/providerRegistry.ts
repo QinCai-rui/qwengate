@@ -6,7 +6,7 @@
  * Add a new entry for each provider — no other code changes needed.
  *
  * Provider naming convention: `provider/model-name`
- *   e.g. deepseek/instant, zai/glm-5.2
+ *   e.g. deepseek/instant, glm/glm-5.2
  *
  * To add a new provider:
  *   1. Create a handler function: (c, body) => Promise<Response>
@@ -20,7 +20,7 @@ import type { OpenAIRequest } from '../types/openai.ts';
 export type ProviderHandler = (c: Context, body: OpenAIRequest) => Promise<Response>;
 
 /** Known provider prefixes, checked in order (longest first for sub-prefix safety) */
-const PROVIDER_PREFIXES = ['deepseek/', 'zai/'] as const;
+const PROVIDER_PREFIXES = ['deepseek/', 'glm/'] as const;
 
 type ProviderMap = Map<string, ProviderHandler>;
 

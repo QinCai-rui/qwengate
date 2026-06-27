@@ -353,6 +353,12 @@ export function registerDashboardRoutes(app: Hono): void {
         if (body.disabled !== undefined) {
           mod.setAccountDisabled(c.req.param('email'), body.disabled === true);
         }
+        if (body.disabledProviders !== undefined) {
+          mod.setAccountDisabled(c.req.param('email'), false);
+          for (const p of body.disabledProviders) {
+            mod.setProviderDisabled(c.req.param('email'), p, true);
+          }
+        }
         return c.json({ ok: true });
       } catch (err: any) {
         return c.json({ error: err.message }, 404);
@@ -387,7 +393,7 @@ export function registerDashboardRoutes(app: Hono): void {
   );
 
   app.get(
-    '/api/accounts/:email/login/zai',
+    '/api/accounts/:email/login/glm',
     async (c, next) => requireApiKey(c, next),
     async (c) => {
       try {
@@ -397,12 +403,12 @@ export function registerDashboardRoutes(app: Hono): void {
         if (!acct) return c.json({ error: 'Account not found' }, 404);
 
         // Launch headless:false — user must complete captcha manually
-        const { loginZaiManual } = await import('../../services/zaiLogin.ts');
+        const { loginGlmManual } = await import('../../services/glmLogin.ts');
 
         // Run async — return immediately, let the user poll for completion
-        loginZaiManual(email, acct.password).then((result) => {
+        loginGlmManual(email, acct.password).then((result) => {
           if (result) {
-            setProviderState(email, 'zai', result);
+            setProviderState(email, 'glm', result);
           }
         });
 

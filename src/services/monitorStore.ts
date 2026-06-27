@@ -4,7 +4,7 @@
  * Tracks per-account request results, latencies, modes, errors for long-term
  * quality monitoring on the dashboard Monitor page.
  *
- * Data is stored in .qwen/monitor.json as a bounded rolling buffer.
+ * Data is stored in .auth/monitor.json as a bounded rolling buffer.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { projectPath } from '../utils/paths.ts';
@@ -115,7 +115,7 @@ class MonitorStore {
   private dirty = false;
 
   constructor(maxEntries = DEFAULT_MAX_ENTRIES) {
-    this.storePath = projectPath('.qwen', 'monitor.json');
+    this.storePath = projectPath('.auth', 'monitor.json');
     this.maxEntries = maxEntries;
     this.load();
   }
@@ -315,7 +315,7 @@ class MonitorStore {
 
   private load(): void {
     try {
-      const dir = projectPath('.qwen');
+      const dir = projectPath('.auth');
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       if (!existsSync(this.storePath)) {
         writeFileSync(this.storePath, '[]', 'utf-8');
@@ -333,7 +333,7 @@ class MonitorStore {
 
   private save(): void {
     try {
-      const dir = projectPath('.qwen');
+      const dir = projectPath('.auth');
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       writeFileSync(this.storePath, JSON.stringify(this.entries), 'utf-8');
     } catch (err: any) {
