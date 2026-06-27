@@ -224,19 +224,93 @@ export async function openBrowserProfile(email: string, password?: string, optio
   }
 }
 
-export type AutoLoginOutcome = { status: 'success'; cookieStr: string; expiresAt: number } | { status: 'captcha' | 'closed' | 'error' };
+export type AutoLoginOutcome =
+  | { status: 'success'; cookieStr: string; token: string; expiresAt: number }
+  | { status: 'captcha' | 'closed' | 'error' };
 
-export async function autoLoginViaBrowser(
-  email: string,
-  password: string | undefined,
-  opts: {
-    authUrl: string;
-    authPagePaths: string[];
-    beforeFill?: (page: any) => Promise<void>;
-  },
-): Promise<AutoLoginOutcome> {
+export interface AutoLoginOptions {
+  provider?: 'qwen' | 'deepseek' | 'glm';
+  authUrl: string;
+  authPagePaths: string[];
+  beforeFill?: (page: any) => Promise<void>;
+  /** If true, capture the provider-specific token (Bearer for DeepSeek, JWT for GLM) instead of just cookies. */
+  extractToken?: boolean;
+}
+
+/**
+ * Extract the provider-specific auth token from a browser context.
+ * Returns the Bearer token for DeepSeek, JWT for GLM, or cookie string for Qwen.
+ */
+export async function extractProviderToken(
+  context: any,
+  page: any,
+  provider: 'qwen' | 'deepseek' | 'glm' | undefined,
+): Promise<{ token: string; expiresAt: number } | null> {
+  if (!provider || provider === 'qwen') {
+    // Qwen: use cookies (existing behavior)
+    const cookies = await context.cookies();
+    const cookieStr = cookies
+      .filter((c: any) => c.value)
+      .map((c: any) => `${c.name}=${c.value}`)
+      .join('; ');
+    const expiresAt =
+      cookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
+      Date.now() + 7 * 24 * 60 * 60 * 1000;
+    return { token: cookieStr, expiresAt };
+  }
+
+  if (provider === 'deepseek') {
+    // DeepSeek: fetch Bearer token from /api/v0/users/current
+    try {
+      const result = await page.evaluate(async () => {
+        const res = await fetch('https://chat.deepseek.com/api/v0/users/current', {
+          credentials: 'include',
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        return data?.data?.biz_data?.token || null;
+      });
+      if (result) {
+        return { token: result, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 };
+      }
+    } catch (err: any) {
+      logStore.log('warn', 'browser', `Failed to extract DeepSeek token: ${err.message}`);
+    }
+    return null;
+  }
+
+  if (provider === 'glm') {
+    // GLM: read JWT from token cookie
+    try {
+      const cookies = await context.cookies();
+      const tokenCookie = cookies.find((c: any) => c.name === 'token' && (c.domain.includes('z.ai') || c.domain.includes('chatglm')));
+      if (tokenCookie?.value) {
+        return { token: tokenCookie.value, expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000 };
+      }
+    } catch (err: any) {
+      logStore.log('warn', 'browser', `Failed to extract GLM token: ${err.message}`);
+    }
+    return null;
+  }
+
+  return null;
+}
+
+async function buildCookieFallback(context: any): Promise<{ cookieStr: string; expiresAt: number }> {
+  const cookies = await context.cookies();
+  const cookieStr = cookies
+    .filter((c: any) => c.value)
+    .map((c: any) => `${c.name}=${c.value}`)
+    .join('; ');
+  const expiresAt =
+    cookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
+    Date.now() + 7 * 24 * 60 * 60 * 1000;
+  return { cookieStr, expiresAt };
+}
+
+export async function autoLoginViaBrowser(email: string, password: string | undefined, opts: AutoLoginOptions): Promise<AutoLoginOutcome> {
   if (process.env.TEST_MOCK_PLAYWRIGHT) {
-    return { status: 'success', cookieStr: '', expiresAt: Date.now() + 3600000 };
+    return { status: 'success', cookieStr: '', token: '', expiresAt: Date.now() + 3600000 };
   }
 
   let context: any = null;
@@ -252,6 +326,9 @@ export async function autoLoginViaBrowser(
     );
     const allValid = existingCookies.every((c: any) => !c.expires || c.expires * 1000 > Date.now());
     if (hasAuthCookie && allValid) {
+      // Extract provider-specific token if requested
+      const existingPage = context.pages()[0] || (await context.newPage().catch(() => null));
+      const tokenResult = await extractProviderToken(context, existingPage, opts.provider);
       const cookieStr = existingCookies
         .filter((c: any) => c.value)
         .map((c: any) => `${c.name}=${c.value}`)
@@ -261,7 +338,7 @@ export async function autoLoginViaBrowser(
         Date.now() + 7 * 24 * 60 * 60 * 1000;
       await context.close().catch(() => {});
       logStore.log('info', 'browser', `Existing valid session for ${email} — skipping auto-login`);
-      return { status: 'success', cookieStr, expiresAt };
+      return { status: 'success', cookieStr, token: tokenResult?.token || cookieStr, expiresAt: tokenResult?.expiresAt || expiresAt };
     }
 
     // Create fresh page
@@ -293,17 +370,18 @@ export async function autoLoginViaBrowser(
       try {
         const currentUrl = page.url();
         if (!opts.authPagePaths.some((p: string) => currentUrl.includes(p))) {
-          const finalCookies: any[] = await context.cookies();
+          // Extract provider-specific token
+          const tokenResult = await extractProviderToken(context, page, opts.provider);
+          if (tokenResult) {
+            await context.close().catch(() => {});
+            logStore.log('info', 'browser', `✓ Auto-login success for ${email}`);
+            return { status: 'success', cookieStr: '', token: tokenResult.token, expiresAt: tokenResult.expiresAt };
+          }
+          // Fallback: use cookies
+          const fallback = await buildCookieFallback(context);
           await context.close().catch(() => {});
-          const cookieStr = finalCookies
-            .filter((c: any) => c.value)
-            .map((c: any) => `${c.name}=${c.value}`)
-            .join('; ');
-          const expiresAt =
-            finalCookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
-            Date.now() + 7 * 24 * 60 * 60 * 1000;
           logStore.log('info', 'browser', `✓ Auto-login success for ${email}`);
-          return { status: 'success', cookieStr, expiresAt };
+          return { status: 'success', cookieStr: fallback.cookieStr, token: fallback.cookieStr, expiresAt: fallback.expiresAt };
         }
       } catch {
         break;
@@ -317,16 +395,18 @@ export async function autoLoginViaBrowser(
           (c.name.toLowerCase().includes('token') || c.name.toLowerCase().includes('session') || c.name.toLowerCase().includes('auth')),
       );
       if (hasAuth) {
+        // Extract provider-specific token
+        const tokenResult = await extractProviderToken(context, page, opts.provider);
+        if (tokenResult) {
+          await context.close().catch(() => {});
+          logStore.log('info', 'browser', `✓ Auto-login success (cookie-based) for ${email}`);
+          return { status: 'success', cookieStr: '', token: tokenResult.token, expiresAt: tokenResult.expiresAt };
+        }
+        // Fallback: use cookies
+        const fallback = await buildCookieFallback(context);
         await context.close().catch(() => {});
-        const cookieStr = currentCookies
-          .filter((c: any) => c.value)
-          .map((c: any) => `${c.name}=${c.value}`)
-          .join('; ');
-        const expiresAt =
-          currentCookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
-          Date.now() + 7 * 24 * 60 * 60 * 1000;
         logStore.log('info', 'browser', `✓ Auto-login success (cookie-based) for ${email}`);
-        return { status: 'success', cookieStr, expiresAt };
+        return { status: 'success', cookieStr: fallback.cookieStr, token: fallback.cookieStr, expiresAt: fallback.expiresAt };
       }
 
       // Check for captcha every 3 attempts

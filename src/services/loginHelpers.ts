@@ -9,6 +9,7 @@ import crypto from 'crypto';
 import type { Page } from 'playwright';
 import type { AuthState, ProviderAuthState } from '../types/auth.ts';
 import { checkPlaywrightSession, getAuthTokenMaxAgeMs } from './auth.ts';
+import { extractProviderToken } from './browserProfiles.ts';
 import { logStore } from './logStore.ts';
 import { AccountContext, createAccountContext, getActivePage, getBrowser, Mutex, removeAccountContext } from './playwright.ts';
 import { createFetchTimeout, QWEN_BX_V } from './qwen.ts';
@@ -359,8 +360,8 @@ export async function loginViaTempContext(
 
 export interface ManualLoginOptions {
   loginUrl: string;
-  /** Used for log messages */
-  provider: string;
+  /** Used for log messages and token extraction strategy */
+  provider: 'qwen' | 'deepseek' | 'glm' | (string & {});
   /**
    * URL path segments that indicate still on the auth page.
    * Login is considered complete when the URL no longer contains any of these.
@@ -396,6 +397,18 @@ export async function manualBrowserLogin(email: string, password: string, opts: 
     const allValid = existingCookies.every((c: any) => !c.expires || c.expires * 1000 > Date.now());
     if (hasSession && allValid) {
       logStore.log('info', `${opts.provider}-login`, `Existing valid session found for ${email} — using profile cookies`);
+      // Extract provider-specific token (for DeepSeek/GLM) or cookie string (for Qwen)
+      const existingPage = context.pages()[0] || (await context.newPage().catch(() => null));
+      const tokenResult = await extractProviderToken(context, existingPage, opts.provider as 'qwen' | 'deepseek' | 'glm' | undefined);
+      if (tokenResult) {
+        return {
+          token: tokenResult.token,
+          expiresAt: tokenResult.expiresAt,
+          refreshToken: null,
+          lastLoginAttempt: null,
+        };
+      }
+      // Fallback: use cookies
       const tokenStr = existingCookies.map((c: any) => `${c.name}=${c.value}`).join('; ');
       return {
         token: tokenStr,
@@ -487,6 +500,18 @@ export async function manualBrowserLogin(email: string, password: string, opts: 
 
     // Capture cookies — they are now persisted in the browser profile automatically,
     // so next restart will find them and skip re-login
+    // Extract provider-specific token first
+    const tokenResult = await extractProviderToken(context, page, opts.provider as 'qwen' | 'deepseek' | 'glm' | undefined);
+    if (tokenResult) {
+      if (context) await context.close().catch(() => {});
+      return {
+        token: tokenResult.token,
+        expiresAt: tokenResult.expiresAt,
+        refreshToken: null,
+        lastLoginAttempt: Date.now(),
+      };
+    }
+    // Fallback: use cookies if provider-specific extraction failed
     const finalCookies = await context.cookies();
     const tokenStr = finalCookies.map((c: any) => `${c.name}=${c.value}`).join('; ');
     if (context) await context.close().catch(() => {});

@@ -3,15 +3,18 @@
  * GLM provider login with two strategies:
  * 1. Auto-login (headless stealth) — triggered on dashboard load / startup
  * 2. Manual login (headed browser) — triggered when user clicks Login button
- * The auth page hides the email form behind a "Continue with Email" button.
+ *
+ * GLM uses ES256 JWT tokens from POST /api/v1/auths/signin.
+ * The token is returned in the JSON response body (token field), not just cookies.
  */
 
 import type { ProviderAuthState } from '../types/auth.ts';
-import { manualBrowserLogin } from './loginHelpers.ts';
 import { autoLoginViaBrowser } from './browserProfiles.ts';
+import { manualBrowserLogin } from './loginHelpers.ts';
 import { logStore } from './logStore.ts';
 
 const GLM_LOGIN_URL = 'https://chat.z.ai/auth';
+const GLM_BASE_URL = 'https://chat.z.ai';
 
 /** Headless stealth auto-login — tries to log in silently via form fill + persistent profile */
 export async function loginGlmAuto(
@@ -19,6 +22,7 @@ export async function loginGlmAuto(
   password: string,
 ): Promise<{ status: 'success' | 'captcha' | 'closed' | 'error'; result?: ProviderAuthState }> {
   const outcome = await autoLoginViaBrowser(email, password, {
+    provider: 'glm',
     authUrl: GLM_LOGIN_URL,
     authPagePaths: ['/auth'],
     beforeFill: async (page: any) => {
@@ -41,16 +45,35 @@ export async function loginGlmAuto(
     },
   });
 
-  if (outcome.status === 'success') {
+  if (outcome.status === 'success' && outcome.token) {
+    // GLM uses JWT returned from signin API — the cookieStr contains all cookies but
+    // the actual JWT is in the `token` cookie value, which autoLoginViaBrowser now extracts
     return {
       status: 'success',
       result: {
-        token: outcome.cookieStr,
+        token: outcome.token, // JWT extracted from signin response or token cookie
         expiresAt: outcome.expiresAt,
         refreshToken: null,
         lastLoginAttempt: Date.now(),
       },
     };
+  }
+
+  // Check if cookie-based fallback works (for cookie-based sessions)
+  if (outcome.status === 'success' && outcome.cookieStr) {
+    // Extract token from cookie string
+    const tokenMatch = outcome.cookieStr.match(/\btoken=([^;]+)/);
+    if (tokenMatch) {
+      return {
+        status: 'success',
+        result: {
+          token: tokenMatch[1],
+          expiresAt: outcome.expiresAt,
+          refreshToken: null,
+          lastLoginAttempt: Date.now(),
+        },
+      };
+    }
   }
 
   return { status: outcome.status };

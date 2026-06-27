@@ -1,100 +1,112 @@
 /*
  * File: providers/deepseek/pipeline.ts
  * DeepSeek web chat API pipeline — converts OpenAI requests to DeepSeek's internal format.
- * PoW challenge handling, session management, SSE streaming.
+ * Full flow: build context -> solve PoW -> create session -> send chat -> parse SSE.
  */
 
 import type { Context } from 'hono';
 import type { OpenAIRequest } from '../../../types/openai.ts';
 import { logStore } from '../../../services/logStore.ts';
+import { getAccountByEmail, getProviderState, getProviderToken } from '../../../services/accountManager.ts';
+import { getOrCreateChatSession, getCurrentUser } from './session.ts';
+import { getPowResponseHeader } from './pow.ts';
+import { buildDeepSeekHeaders, createDeepSeekContext, DEEPSEEK_BASE_URL } from './spoofing.ts';
+import { createStreamState, parseDeepSeekData, type DeepSeekStreamState } from './stream.ts';
 
-const BASE_URL = 'https://chat.deepseek.com';
 const CHAT_ENDPOINT = '/api/v0/chat/completion';
-const POW_ENDPOINT = '/api/v0/chat/create_pow_challenge';
-
-// ponytail: simple in-memory PoW cache per session
-const powCache = new Map<string, { nonce: string; expiresAt: number }>();
 
 /**
- * Convert OpenAI-format messages to DeepSeek prompt string.
- * DeepSeek uses a single prompt string, not messages array.
+ * Convert OpenAI messages to a single prompt string (DeepSeek web chat uses prompt, not messages).
  */
 function messagesToPrompt(messages: Array<{ role: string; content: string | null }>): string {
   return messages
-    .map((m) => {
-      const role = m.role === 'assistant' ? 'Assistant' : m.role === 'system' ? 'System' : 'User';
-      return `${role}: ${m.content ?? ''}`;
+    .map(function (m) {
+      var role: string;
+      if (m.role === 'assistant') role = 'Assistant';
+      else if (m.role === 'system') role = 'System';
+      else role = 'User';
+      return role + ': ' + (m.content ?? '');
     })
     .join('\n');
 }
 
 /**
- * Solve DeepSeek PoW challenge.
- * Returns x-ds-pow-response header value.
+ * Get the deepseek provider state for an account email.
+ * Returns the bearer token from the account's provider state, or null.
  */
-async function solvePowChallenge(bearerToken: string): Promise<string | null> {
-  try {
-    const challengeRes = await fetch(`${BASE_URL}${POW_ENDPOINT}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
-    if (!challengeRes.ok) return null;
-    const data: any = await challengeRes.json();
-    const { challenge, difficulty } = data.data || data;
-
-    // Simple PoW solver: find nonce where SHA256(challenge + nonce) starts with `difficulty` zeros
-    // Using Web Crypto API (available in Bun)
-    const encoder = new TextEncoder();
-    const targetPrefix = '0'.repeat(difficulty || 4);
-
-    for (let nonce = 0; nonce < 1000000; nonce++) {
-      const hash = await crypto.subtle.digest('SHA-256', encoder.encode(challenge + nonce));
-      const hex = Array.from(new Uint8Array(hash))
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
-      if (hex.startsWith(targetPrefix)) {
-        return String(nonce);
-      }
-    }
-    return null;
-  } catch (err: any) {
-    logStore.log('warn', 'deepseek-pow', `PoW failed: ${err.message}`);
-    return null;
-  }
-}
-
-/**
- * Generate a UUID v4 session ID for DeepSeek chat sessions.
- */
-function generateSessionId(): string {
-  return crypto.randomUUID();
+function getDeepSeekTokenForEmail(email: string): string | null {
+  var state = getProviderState(email, 'deepseek');
+  if (state && state.token) return state.token;
+  return null;
 }
 
 /**
  * Proxy a request through DeepSeek's web chat API.
+ * Full flow: build context -> solve PoW -> create session -> send chat -> parse SSE.
+ *
+ * If accountEmail is omitted, picks any account with a valid deepseek token.
  */
-export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, bearerToken: string): Promise<Response> {
-  const model = body.model.replace(/^deepseek\//, '');
-  const isStream = body.stream === true;
+export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, accountEmail?: string): Promise<Response> {
+  var model = body.model.replace(/^deepseek\//, '');
+  var isStream = body.stream === true;
 
-  // 1. Solve PoW challenge
-  const powResponse = await solvePowChallenge(bearerToken);
-  if (!powResponse) {
-    logStore.log('warn', 'deepseek', 'PoW challenge failed for deepseek proxy');
-    // Fall through — maybe it's not required for this session
+  // 1. Get bearer token
+  var bearerToken: string | null = null;
+  var email: string = accountEmail || '';
+
+  if (email) {
+    bearerToken = getDeepSeekTokenForEmail(email);
+  } else {
+    // Fall back to any account with deepseek token
+    bearerToken = getProviderToken('deepseek');
   }
 
-  // 2. Build request body in DeepSeek web chat format
-  const sessionId = generateSessionId();
-  const prompt = messagesToPrompt(body.messages || []);
+  if (!bearerToken) {
+    return c.json(
+      {
+        error: {
+          message: 'No DeepSeek account logged in. Login via dashboard first.',
+          type: 'auth_error',
+        },
+      },
+      { status: 503, headers: { 'content-type': 'application/json' } },
+    );
+  }
 
-  const deepseekBody: Record<string, any> = {
-    chat_session_id: sessionId,
+  // 2. Build spoofing context
+  var ctx = createDeepSeekContext(bearerToken);
+
+  // 3. Solve PoW challenge
+  var powHeader: string | null = null;
+  try {
+    powHeader = await getPowResponseHeader(email || 'unknown', bearerToken);
+  } catch (err: any) {
+    logStore.log('warn', 'deepseek-pow', 'PoW solving failed: ' + err.message + ' — proceeding without PoW');
+  }
+
+  // 4. Get or create chat session
+  var session = await getOrCreateChatSession(bearerToken);
+  if (!session) {
+    logStore.log('warn', 'deepseek-session', 'Failed to create chat session');
+    return c.json(
+      {
+        error: {
+          message: 'Failed to create DeepSeek chat session. Token may be expired.',
+          type: 'auth_error',
+        },
+      },
+      { status: 503, headers: { 'content-type': 'application/json' } },
+    );
+  }
+
+  // 5. Build the DeepSeek web chat request body
+  var prompt = messagesToPrompt(body.messages || []);
+  var modelType = model === 'deepseek-reasoner' ? 'reasoner' : session.model_type || 'default';
+
+  var deepseekBody: Record<string, any> = {
+    chat_session_id: session.id,
     parent_message_id: null,
-    model_type: model === 'deepseek-reasoner' ? 'reasoner' : 'default',
+    model_type: modelType,
     prompt: prompt,
     ref_file_ids: [],
     thinking_enabled: model === 'deepseek-reasoner',
@@ -103,134 +115,169 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, b
     preempt: false,
   };
 
-  // 3. Build headers
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${bearerToken}`,
-    'Content-Type': 'application/json',
-    Accept: 'text/event-stream',
-  };
-  if (powResponse) {
-    headers['x-ds-pow-response'] = powResponse;
-  }
+  // 6. Build spoofed browser headers
+  var headers = buildDeepSeekHeaders(ctx, {
+    powResponse: powHeader || undefined,
+    hifLeim: ctx.hifLeim,
+    dsSessionId: session.id,
+  });
 
-  // 4. Send request to DeepSeek web chat API
+  // 7. Send request to DeepSeek web chat API
   try {
-    const resp = await fetch(`${BASE_URL}${CHAT_ENDPOINT}`, {
+    var resp = await fetch(DEEPSEEK_BASE_URL + CHAT_ENDPOINT, {
       method: 'POST',
-      headers,
+      headers: headers as unknown as Record<string, string>,
       body: JSON.stringify(deepseekBody),
       signal: AbortSignal.timeout(120000),
     });
 
     if (!resp.ok) {
-      const errText = await resp.text().catch(() => 'unknown error');
+      var errText = await resp.text().catch(function () {
+        return 'unknown error';
+      });
       return c.json(
         {
           error: {
-            message: `DeepSeek web chat API error (${resp.status}): ${errText}`,
+            message: 'DeepSeek web chat API error (' + resp.status + '): ' + errText,
             type: 'upstream_error',
           },
         },
-        resp.status as any,
+        { status: resp.status as any, headers: { 'content-type': 'application/json' } },
       );
     }
 
-    // 5. Convert SSE stream from DeepSeek format to OpenAI format
-    const contentType = resp.headers.get('content-type') || '';
-    if (!isStream || contentType.includes('json')) {
-      // Non-streaming: read entire body
-      const text = await resp.text();
-      // DeepSeek returns SSE even for non-stream: parse it
-      const lines = text.split('\n').filter((l) => l.startsWith('data: '));
-      const content = lines
-        .map((l) => {
-          try {
-            const parsed = JSON.parse(l.slice(6));
-            return parsed.content || parsed.delta || '';
-          } catch {
-            return '';
-          }
-        })
-        .join('');
+    var contentType = resp.headers.get('content-type') || '';
 
-      return c.json({
-        id: sessionId,
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model: body.model,
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: 'assistant',
-              content: content || ' ',
-            },
-            finish_reason: 'stop',
-          },
-        ],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    // Non-streaming: buffer entire SSE and extract content
+    if (!isStream || contentType.includes('json')) {
+      var text = await resp.text();
+      var lines = text.split('\n').filter(function (l) {
+        return l.startsWith('data: ');
       });
+      var content = '';
+      for (var i = 0; i < lines.length; i++) {
+        var lineData = lines[i].slice(6);
+        if (lineData === '[DONE]') continue;
+        try {
+          var parsed = JSON.parse(lineData);
+          // Extract content from various formats
+          if (parsed.v && typeof parsed.v === 'string') {
+            content += parsed.v;
+          } else if (parsed.v && parsed.v.response && parsed.v.response.fragments) {
+            for (var f = 0; f < parsed.v.response.fragments.length; f++) {
+              content += parsed.v.response.fragments[f].content || '';
+            }
+          } else if (parsed.content) {
+            content += parsed.content;
+          }
+        } catch {
+          // Skip unparseable lines
+        }
+      }
+
+      return c.json(
+        {
+          id: session.id,
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: body.model,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: content || ' ',
+              },
+              finish_reason: 'stop',
+            },
+          ],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        },
+        { headers: { 'content-type': 'application/json' } },
+      );
     }
 
-    // Streaming: pass-through with format conversion
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-    const reader = resp.body!.getReader();
-    const decoder = new TextDecoder();
-    const encoder2 = new TextEncoder();
+    // 8. Streaming: convert DeepSeek SSE to OpenAI SSE on the fly
+    var { readable, writable } = new TransformStream();
+    var writer = writable.getWriter();
+    var reader = resp.body!.getReader();
+    var decoder = new TextDecoder();
+    var encoder = new TextEncoder();
 
-    // Read DeepSeek SSE, convert to OpenAI SSE format
-    (async () => {
-      let buffer = '';
+    (async function () {
+      var buffer = '';
+      var state: DeepSeekStreamState = createStreamState();
+
       try {
         while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            await writer.write(encoder2.encode('data: [DONE]\n\n'));
+          var result = await reader.read();
+          if (result.done) {
+            // Flush remaining buffer
+            if (buffer.trim()) {
+              var dataMatch = buffer.match(/^data: (.+)$/m);
+              if (dataMatch) {
+                var result2 = parseDeepSeekData(dataMatch[1], state, body.model, session.id);
+                for (var k = 0; k < result2.chunks.length; k++) {
+                  await writer.write(encoder.encode(result2.chunks[k]));
+                }
+              }
+            }
+            // Emit [DONE]
+            await writer.write(encoder.encode('data: [DONE]\n\n'));
             await writer.close();
             break;
           }
-          buffer += decoder.decode(value, { stream: true });
 
-          // Parse DeepSeek SSE events
-          // Format: data: {"type":"delta","content":"..."} or {"type":"thinking","content":"..."}
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || ''; // Keep incomplete line in buffer
+          buffer += decoder.decode(result.value, { stream: true });
 
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const raw = line.slice(6);
-            if (raw === '[DONE]') {
-              await writer.write(encoder2.encode('data: [DONE]\n\n'));
+          // Process complete lines from buffer
+          var lines2 = buffer.split('\n');
+          // Keep the last (potentially incomplete) line in the buffer
+          buffer = lines2.pop() || '';
+
+          for (var j = 0; j < lines2.length; j++) {
+            var line = lines2[j].trim();
+
+            if (!line) continue;
+
+            // Track event: lines
+            if (line.startsWith('event: ')) {
+              state._pendingEvent = line.slice(7).trim();
               continue;
             }
-            try {
-              const parsed = JSON.parse(raw);
-              const deltaContent = parsed.content || parsed.delta || '';
-              if (deltaContent) {
-                const oaiEvent = JSON.stringify({
-                  id: sessionId,
-                  object: 'chat.completion.chunk',
-                  created: Math.floor(Date.now() / 1000),
-                  model: body.model,
-                  choices: [
-                    {
-                      index: 0,
-                      delta: { content: deltaContent },
-                      finish_reason: null,
-                    },
-                  ],
-                });
-                await writer.write(encoder2.encode(`data: ${oaiEvent}\n\n`));
+
+            // Process data: lines
+            if (line.startsWith('data: ')) {
+              var dataContent = line.slice(6).trim();
+
+              // Skip [DONE] (unlikely from DeepSeek, but handle it)
+              if (dataContent === '[DONE]') {
+                await writer.write(encoder.encode('data: [DONE]\n\n'));
+                continue;
               }
-            } catch {
-              // Skip unparseable lines
+
+              var parseResult = parseDeepSeekData(dataContent, state, body.model, session.id);
+
+              for (var m = 0; m < parseResult.chunks.length; m++) {
+                await writer.write(encoder.encode(parseResult.chunks[m]));
+              }
+
+              if (parseResult.done) {
+                await writer.write(encoder.encode('data: [DONE]\n\n'));
+                await writer.close();
+                return;
+              }
             }
           }
         }
       } catch (err: any) {
-        logStore.log('error', 'deepseek-stream', `Stream error: ${err.message}`);
-        await writer.close().catch(() => {});
+        logStore.log('error', 'deepseek-stream', 'Stream error: ' + err.message);
+        try {
+          await writer.write(encoder.encode('data: [DONE]\n\n'));
+          await writer.close();
+        } catch {
+          // writer may already be closed
+        }
       }
     })();
 
@@ -246,11 +293,11 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, b
     return c.json(
       {
         error: {
-          message: `DeepSeek proxy error: ${err.message}`,
+          message: 'DeepSeek proxy error: ' + err.message,
           type: 'proxy_error',
         },
       },
-      502,
+      { status: 502, headers: { 'content-type': 'application/json' } },
     );
   }
 }

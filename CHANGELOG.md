@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.8.0] - 2026-06-27
 
 ### Added
+- **DeepSeek Spoofing Module**: New `providers/deepseek/spoofing.ts` — builds browser-like headers (sec-ch-ua, user-agent, accept-language, cookies) and spoofed cookie strings with smidV2, ds_session_id, .thumbcache, and aws-waf-token. (#deepseek, spoofing.ts)
+- **DeepSeek PoW Solver**: New `providers/deepseek/pow.ts` — solves DeepSeekHashV1 PoW via WASM (WebAssembly.instantiate) or browser profile fallback (page.evaluate). Uses SHA3 WASM from fe-static.deepseek.com. Caches solutions within expire_after TTL. (#deepseek, pow.ts)
+- **DeepSeek Session Management**: New `providers/deepseek/session.ts` — `getCurrentUser()` (from /api/v0/users/current), `getOrCreateChatSession()` (30min TTL cache), `clearSessionCache()`. (#deepseek, session.ts)
+- **DeepSeek Custom SSE Parser**: New `providers/deepseek/stream.ts` — parses DeepSeek's JSON Patch-like protocol (v/p/o/BATCH operations) into OpenAI chat.completion.chunk format with thinking/reasoning support. (#deepseek, stream.ts)
+- **GLM Spoofing Module**: New `providers/glm/spoofing.ts` with browser fingerprint params (20+ fields), x-signature HMAC-SHA256 via Web Crypto API, and GLM variable builder. (#glm, spoofing.ts)
+- **GLM Session Management**: New `providers/glm/session.ts` with `getCurrentUser()`, `getOrCreateChatSession()` (30min TTL cache), and `clearSessionCache()`. (#glm, session.ts)
+- **GLM Three-Phase SSE Parser**: New `providers/glm/stream.ts` — parses `thinking`/`answer`/`other`/`done` phases into OpenAI chat.completion.chunk format with `reasoning_content` deltas. (#glm, stream.ts)
+- **GLM Pipeline Rewrite**: `providers/glm/pipeline.ts` rewritten to use all new modules — spoofing, sessions, three-phase SSE parsing, full fingerprint query string, x-signature headers, and captcha solving support. (#glm, pipeline.ts)
+- **GLM Login JWT Extraction**: `services/glmLogin.ts` updated to extract GLM JWT from `autoLoginViaBrowser()` token output (ES256 JWT from signin API). (#glm, glmLogin.ts)
 - **Per-Provider Account Tables**: Three separate panels (Qwen, DeepSeek, GLM) each with their own table filtered by `configuredProviders`. Each shows per-provider auth status, per-provider disable toggle, and dedicated login button. (#accounts, accounts.ts/accounts.js/accounts.css)
 - **Provider Auth Detail API**: `getAccountStats()` now returns per-provider `providerAuth` with `status` (live/expired/disconnected/pending/connecting), `tokenExpiresInMs`, and `lastLoginAttempt`. (#api, accountManager.ts)
 - **Shared Manual Browser Login**: `manualBrowserLogin()` extracted to `loginHelpers.ts` — one reusable function with `beforeFill` callback and `authPagePaths` config for provider-specific login flows. (#auth, loginHelpers.ts)
@@ -18,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Poll Provider Login**: Per-provider polling that watches `providerAuth[provider].status === 'live'` instead of generic auth check. (#accounts, accounts.js)
 
 ### Changed
+- **DeepSeek Pipeline Rewrite**: `providers/deepseek/pipeline.ts` completely rewritten — uses spoofing module for browser headers, PoW solver for DeepSeekHashV1, session management for chat sessions, and custom SSE parser for proper stream handling. Browser spoofing covers all x-client-*, sec-ch-*, and cookie headers. (#deepseek, pipeline.ts)
+- **DeepSeek Login Updated**: `services/deepseekLogin.ts` updated — uses existing `extractProviderToken()` in `autoLoginViaBrowser()` with `provider: 'deepseek'`, plus manual login fallback that extracts Bearer token from localStorage or /api/v0/users/current. (#deepseek, deepseekLogin.ts)
 - **Project Renamed**: `qwen-gate` → `opengate` across all code, docs, README, package.json, URLs, and config references. No longer Qwen-specific. (#config, all files)
 - **All Providers Use Manual Browser Login**: DeepSeek changed from headless auto-login (`loginDeepSeek()`) to headed browser autofill matching Qwen and GLM approach. User clicks Login → browser opens with credentials filled → user solves captcha → browser closes. (#auth, deepseekLogin.ts/dashboardRoutes.ts)
 - **Provider Key `zai` → `glm`**: Internal provider key renamed from `zai` to `glm` everywhere — files (`zaiLogin.ts` → `glmLogin.ts`), directories (`providers/zai/` → `providers/glm/`), API routes (`/login/zai` → `/login/glm`), CSS classes (`.zai` → `.glm`), JS identifiers, model ID prefixes (`zai/` → `glm/`). Display label unchanged ("GLM"). (#providers, many files)

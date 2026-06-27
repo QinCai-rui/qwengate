@@ -1,125 +1,48 @@
 /*
  * File: providers/glm/pipeline.ts
- * GLM Open WebUI pipeline -- converts OpenAI requests to Open WebUI format.
- * Session management, fingerprint params, SSE streaming.
+ * GLM proxy pipeline — full flow with captcha solving, session management,
+ * browser fingerprint spoofing, x-signature HMAC, and three-phase SSE parsing.
  */
 
 import type { Context } from 'hono';
 import type { OpenAIRequest } from '../../../types/openai.ts';
 import { logStore } from '../../../services/logStore.ts';
+import { getOrCreateChatSession, getCurrentUser } from './session.ts';
+import { buildFingerprintParams, buildGlmHeaders, buildGlmVariables, GLM_BASE_URL } from './spoofing.ts';
+import { type GlmStreamState, createGlmStreamState, parseGlmSseLine } from './stream.ts';
 
-const BASE_URL = 'https://chat.z.ai';
-
-// ponytail: simple in-memory session cache per account token
-const sessions = new Map<string, { id: string; userId: string; timestamp: number }>();
-const SESSION_TTL = 30 * 60 * 1000; // 30 minutes
-
-/**
- * Build browser fingerprint query parameters for GLM API.
- * These are required by Open WebUI for anti-bot correlation.
- */
-function buildFingerprintParams(token: string, userId: string): URLSearchParams {
-  const ts = Date.now();
-  const params = new URLSearchParams();
-  params.set('timestamp', String(ts));
-  params.set('requestId', crypto.randomUUID());
-  params.set('user_id', userId || '');
-  params.set('token', token);
-  params.set('user_agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36');
-  params.set('screen_width', '1920');
-  params.set('screen_height', '1080');
-  // Open WebUI requires these even if unused
-  params.set('model', '');
-  params.set('title', '');
-  return params;
+export interface GlmProxyContext {
+  jwt: string;
+  userId: string;
+  userName: string;
 }
 
 /**
- * Get or create a chat session for this user.
- * GLM needs a session to be created via POST /api/v1/chats/new.
+ * Build the GLM proxy context from account state.
+ * Validates JWT and fetches user info.
  */
-async function getOrCreateSession(bearerToken: string): Promise<{ sessionId: string; userId: string } | null> {
-  // Check cache
-  const cached = sessions.get(bearerToken);
-  if (cached && Date.now() - cached.timestamp < SESSION_TTL) {
-    return { sessionId: cached.id, userId: cached.userId };
-  }
-
+export async function buildGlmContext(jwt: string): Promise<GlmProxyContext | null> {
   try {
-    // First, get current user info
-    const authRes = await fetch(`${BASE_URL}/api/v1/auths/`, {
-      headers: { Authorization: `Bearer ${bearerToken}` },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!authRes.ok) return null;
-    const authData: any = await authRes.json();
-    const userId = authData?.user?.id || authData?.id || '';
-
-    // Clean up old sessions for this user
-    const sessionsRes = await fetch(`${BASE_URL}/api/v1/chats/`, {
-      headers: { Authorization: `Bearer ${bearerToken}` },
-      signal: AbortSignal.timeout(10000),
-    });
-    if (sessionsRes.ok) {
-      const chatsData: any = await sessionsRes.json();
-      const chats = Array.isArray(chatsData) ? chatsData : chatsData?.data || [];
-      // Delete old chats (keep max 5)
-      for (let i = 5; i < chats.length; i++) {
-        fetch(`${BASE_URL}/api/v1/chats/${chats[i].id}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${bearerToken}` },
-        }).catch(() => {});
-      }
-    }
-
-    // Create new chat session
-    const newId = crypto.randomUUID();
-    const chatRes = await fetch(`${BASE_URL}/api/v1/chats/new`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${bearerToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        chat: {
-          id: newId,
-          title: 'OpenGate Session',
-          models: [],
-          params: {},
-          history: { messages: {}, currentId: null },
-          tags: [],
-          flags: [],
-          features: [],
-          mcp_servers: [],
-          enable_thinking: false,
-          reasoning_effort: '',
-          auto_web_search: false,
-          message_version: 1,
-          extra: {},
-          timestamp: Date.now(),
-          type: 'default',
-        },
-      }),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!chatRes.ok) return null;
-
-    const session = { id: newId, userId, timestamp: Date.now() };
-    sessions.set(bearerToken, session);
-    return { sessionId: newId, userId };
+    const user = await getCurrentUser(jwt);
+    if (!user) return null;
+    return {
+      jwt,
+      userId: user.id,
+      userName: user.name,
+    };
   } catch (err: any) {
-    logStore.log('warn', 'glm-session', `Session error: ${err.message}`);
+    logStore.log('warn', 'glm-pipeline', `buildGlmContext error: ${err.message}`);
     return null;
   }
 }
 
 /**
- * Convert OpenAI messages to Open WebUI history format.
+ * Convert OpenAI messages to GLM history format.
  */
-function messagesToOpenWebUIHistory(
-  messages: Array<{ role: string; content: string | null }>,
-  _userId: string,
-): { messages: Record<string, any>; currentId: string | null } {
+function messagesToGlmFormat(messages: Array<{ role: string; content: string | null }>): {
+  messages: Record<string, any>;
+  currentId: string | null;
+} {
   const result: Record<string, any> = {};
   let prevId: string | null = null;
   let currentId: string | null = null;
@@ -142,14 +65,29 @@ function messagesToOpenWebUIHistory(
 }
 
 /**
- * Proxy a request through GLM's Open WebUI API.
+ * Proxy a request through GLM's chat completions API.
+ * Full flow: build context → get/create session → build spoofed request → send → parse SSE.
  */
-export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, bearerToken: string): Promise<Response> {
+export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: string): Promise<Response> {
   const isStream = body.stream === true;
   const model = body.model.replace(/^glm\//, '');
 
-  // 1. Get or create chat session
-  const session = await getOrCreateSession(bearerToken);
+  // 1. Build context
+  const ctx = await buildGlmContext(jwt);
+  if (!ctx) {
+    return c.json(
+      {
+        error: {
+          message: 'Cannot validate GLM account. Login via dashboard first.',
+          type: 'auth_error',
+        },
+      },
+      503,
+    );
+  }
+
+  // 2. Get or create chat session
+  const session = await getOrCreateChatSession(jwt, model);
   if (!session) {
     return c.json(
       {
@@ -162,61 +100,50 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, bearer
     );
   }
 
-  // 2. Convert to Open WebUI format
-  const history = messagesToOpenWebUIHistory(body.messages || [], session.userId);
+  // 3. Convert messages to GLM format
+  const history = messagesToGlmFormat(body.messages || []);
+  const variables = buildGlmVariables(ctx);
 
-  const webuiBody = {
-    chat: {
-      id: session.sessionId,
-      title: 'OpenGate Session',
-      models: [model],
-      params: {},
-      history: {
-        messages: history.messages,
-        currentId: history.currentId,
-      },
-      tags: [],
-      flags: [],
-      features: [],
-      mcp_servers: [],
-      enable_thinking: model.includes('glm-5'),
-      reasoning_effort: model.includes('glm-5') ? 'max' : '',
-      auto_web_search: false,
-      message_version: 1,
-      extra: {},
-      timestamp: Date.now(),
-      type: 'default',
-    },
+  const glmBody: Record<string, any> = {
+    stream: isStream,
+    model,
+    messages: body.messages || [],
+    signature_prompt: '',
+    params: {},
+    extra: {},
+    features: [],
+    variables,
+    chat_id: session.id,
+    id: session.id,
+    current_user_message_id: history.currentId,
+    background_tasks: [],
   };
 
-  // 3. Build URL with fingerprint params
-  const params = buildFingerprintParams(bearerToken, session.userId);
-  const url = `${BASE_URL}/api/v2/chat/completions?${params.toString()}`;
+  // 4. Build fingerprint query string
+  const params = buildFingerprintParams(ctx);
+  const url = `${GLM_BASE_URL}/api/v2/chat/completions?${params.toString()}`;
 
-  // 4. Build headers
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${bearerToken}`,
-    'Content-Type': 'application/json',
-    Cookie: `token=${bearerToken}`,
-    'x-request-id': crypto.randomUUID(),
-    Accept: 'text/event-stream',
-  };
+  // 5. Build spoofed headers with x-signature
+  const bodyStr = JSON.stringify(glmBody);
+  const requestId = crypto.randomUUID();
+  const headers = await buildGlmHeaders(ctx, bodyStr, requestId);
 
-  // 5. Send request
+  // 6. Send request to GLM
   try {
     const resp = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(webuiBody),
+      body: bodyStr,
       signal: AbortSignal.timeout(120000),
     });
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => 'unknown error');
+      logStore.log('warn', 'glm-pipeline', `GLM API error (${resp.status}): ${errText.slice(0, 500)}`);
       return c.json(
         {
           error: {
-            message: `GLM API error (${resp.status}): ${errText}`,
+            message: `GLM API error (${resp.status}): ${errText.slice(0, 500)}`,
             type: 'upstream_error',
           },
         },
@@ -227,33 +154,63 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, bearer
     const contentType = resp.headers.get('content-type') || '';
 
     if (!isStream || contentType.includes('json')) {
-      // Non-streaming response
-      const data: any = await resp.json();
+      // Non-streaming: read entire body
+      const text = await resp.text();
+      const lines = text.split('\n').filter((l) => l.startsWith('data: '));
+      let fullContent = '';
+      let fullThinking = '';
+      let usage: any = null;
+
+      for (const line of lines) {
+        try {
+          const raw = line.slice(6);
+          if (raw === '[DONE]') continue;
+          const parsed = JSON.parse(raw);
+          const data = parsed.data || parsed;
+          if (data.phase === 'thinking') {
+            fullThinking += data.delta_content || '';
+          } else if (data.phase === 'answer') {
+            fullContent += data.delta_content || '';
+          } else if (data.phase === 'other' && data.usage) {
+            usage = data.usage;
+          }
+        } catch {
+          // Skip unparseable lines
+        }
+      }
+
+      const responseMsg: Record<string, any> = {
+        role: 'assistant',
+        content: fullContent || ' ',
+      };
+      if (fullThinking) {
+        responseMsg.reasoning_content = fullThinking;
+      }
+
       return c.json({
-        id: session.sessionId,
+        id: session.id,
         object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model: body.model,
-        choices: data?.choices || [
+        choices: [
           {
             index: 0,
-            message: {
-              role: 'assistant',
-              content: data?.messages?.[0]?.content || data?.content || data?.message?.content || ' ',
-            },
+            message: responseMsg,
             finish_reason: 'stop',
           },
         ],
-        usage: data?.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       });
     }
 
-    // Streaming: pass-through with format conversion
+    // 7. Streaming: convert three-phase SSE to OpenAI format
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
     const reader = resp.body!.getReader();
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
+
+    const state: GlmStreamState = createGlmStreamState();
 
     (async () => {
       let buffer = '';
@@ -261,50 +218,25 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, bearer
         while (true) {
           const { done, value } = await reader.read();
           if (done) {
-            await writer.write(encoder.encode('data: [DONE]\n\n'));
+            if (!state.isFinished) {
+              await writer.write(encoder.encode('data: [DONE]\n\n'));
+            }
             await writer.close();
             break;
           }
           buffer += decoder.decode(value, { stream: true });
 
           const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
+          buffer = lines.pop() || ''; // Keep incomplete line
 
           for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            const raw = line.slice(6);
-            if (raw === '[DONE]') {
-              await writer.write(encoder.encode('data: [DONE]\n\n'));
-              continue;
+            const { chunks, done: streamDone } = parseGlmSseLine(line, state, model, session.id);
+            for (const chunk of chunks) {
+              await writer.write(encoder.encode(chunk));
             }
-            try {
-              const parsed = JSON.parse(raw);
-              // Open WebUI SSE: { choices: [{ delta: { content }, finish_reason }] }
-              // or { content: "..." }
-              const deltaContent =
-                parsed?.choices?.[0]?.delta?.content ||
-                parsed?.choices?.[0]?.message?.content ||
-                parsed?.content ||
-                parsed?.message?.content ||
-                '';
-              if (deltaContent) {
-                const oaiEvent = JSON.stringify({
-                  id: session.sessionId,
-                  object: 'chat.completion.chunk',
-                  created: Math.floor(Date.now() / 1000),
-                  model: body.model,
-                  choices: [
-                    {
-                      index: 0,
-                      delta: { content: deltaContent },
-                      finish_reason: null,
-                    },
-                  ],
-                });
-                await writer.write(encoder.encode(`data: ${oaiEvent}\n\n`));
-              }
-            } catch {
-              // Skip unparseable lines
+            if (streamDone) {
+              await writer.close();
+              return;
             }
           }
         }
