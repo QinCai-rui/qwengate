@@ -120,7 +120,7 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
     vlm_web_search_enable: false,
     vlm_website_mode: false,
     enable_thinking: model.includes('glm-5') || model.includes('glm-4'),
-    reasoning_effort: 'max',
+    reasoning_effort: model.includes('glm-5') ? 'max' : '',
   };
 
   const glmBody: Record<string, any> = {
@@ -160,7 +160,7 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
 
     if (!resp.ok) {
       const errText = await resp.text().catch(() => 'unknown error');
-      logStore.log('warn', 'glm-pipeline', `GLM API error (${resp.status}): ${errText.slice(0, 500)}`);
+      logStore.log('warn', 'glm-pipeline', `GLM API error (${resp.status}): ${errText.slice(0, 1000)}`);
       return c.json(
         {
           error: {

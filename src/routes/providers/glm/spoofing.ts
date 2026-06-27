@@ -4,9 +4,8 @@
  */
 
 export const GLM_BASE_URL = 'https://chat.z.ai';
-export const GLM_FE_VERSION = 'prod-fe-1.1.67';
+export const GLM_FE_VERSION = '1.1.67';
 
-// Query string version differs from header x-fe-version (AUTH.md live capture: query version=0.0.1, header x-fe-version=prod-fe-1.1.67)
 const GLM_QUERY_VERSION = '0.0.1';
 
 export interface GlmContext {
@@ -127,10 +126,8 @@ export async function buildGlmHeaders(ctx: GlmContext, body: string, requestId: 
   const signature = await computeSignature(body, ctx.jwt, '', requestId);
 
   return {
-    Authorization: `Bearer ${ctx.jwt}`,
-    'Content-Type': 'application/json',
     Cookie: `token=${ctx.jwt}`,
-    'x-signature': signature,
+    'Content-Type': 'application/json',
     'x-fe-version': GLM_FE_VERSION,
     'x-region': 'overseas',
     'x-request-id': requestId,
