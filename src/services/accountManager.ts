@@ -488,7 +488,7 @@ export async function addAccount(
     for (const p of missing) {
       if (authFileMap[p]) appendToAuthFile(authFileMap[p], normalizedEmail, password);
     }
-    return { loginSucceeded: false, loginError: 'Provider(s) added: ' + missing.join(', ') + '. Login needed.' };
+    return { loginSucceeded: true };
   }
   const entry: AccountEntry = {
     email: normalizedEmail,
@@ -567,6 +567,20 @@ export async function removeAccount(email: string): Promise<void> {
       logStore.log('error', 'auth', `Failed to delete Chromium profile for ${normalizedEmail}: ${err.message}`);
     }
   }
+  // Remove from all per-provider auth files
+  const authFiles = [AUTH_QWEN_FILE, AUTH_DEEPSEEK_FILE, AUTH_GLM_FILE];
+  for (const file of authFiles) {
+    try {
+      if (!existsSync(file)) continue;
+      let entries = JSON.parse(readFileSync(file, 'utf-8'));
+      const filtered = entries.filter((e: any) => e.email.toLowerCase().trim() !== normalizedEmail);
+      if (filtered.length !== entries.length) {
+        writeFileSync(file, JSON.stringify(filtered, null, 2), 'utf-8');
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 }
 export async function removeProviderFromAccount(email: string, provider: string): Promise<{ accountDeleted: boolean }> {
   const normalizedEmail = email.toLowerCase().trim();
@@ -582,6 +596,23 @@ export async function removeProviderFromAccount(email: string, provider: string)
     acct.disabledProviders = acct.disabledProviders.filter((p) => p !== provider);
   }
   saveAccountsToFile(accounts);
+
+  // Remove from the specific provider's auth file
+  const authFileMap: Record<string, string> = { qwen: AUTH_QWEN_FILE, deepseek: AUTH_DEEPSEEK_FILE, glm: AUTH_GLM_FILE };
+  const providerAuthFile = authFileMap[provider];
+  if (providerAuthFile) {
+    try {
+      if (existsSync(providerAuthFile)) {
+        let entries = JSON.parse(readFileSync(providerAuthFile, 'utf-8'));
+        const filtered = entries.filter((e: any) => e.email.toLowerCase().trim() !== normalizedEmail);
+        if (filtered.length !== entries.length) {
+          writeFileSync(providerAuthFile, JSON.stringify(filtered, null, 2), 'utf-8');
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
 
   const hasOnlyDefaultProviders =
     !acct.providers || acct.providers.length === 0 || (acct.providers.length === 1 && acct.providers[0] === 'qwen');

@@ -1,0 +1,3 @@
+qwen: #5D5EB5
+deepseek: #4D6BFE
+glm: #f8f8f8
