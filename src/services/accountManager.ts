@@ -451,15 +451,44 @@ export function loadAccountsFromFile(): PersistedAccountData[] {
 
   return fallback;
 }
+/** Append email+password to a per-provider auth file if not already present */
+function appendToAuthFile(file: string, email: string, password: string): void {
+  let entries: Array<{ email: string; password: string }> = [];
+  try {
+    if (existsSync(file)) entries = JSON.parse(readFileSync(file, 'utf-8'));
+  } catch {
+    /* ignore corrupt file */
+  }
+  if (entries.some((e) => e.email.toLowerCase().trim() === email.toLowerCase().trim())) return;
+  entries.push({ email, password });
+  writeFileSync(file, JSON.stringify(entries, null, 2), 'utf-8');
+}
+
 export async function addAccount(
   email: string,
   password: string,
   providers?: string[],
 ): Promise<{ loginSucceeded: boolean; loginError?: string }> {
   const normalizedEmail = email.toLowerCase().trim();
+  const newProviders = (providers || ['qwen']).map((p) => p.toLowerCase().trim());
   const existing = accounts.find((a) => a.email.toLowerCase().trim() === normalizedEmail);
   if (existing) {
-    throw new Error(`Account with email ${normalizedEmail} already exists`);
+    // Email exists — check if any requested providers aren't already configured
+    const alreadyHas = (existing.providers || []).map((p) => p.toLowerCase().trim());
+    const missing = newProviders.filter((p) => !alreadyHas.includes(p));
+    if (missing.length === 0) {
+      throw new Error(`Account with email ${normalizedEmail} already exists with providers: ${alreadyHas.join(', ')}`);
+    }
+    // Merge new providers into existing account
+    existing.providers = [...new Set([...(existing.providers || []), ...missing])];
+    rebuildEmailIndex();
+    saveAccountsToFile(accounts);
+    // Sync per-provider auth files
+    const authFileMap: Record<string, string> = { qwen: AUTH_QWEN_FILE, deepseek: AUTH_DEEPSEEK_FILE, glm: AUTH_GLM_FILE };
+    for (const p of missing) {
+      if (authFileMap[p]) appendToAuthFile(authFileMap[p], normalizedEmail, password);
+    }
+    return { loginSucceeded: false, loginError: 'Provider(s) added: ' + missing.join(', ') + '. Login needed.' };
   }
   const entry: AccountEntry = {
     email: normalizedEmail,
@@ -478,6 +507,11 @@ export async function addAccount(
   accounts.push(entry);
   rebuildEmailIndex();
   saveAccountsToFile(accounts);
+  // Sync per-provider auth files
+  const authFileMap: Record<string, string> = { qwen: AUTH_QWEN_FILE, deepseek: AUTH_DEEPSEEK_FILE, glm: AUTH_GLM_FILE };
+  for (const p of entry.providers || providers || ['qwen']) {
+    if (authFileMap[p]) appendToAuthFile(authFileMap[p], normalizedEmail, password);
+  }
 
   // Step 1: Create and authorize the browser profile
   const { openBrowserProfile } = await import('./browserProfiles.ts');
