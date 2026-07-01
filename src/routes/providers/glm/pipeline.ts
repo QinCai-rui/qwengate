@@ -22,7 +22,7 @@ const GLM_FETCH_TIMEOUT = 60_000;
 /**
  * Convert OpenAI messages to GLM history format.
  */
-function messagesToGlmFormat(messages: Array<{ role: string; content: string | null }>): {
+function messagesToGlmFormat(messages: Array<{ role: string; content: string | null | Array<any> }>): {
   messages: Record<string, any>;
   currentId: string | null;
 } {
@@ -31,13 +31,23 @@ function messagesToGlmFormat(messages: Array<{ role: string; content: string | n
   let currentId: string | null = null;
 
   for (const msg of messages) {
+    // Handle content arrays (OpenAI format: [{type:"text", text:"..."}])
+    let contentStr = '';
+    if (Array.isArray(msg.content)) {
+      contentStr = msg.content.map((c: any) => c.text || JSON.stringify(c)).join('\n');
+    } else if (typeof msg.content === 'object' && msg.content !== null) {
+      contentStr = JSON.stringify(msg.content);
+    } else {
+      contentStr = msg.content ?? '';
+    }
+
     const id = crypto.randomUUID();
     currentId = id;
     result[id] = {
       id,
       parentId: prevId,
       role: msg.role === 'assistant' ? 'assistant' : 'user',
-      content: msg.content || '',
+      content: contentStr,
       timestamp: Date.now(),
       done: true,
     };

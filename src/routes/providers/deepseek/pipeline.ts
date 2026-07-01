@@ -30,12 +30,21 @@ const DEEPSEEK_FETCH_TIMEOUT = 60_000;
 /**
  * Convert OpenAI messages to a single prompt string (DeepSeek web chat uses prompt, not messages).
  */
-function messagesToPrompt(messages: Array<{ role: string; content: string | null }>): string {
+function messagesToPrompt(messages: Array<{ role: string; content: string | null | Array<any> }>): string {
   return messages
     .map(function (m) {
-      if (m.role === 'system') return '<system>' + (m.content ?? '') + '</system>';
-      if (m.role === 'assistant') return '<Assistant>' + (m.content ?? '') + '</Assistant>';
-      return '<user>' + (m.content ?? '') + '</user>';
+      // Handle content arrays (OpenAI format: [{type:"text", text:"..."}])
+      let contentStr = '';
+      if (Array.isArray(m.content)) {
+        contentStr = m.content.map((c: any) => c.text || JSON.stringify(c)).join('\n');
+      } else if (typeof m.content === 'object' && m.content !== null) {
+        contentStr = JSON.stringify(m.content);
+      } else {
+        contentStr = m.content ?? '';
+      }
+      if (m.role === 'system') return '<system>' + contentStr + '</system>';
+      if (m.role === 'assistant') return '<Assistant>' + contentStr + '</Assistant>';
+      return '<user>' + contentStr + '</user>';
     })
     .join('\n');
 }
