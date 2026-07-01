@@ -24,7 +24,7 @@ const PROVIDERS: ProviderMeta[] = [
   {
     key: 'qwen',
     label: 'Qwen',
-    color: '#0071e3',
+    color: '#5D5EB5',
     icon: '<path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>',
     description: 'Free Qwen models (3.7-Max, 3-Max, 3-Plus) via chat.qwen.ai.',
     loginUrlLabel: 'chat.qwen.ai',
@@ -50,9 +50,9 @@ const PROVIDERS: ProviderMeta[] = [
 /* ── Provider list page (cards) ─────────────────────────────────────── */
 
 function providerCardHtml(p: ProviderMeta): string {
-  return `<a href="/dashboard/providers/${p.key}" class="provider-card" style="--card-accent:${p.color};border-left:3px solid ${p.color}">
+  return `<a href="/dashboard/providers/${p.key}" class="provider-card" style="--card-accent:${p.color}">
     <div class="provider-card-icon">
-      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${p.icon}</svg>
+      <img src="/dashboard/static/${p.key === 'glm' ? 'z.ai-logo.webp' : p.key + '-logo.' + (p.key === 'qwen' ? 'jpeg' : 'png')}" width="28" height="28" alt="${p.label}">
     </div>
     <div class="provider-card-body">
       <h3>${p.label}</h3>
