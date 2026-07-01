@@ -52,7 +52,7 @@ const PROVIDERS: ProviderMeta[] = [
 function providerCardHtml(p: ProviderMeta): string {
   return `<a href="/dashboard/providers/${p.key}" class="provider-card" style="--card-accent:${p.color}">
     <div class="provider-card-icon">
-      <img src="/dashboard/static/${p.key === 'glm' ? 'z.ai-logo.webp' : p.key + '-logo.' + (p.key === 'qwen' ? 'jpeg' : 'png')}" width="28" height="28" alt="${p.label}">
+      <img src="/dashboard/static/${p.key === 'glm' ? 'z.ai-logo.png' : p.key + '-logo.png'}" width="28" height="28" alt="${p.label}">
     </div>
     <div class="provider-card-body">
       <h3>${p.label}</h3>
