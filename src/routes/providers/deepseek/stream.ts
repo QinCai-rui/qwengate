@@ -66,7 +66,7 @@ function applyPatch(state: DeepSeekStreamState, path: string, op: string, value:
     return;
   }
 
-  // New fragment appended via response/fragments
+  // New fragment appended via response/fragments — update type and accumulate initial content
   if (path === 'response/fragments' && op === 'APPEND' && Array.isArray(value)) {
     for (var fi = 0; fi < value.length; fi++) {
       var newFrag = value[fi];
