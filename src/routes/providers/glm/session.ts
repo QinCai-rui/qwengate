@@ -66,14 +66,9 @@ export async function getCurrentUser(jwt: string): Promise<GlmUser | null> {
 
 /**
  * Get or create a chat session for this JWT.
- * Uses wreqFetch for all API calls. Caches for 30 minutes.
+ * Uses wreqFetch for all API calls. Fresh session per request — no cache (each request is independent).
  */
 export async function getOrCreateChatSession(jwt: string, model: string): Promise<GlmChatSession | null> {
-  const cached = sessionCache.get(jwt);
-  if (cached && Date.now() - cached.timestamp < SESSION_TTL) {
-    return cached.session;
-  }
-
   const { wreqFetch } = await import('../../../services/wreqFetch.ts');
 
   try {
