@@ -46,16 +46,55 @@ export function createStreamState(): DeepSeekStreamState {
 }
 
 /**
- * Apply a single JSON Patch-like operation to the stream state.
+ * Build an SSE chunk string for a content delta.
  */
-function applyPatch(state: DeepSeekStreamState, path: string, op: string, value: any): void {
+function buildPatchChunk(content: string, isThinking: boolean, sessionId: string, model: string, ts: number): string {
+  const delta: any = {};
+  if (isThinking) delta.reasoning_content = content;
+  else delta.content = content;
+  return (
+    'data: ' +
+    JSON.stringify({
+      id: sessionId,
+      object: 'chat.completion.chunk',
+      created: ts,
+      model: model,
+      choices: [{ index: 0, delta, finish_reason: null }],
+    }) +
+    '\n\n'
+  );
+}
+
+/**
+ * Apply a single JSON Patch-like operation to the stream state.
+ * Returns accumulated SSE chunks for content changes.
+ */
+function applyPatch(
+  state: DeepSeekStreamState,
+  path: string,
+  op: string,
+  value: any,
+  sessionId?: string,
+  model?: string,
+  ts?: number,
+): string[] {
+  var chunks: string[] = [];
+
   // BATCH operation: value is an array of sub-patches
   if (op === 'BATCH' && Array.isArray(value)) {
     for (var i = 0; i < value.length; i++) {
       var sub = value[i];
-      applyPatch(state, sub.p, sub.o || 'SET', sub.v);
+      const subChunks = applyPatch(state, sub.p, sub.o || 'SET', sub.v, sessionId, model, ts);
+      for (const c of subChunks) chunks.push(c);
     }
-    return;
+    return chunks;
+  }
+
+  // Helper to emit a chunk for content updates
+  function emitContentChunk(content: string, isThinking: boolean): void {
+    if (sessionId && model && ts !== undefined && content) {
+      chunks.push(buildPatchChunk(content, isThinking, sessionId, model, ts));
+    }
   }
 
   // APPEND / SET operations
@@ -63,7 +102,7 @@ function applyPatch(state: DeepSeekStreamState, path: string, op: string, value:
     if (value === 'FINISHED') {
       state.isFinished = true;
     }
-    return;
+    return chunks;
   }
 
   // New fragment appended via response/fragments — update type and accumulate initial content
@@ -73,41 +112,43 @@ function applyPatch(state: DeepSeekStreamState, path: string, op: string, value:
       if (newFrag && newFrag.type) {
         state._fragmentType = String(newFrag.type);
         var fragContent = newFrag.content || '';
-        if (
+        var isThinking =
           state._fragmentType === 'THINKING' ||
           state._fragmentType === 'thinking' ||
           state._fragmentType === 'THINK' ||
-          state._fragmentType === 'think'
-        ) {
+          state._fragmentType === 'think';
+        if (isThinking) {
           state.thinkingContent += fragContent;
         } else {
           state.content += fragContent;
         }
+        emitContentChunk(fragContent, isThinking);
       }
     }
-    return;
+    return chunks;
   }
 
   // Content append/set on the last fragment — treat both APPEND and SET as appends for streaming
   if (path === 'response/fragments/-1/content') {
     if (typeof value === 'string') {
-      if (
+      var isThinking: boolean =
         state._fragmentType === 'THINKING' ||
         state._fragmentType === 'thinking' ||
         state._fragmentType === 'THINK' ||
-        state._fragmentType === 'think'
-      ) {
+        state._fragmentType === 'think';
+      if (isThinking) {
         state.thinkingContent += value;
       } else {
         state.content += value;
       }
+      emitContentChunk(value, isThinking);
     }
-    return;
+    return chunks;
   }
 
   if (path === 'response/fragments/-1/type' && op === 'SET') {
     state._fragmentType = String(value);
-    return;
+    return chunks;
   }
 
   // Handle accumulated_token_usage via batch sub-patches
@@ -120,15 +161,17 @@ function applyPatch(state: DeepSeekStreamState, path: string, op: string, value:
         state.usage.total_tokens = state.usage.prompt_tokens + value;
       }
     }
-    return;
+    return chunks;
   }
 
   if (path === 'quasi_status') {
     if (value === 'FINISHED') {
       state.isFinished = true;
     }
-    return;
+    return chunks;
   }
+
+  return chunks;
 }
 
 /**
@@ -325,7 +368,8 @@ export function parseDeepSeekData(
 
   // Handle patch operations: { p: path, o: op, v: value }
   if (parsed.p !== undefined) {
-    applyPatch(state, parsed.p, parsed.o || 'SET', parsed.v);
+    const patchChunks = applyPatch(state, parsed.p, parsed.o || 'SET', parsed.v, sessionId, model, ts);
+    for (const c of patchChunks) chunks.push(c);
     return { chunks, done: state.isFinished };
   }
 
