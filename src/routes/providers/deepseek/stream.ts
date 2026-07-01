@@ -66,9 +66,41 @@ function applyPatch(state: DeepSeekStreamState, path: string, op: string, value:
     return;
   }
 
-  if (path === 'response/fragments/-1/content' && op === 'APPEND') {
+  // New fragment appended via response/fragments
+  if (path === 'response/fragments' && op === 'APPEND' && Array.isArray(value)) {
+    for (var fi = 0; fi < value.length; fi++) {
+      var newFrag = value[fi];
+      if (newFrag && newFrag.type) {
+        state._fragmentType = String(newFrag.type);
+        var fragContent = newFrag.content || '';
+        if (
+          state._fragmentType === 'THINKING' ||
+          state._fragmentType === 'thinking' ||
+          state._fragmentType === 'THINK' ||
+          state._fragmentType === 'think'
+        ) {
+          state.thinkingContent += fragContent;
+        } else {
+          state.content += fragContent;
+        }
+      }
+    }
+    return;
+  }
+
+  // Content append/set on the last fragment — treat both APPEND and SET as appends for streaming
+  if (path === 'response/fragments/-1/content') {
     if (typeof value === 'string') {
-      state.content += value;
+      if (
+        state._fragmentType === 'THINKING' ||
+        state._fragmentType === 'thinking' ||
+        state._fragmentType === 'THINK' ||
+        state._fragmentType === 'think'
+      ) {
+        state.thinkingContent += value;
+      } else {
+        state.content += value;
+      }
     }
     return;
   }
@@ -162,7 +194,7 @@ export function parseDeepSeekData(
         var fragType = frag.type || 'RESPONSE';
         var fragContent = frag.content || '';
 
-        if (fragType === 'THINKING' || fragType === 'thinking') {
+        if (fragType === 'THINKING' || fragType === 'thinking' || fragType === 'THINK' || fragType === 'think') {
           state.thinkingContent += fragContent;
           state._fragmentType = 'THINKING';
           // Emit reasoning_content for thinking fragments
