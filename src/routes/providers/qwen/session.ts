@@ -122,7 +122,8 @@ function buildQwenMessages(messages: any[], body: any, availableTokens: number, 
 
       if (sanitized.length === 0) continue;
 
-      const charLimit = Math.floor(availableTokens * 3.0);
+      const effectiveTokens = Math.max(availableTokens, 256);
+      const charLimit = Math.floor(effectiveTokens * 3.0);
       const truncated =
         sanitized.length > charLimit
           ? sanitized.substring(0, charLimit) +

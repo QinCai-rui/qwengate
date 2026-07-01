@@ -80,7 +80,9 @@ export async function proxyViaGlmWebChat(
   }
 
   // 3. Convert messages to GLM format
-  const history = messagesToGlmFormat(body.messages || []);
+  // Filter out system messages — context.txt is Qwen-only
+  const chatMessages = (body.messages || []).filter((m: any) => m.role !== 'system');
+  const history = messagesToGlmFormat(chatMessages);
   const variables = buildGlmVariables(ctx);
 
   const glmFeatures: Record<string, any> = {
@@ -92,15 +94,19 @@ export async function proxyViaGlmWebChat(
     vlm_tools_enable: false,
     vlm_web_search_enable: false,
     vlm_website_mode: false,
-    enable_thinking: true,
+    enable_thinking: !!ctx.jwt,
     reasoning_effort: model.includes('glm-5') ? 'max' : '',
   };
 
   const glmBody: Record<string, any> = {
     stream: true,
     model,
-    messages: body.messages || [],
-    signature_prompt: (body.messages && body.messages[0]?.content) || '',
+    messages: chatMessages,
+    signature_prompt:
+      chatMessages
+        .map((m: any) => m.content || '')
+        .join('\n')
+        .slice(0, 500) || '',
     params: {},
     extra: {},
     features: glmFeatures,
