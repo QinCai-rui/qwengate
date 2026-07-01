@@ -11,10 +11,11 @@ import type { OpenAIRequest } from '../../../types/openai.ts';
 import { logStore } from '../../../services/logStore.ts';
 import { getProviderState } from '../../../services/accountManager.ts';
 import { getOrCreateChatSession, getCurrentUser } from './session.ts';
-import { buildFingerprintParams, buildGlmHeaders, buildGlmVariables, GLM_BASE_URL } from './spoofing.ts';
+import { buildFingerprintParams, buildGlmHeaders, buildGlmVariables, computeSignature, GLM_BASE_URL } from './spoofing.ts';
 import { type GlmStreamState, createGlmStreamState, parseGlmSseLine } from './stream.ts';
 import { cleanTextOfXmlArtifacts } from '../../../tools/xmlToolParser.ts';
 import { filterContent } from '../../../utils/contentFilter.ts';
+import { getCaptchaVerifyParam, invalidateCaptchaToken } from './captcha-solver.ts';
 
 const GLM_FETCH_TIMEOUT = 60_000;
 
@@ -109,7 +110,7 @@ export async function proxyViaGlmWebChat(
     current_user_message_id: history.currentId,
     current_user_message_parent_id: null,
     background_tasks: { title_generation: true, tags_generation: true },
-    captcha_verify_param: providerState?.captchaVerifyParam || '',
+    captcha_verify_param: await getCaptchaVerifyParam(),
   };
 
   // 4. Build fingerprint query string
@@ -118,8 +119,9 @@ export async function proxyViaGlmWebChat(
 
   // 5. Build spoofed headers with x-signature
   const bodyStr = JSON.stringify(glmBody);
-  const requestId = crypto.randomUUID();
-  const headers = await buildGlmHeaders(ctx, bodyStr, requestId);
+  const requestId = params.get('requestId') || crypto.randomUUID();
+  const signature = computeSignature(requestId, params.get('timestamp') || String(Date.now()), ctx.userId, ctx.jwt);
+  const headers = await buildGlmHeaders(ctx, bodyStr, requestId, signature);
 
   // 6. Send request to GLM via wreqFetch
   logStore.log('debug', 'glm-pipeline', `Fetching ${url.slice(0, 100)} via wreqFetch`);
@@ -141,6 +143,7 @@ export async function proxyViaGlmWebChat(
 
     // Detect captcha errors in response body
     if (errText.includes('FRONTEND_CAPTCHA') || errText.includes('captcha') || effStatus === 403) {
+      invalidateCaptchaToken();
       const err = new Error('GLM requires CAPTCHA verification. Login via dashboard → GLM → Login.');
       (err as any).upstreamStatus = 403;
       throw err;
@@ -169,6 +172,7 @@ export async function proxyViaGlmWebChat(
         const data = parsed.data || parsed;
 
         if (data.error?.code === 'FRONTEND_CAPTCHA_REQUIRED') {
+          invalidateCaptchaToken();
           const err = new Error('GLM requires CAPTCHA verification: ' + (data.error.detail || 'CAPTCHA required'));
           (err as any).upstreamStatus = 403;
           throw err;

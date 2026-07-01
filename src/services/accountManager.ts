@@ -21,6 +21,11 @@ const AUTH_FILE = projectPath('.auth', 'auth.json');
 const FALLBACK_AUTH_FILE = projectPath('.auth', 'auth.jsonc');
 const AUTH_DIR = projectPath('.auth');
 
+const AUTH_QWEN_FILE = projectPath('.auth', 'auth.qwen.json');
+const AUTH_DEEPSEEK_FILE = projectPath('.auth', 'auth.deepseek.json');
+const AUTH_GLM_FILE = projectPath('.auth', 'auth.glm.json');
+const AUTH_META_FILE = projectPath('.auth', 'auth.meta.json');
+
 const OLD_AUTH_FILE = projectPath('qwen_profile', 'accounts.json');
 
 function getProfileDirForEmail(email: string): string {
@@ -120,6 +125,7 @@ interface PersistedAccountData {
   password: string;
   providers?: string[];
   throttledUntil?: number;
+  disabled?: boolean;
   disabledProviders?: string[];
   providerStates?: { [provider: string]: { token?: string; expiresAt?: number; cookies?: string; captchaVerifyParam?: string } };
 }
@@ -242,35 +248,166 @@ export function rebuildEmailIndex(): void {
   }
 }
 
+/* ── Per-provider file persistence ── */
+
+interface PersistedMetaData {
+  throttled: Record<string, number>;
+  disabled: Record<string, boolean>;
+  disabledProviders: Record<string, string[]>;
+}
+
+function loadMetaFile(): PersistedMetaData {
+  try {
+    if (!existsSync(AUTH_META_FILE)) return { throttled: {}, disabled: {}, disabledProviders: {} };
+    const raw = readFileSync(AUTH_META_FILE, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return { throttled: {}, disabled: {}, disabledProviders: {} };
+  }
+}
+
+/** One-time migration: split old auth.json into per-provider files + meta. */
+function migrateAuthFiles(): void {
+  if (!existsSync(AUTH_FILE)) return;
+  if (existsSync(AUTH_QWEN_FILE)) return; // already migrated
+
+  logStore.log('info', 'auth', 'Migrating auth.json to per-provider files...');
+
+  try {
+    const raw = readFileSync(AUTH_FILE, 'utf-8');
+    const data = JSON.parse(stripJsoncComments(raw));
+    if (!Array.isArray(data)) return;
+
+    const qwen: Array<{ email: string; password: string }> = [];
+    const deepseek: Array<{ email: string; password: string }> = [];
+    const glm: Array<{ email: string; password: string }> = [];
+    const throttled: Record<string, number> = {};
+    const disabled: Record<string, boolean> = {};
+    const disabledProviders: Record<string, string[]> = {};
+
+    for (const acct of data) {
+      if (!acct.email || !acct.password) continue;
+      const providers = acct.providers || ['qwen'];
+      const password = decryptPassword(acct.password);
+      const entry = { email: acct.email, password };
+
+      if (providers.includes('qwen')) qwen.push(entry);
+      if (providers.includes('deepseek')) deepseek.push(entry);
+      if (providers.includes('glm')) glm.push(entry);
+
+      if (acct.throttledUntil > Date.now()) throttled[acct.email.toLowerCase().trim()] = acct.throttledUntil;
+      if (acct.disabled) disabled[acct.email.toLowerCase().trim()] = true;
+      if (acct.disabledProviders?.length) disabledProviders[acct.email.toLowerCase().trim()] = acct.disabledProviders;
+    }
+
+    const authDir = path.dirname(AUTH_FILE);
+    if (!existsSync(authDir)) mkdirSync(authDir, { recursive: true });
+
+    if (qwen.length > 0) writeFileSync(AUTH_QWEN_FILE, JSON.stringify(qwen, null, 2), 'utf-8');
+    if (deepseek.length > 0) writeFileSync(AUTH_DEEPSEEK_FILE, JSON.stringify(deepseek, null, 2), 'utf-8');
+    if (glm.length > 0) writeFileSync(AUTH_GLM_FILE, JSON.stringify(glm, null, 2), 'utf-8');
+    writeFileSync(AUTH_META_FILE, JSON.stringify({ throttled, disabled, disabledProviders }, null, 2), 'utf-8');
+
+    // Backup old auth.json
+    renameSync(AUTH_FILE, AUTH_FILE + '.bak');
+    logStore.log('info', 'auth', `Migrated ${data.length} accounts to per-provider auth files. Old auth.json backed up.`);
+  } catch (err: any) {
+    logStore.log('error', 'auth', `Migration failed: ${err.message} — falling back to auth.json`);
+  }
+}
+
+/**
+ * Save ONLY meta data (throttledUntil, disabled, disabledProviders) to .auth/auth.meta.json.
+ * Per-provider auth files are NOT written by the app — only user-edited.
+ * Tokens, cookies, captchaVerifyParam are NOT persisted to files — loaded from browser profiles.
+ */
 export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
-  const dir = path.dirname(AUTH_FILE);
+  const dir = path.dirname(AUTH_META_FILE);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-  const data: PersistedAccountData[] = accounts
-    .filter((a) => a.password)
-    .map((a) => {
-      const entry: PersistedAccountData = {
-        email: a.email,
-        password: a.password,
-        providers: a.providers && a.providers.length > 0 ? a.providers : undefined,
-        ...(a.throttledUntil > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
-        disabledProviders: a.disabledProviders && a.disabledProviders.length > 0 ? a.disabledProviders : undefined,
-      };
-      // Persist provider states (cookies, captchaVerifyParam) for GLM/DeepSeek
-      const ps: PersistedAccountData['providerStates'] = {};
-      for (const [provider, state] of Object.entries(a.providerStates)) {
-        if (state && (state.cookies || state.captchaVerifyParam)) {
-          ps[provider] = { cookies: state.cookies, captchaVerifyParam: state.captchaVerifyParam };
-        }
-      }
-      if (Object.keys(ps).length > 0) entry.providerStates = ps;
-      return entry;
-    });
-  writeFileSync(AUTH_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  const throttled: Record<string, number> = {};
+  const disabled: Record<string, boolean> = {};
+  const disabledProviders: Record<string, string[]> = {};
+
+  for (const acct of accounts) {
+    if (acct.throttledUntil > Date.now()) {
+      throttled[acct.email] = acct.throttledUntil;
+    }
+    if (acct.disabled) {
+      disabled[acct.email] = true;
+    }
+    if (acct.disabledProviders && acct.disabledProviders.length > 0) {
+      disabledProviders[acct.email] = acct.disabledProviders;
+    }
+  }
+
+  writeFileSync(AUTH_META_FILE, JSON.stringify({ throttled, disabled, disabledProviders }, null, 2), 'utf-8');
 }
 export function loadAccountsFromFile(): PersistedAccountData[] {
-  const tryLoad = (filePath: string): PersistedAccountData[] | null => {
+  // Migration: if auth.json exists but no per-provider files, migrate
+  migrateAuthFiles();
+
+  // Try per-provider files
+  const providerConfigs: Array<{ file: string; name: string }> = [
+    { file: AUTH_QWEN_FILE, name: 'qwen' },
+    { file: AUTH_DEEPSEEK_FILE, name: 'deepseek' },
+    { file: AUTH_GLM_FILE, name: 'glm' },
+  ];
+
+  const loaded: Array<{ entries: Array<{ email: string; password: string }>; name: string }> = [];
+  let hasAnyProviderFile = false;
+
+  for (const { file, name } of providerConfigs) {
+    try {
+      if (!existsSync(file)) continue;
+      const raw = readFileSync(file, 'utf-8');
+      const entries = JSON.parse(stripJsoncComments(raw));
+      if (!Array.isArray(entries) || entries.length === 0) continue;
+      hasAnyProviderFile = true;
+      loaded.push({ entries, name });
+    } catch {
+      // skip unreadable files
+    }
+  }
+
+  if (hasAnyProviderFile) {
+    // Merge accounts by email — providers = which files the account appeared in
+    const accountMap = new Map<string, PersistedAccountData>();
+
+    for (const { entries, name } of loaded) {
+      for (const entry of entries) {
+        const email = entry.email?.toLowerCase().trim();
+        if (!email || !entry.password) continue;
+        const existing = accountMap.get(email);
+        if (existing) {
+          if (!existing.providers?.includes(name)) {
+            existing.providers = [...(existing.providers || []), name];
+          }
+        } else {
+          accountMap.set(email, {
+            email: entry.email,
+            password: decryptPassword(entry.password),
+            providers: [name],
+          });
+        }
+      }
+    }
+
+    // Load meta data (throttledUntil, disabled, disabledProviders)
+    const meta = loadMetaFile();
+    for (const [, data] of accountMap) {
+      const key = data.email.toLowerCase().trim();
+      if (meta.throttled[key]) data.throttledUntil = meta.throttled[key];
+      if (meta.disabled[key]) data.disabled = true;
+      if (meta.disabledProviders[key]) data.disabledProviders = meta.disabledProviders[key];
+    }
+
+    return Array.from(accountMap.values());
+  }
+
+  // Fall back to old auth.json (backward compatibility)
+  const tryLoadOld = (filePath: string): PersistedAccountData[] | null => {
     try {
       if (!existsSync(filePath)) return null;
       const raw = readFileSync(filePath, 'utf-8');
@@ -291,10 +428,10 @@ export function loadAccountsFromFile(): PersistedAccountData[] {
     }
   };
 
-  // Phase 2: Restore provider states from persisted data
-  const persisted = tryLoad(AUTH_FILE) ?? tryLoad(FALLBACK_AUTH_FILE) ?? [];
-  // Update in-memory accounts with persisted provider states
-  for (const p of persisted) {
+  const fallback = tryLoadOld(AUTH_FILE) ?? tryLoadOld(FALLBACK_AUTH_FILE) ?? [];
+
+  // Phase 2 (backward compat): Restore provider states from old persisted data
+  for (const p of fallback) {
     if (p.providerStates) {
       const acct = accounts.find((a) => a.email.toLowerCase().trim() === p.email.toLowerCase().trim());
       if (acct) {
@@ -311,7 +448,8 @@ export function loadAccountsFromFile(): PersistedAccountData[] {
       }
     }
   }
-  return persisted;
+
+  return fallback;
 }
 export async function addAccount(
   email: string,
@@ -489,7 +627,10 @@ export function setupAccountWatcher(): void {
   }
   try {
     accountWatcher = watch(AUTH_DIR, (_eventType: string, filename: string | null) => {
-      if (!filename || filename !== 'auth.json') return;
+      // Watch per-provider files and legacy auth.json for user edits
+      if (!filename) return;
+      const watchedFiles = ['auth.qwen.json', 'auth.deepseek.json', 'auth.glm.json', 'auth.json'];
+      if (!watchedFiles.includes(filename)) return;
       if (reloadDebounceTimer) clearTimeout(reloadDebounceTimer);
       reloadDebounceTimer = setTimeout(() => {
         reloadDebounceTimer = null;
@@ -608,7 +749,11 @@ export async function pickAccountForProvider(provider: string, excludeEmail?: st
     if (available.length === 0) {
       const throttled = accounts.filter((a) => a.throttledUntil > Date.now()).length;
       const noState = accounts.filter((a) => !a.providerStates[provider]?.token).length;
-      logStore.log('warn', 'auth', `All accounts exhausted for provider ${provider} — ${throttled} throttled, ${noState} no ${provider} token`);
+      logStore.log(
+        'warn',
+        'auth',
+        `All accounts exhausted for provider ${provider} — ${throttled} throttled, ${noState} no ${provider} token`,
+      );
       return null;
     }
     const pool = available.filter((a) => a.inFlight === 0);

@@ -229,11 +229,11 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
     const { saveAccountsToFile } = await import('./accountManager.ts');
     saveAccountsToFile(accounts);
 
-    // Phase 2: Login accounts that don't have tokens yet — max 3 concurrent
-    // Only login accounts configured for qwen (checked via providers array)
+    // Phase 2: Auto-login Qwen accounts (saves cookies to profile localStorage)
+    // Only login accounts configured for qwen
     const needLogin = accounts.filter((a) => (a.providers || ['qwen']).includes('qwen') && !a.providerStates.qwen?.token && a.password);
     if (needLogin.length > 0) {
-      logStore.log('info', 'auth', `Logging in ${needLogin.length} accounts (max ${MAX_CONCURRENT_PROFILE_LOADS} concurrent)...`);
+      logStore.log('info', 'auth', `Logging in ${needLogin.length} Qwen accounts (max ${MAX_CONCURRENT_PROFILE_LOADS} concurrent)...`);
       for (let i = 0; i < needLogin.length; i += MAX_CONCURRENT_PROFILE_LOADS) {
         const batch = needLogin.slice(i, i + MAX_CONCURRENT_PROFILE_LOADS);
         await Promise.allSettled(
@@ -248,7 +248,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       }
     }
 
-    // Phase 2.5: Auto-login DeepSeek and GLM accounts (headless stealth)
+    // Phase 2.5: Auto-login DeepSeek accounts (saves cookies to profile localStorage)
     const dsNeedLogin = accounts.filter(
       (a) => (a.providers || ['qwen']).includes('deepseek') && !a.providerStates.deepseek?.token && a.password,
     );
@@ -259,27 +259,13 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
         if (result.status === 'success' && result.result) {
           acct.providerStates.deepseek = result.result;
         }
-        // captcha/error — user clicks Login button later
       } catch (err: any) {
         logStore.log('error', 'auth', `DeepSeek auto-login failed for ${acct.email}: ${err.message}`);
       }
     }
 
-    const glmNeedLogin = accounts.filter((a) => (a.providers || ['qwen']).includes('glm') && !a.providerStates.glm?.token && a.password);
-    for (const acct of glmNeedLogin) {
-      try {
-        const { loginGlmAuto } = await import('./glmLogin.ts');
-        const result = await loginGlmAuto(acct.email, acct.password);
-        if (result.status === 'success' && result.result) {
-          acct.providerStates.glm = result.result;
-        }
-        // captcha/error — user clicks Login button later
-      } catch (err: any) {
-        logStore.log('error', 'auth', `GLM auto-login failed for ${acct.email}: ${err.message}`);
-      }
-    }
+    // GLM: no auto-login (always requires captcha). Token must come from profile or token file.
 
-    // Persist provider states after auto-login (DeepSeek/GLM tokens)
     saveAccountsToFile(accounts);
 
     // Phase 3: Run post-login callbacks in parallel

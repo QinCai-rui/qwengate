@@ -709,8 +709,26 @@ export async function loadSessionFromProfile(
     } else if (provider === 'glm') {
       // GLM: token is in the `token` cookie (HttpOnly, set on chat.z.ai domain)
       const cookies = await context.cookies('https://chat.z.ai');
-      const tokenCookie = cookies.find((c: any) => c.name === 'token' && c.value);
+      let tokenCookie = cookies.find((c: any) => c.name === 'token' && c.value);
+
+      // Fallback: read from .auth/tokens/glm-<email>.txt (bootstrap token)
       if (!tokenCookie?.value) {
+        try {
+          const tokenFile = projectPath('.auth', 'tokens', `glm-${email.toLowerCase().replace(/[^a-z0-9@._-]/g, '_')}.txt`);
+          if (existsSync(tokenFile)) {
+            const fileToken = readFileSync(tokenFile, 'utf-8').trim();
+            if (fileToken && fileToken.length > 20) {
+              logStore.log('info', 'browser', `Loaded GLM token from token file for ${email}`);
+              await context.close().catch(() => {});
+              return {
+                token: fileToken,
+                expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
+              };
+            }
+          }
+        } catch {
+          // ignore
+        }
         await context.close().catch(() => {});
         return null;
       }
