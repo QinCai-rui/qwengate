@@ -706,12 +706,143 @@ export async function loadSessionFromProfile(
       } finally {
         await page.close().catch(() => {});
       }
+
+      // No DeepSeek token found — try headless auto-login to populate profile
+      await context.close().catch(() => {});
+      context = null;
+
+      try {
+        // Get password from auth files
+        let password = '';
+        try {
+          for (const authFile of [projectPath('.auth', 'auth.deepseek.json'), projectPath('.auth', 'auth.qwen.json')]) {
+            if (!existsSync(authFile)) continue;
+            const entries = JSON.parse(readFileSync(authFile, 'utf-8'));
+            const entry = entries.find((e: any) => e.email.toLowerCase().trim() === email.toLowerCase().trim());
+            if (entry?.password) {
+              password = entry.password;
+              break;
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+
+        if (password) {
+          const outcome = await autoLoginViaBrowser(email, password, {
+            provider: 'deepseek',
+            authUrl: 'https://chat.deepseek.com/',
+            authPagePaths: ['/auth', '/login'],
+          });
+
+          if (outcome.status === 'success' && outcome.token) {
+            logStore.log('info', 'browser', `Auto-logged in DeepSeek for ${email} — retrying profile load`);
+
+            // Re-read from profile (auto-login saved to persistent profile)
+            context = await setupBrowserContext(email, true);
+            const retryPage = await context.newPage();
+            await retryPage.goto('https://chat.deepseek.com/', { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => {});
+            const retryResult = await retryPage.evaluate(() => {
+              try {
+                const raw = localStorage.getItem('userToken');
+                if (!raw) return null;
+                const parsed = JSON.parse(raw);
+                return parsed?.value || null;
+              } catch {
+                return null;
+              }
+            });
+            await retryPage.close().catch(() => {});
+
+            if (retryResult && typeof retryResult === 'string' && retryResult.length > 20) {
+              const dsCookies = await context.cookies('https://chat.deepseek.com');
+              const dsCookieStr = dsCookies
+                .filter((c: any) => c.value)
+                .map((c: any) => `${c.name}=${c.value}`)
+                .join('; ');
+              logStore.log('info', 'browser', `Loaded DeepSeek token from profile localStorage for ${email} (${dsCookies.length} cookies)`);
+              await context.close().catch(() => {});
+              return { token: retryResult, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000, cookieStr: dsCookieStr };
+            }
+          }
+        }
+      } catch (err: any) {
+        logStore.log('warn', 'browser', `DeepSeek auto-login failed for ${email}: ${err.message}`);
+      }
     } else if (provider === 'glm') {
       // GLM: token is in the `token` cookie (HttpOnly, set on chat.z.ai domain)
       const cookies = await context.cookies('https://chat.z.ai');
-      const tokenCookie = cookies.find((c: any) => c.name === 'token' && c.value);
+      let tokenCookie = cookies.find((c: any) => c.name === 'token' && c.value);
+
+      // If no GLM token in profile, open headed browser for manual login
       if (!tokenCookie?.value) {
         await context.close().catch(() => {});
+        context = null;
+
+        logStore.log('info', 'browser', `No GLM token in profile for ${email} — opening headed browser for manual login`);
+
+        // Use openBrowserProfile-style flow: headed browser, user logs in manually
+        try {
+          // Open headed browser with persistent profile
+          context = await setupBrowserContext(email, false);
+          let loginPage: any = null;
+          try {
+            loginPage = context.pages()[0] || (await context.newPage());
+
+            // Navigate to GLM auth page — use 'load' not 'networkidle' (SPA issue)
+            await loginPage.goto('https://chat.z.ai/auth', { waitUntil: 'load', timeout: 30000 }).catch(() => {});
+
+            // Give JS time to render
+            await new Promise((r) => setTimeout(r, 4000));
+
+            logStore.log('info', 'browser', `Waiting for manual GLM login for ${email} at https://chat.z.ai/auth...`);
+
+            // Wait up to 5 minutes for login (URL changes away from /auth)
+            const loginTimeout = Date.now() + 5 * 60 * 1000;
+            let loggedIn = false;
+            while (Date.now() < loginTimeout) {
+              await new Promise((r) => setTimeout(r, 3000));
+              try {
+                const currentUrl = loginPage.url();
+                if (!currentUrl.includes('/auth')) {
+                  loggedIn = true;
+                  break;
+                }
+              } catch {
+                break;
+              }
+            }
+
+            await loginPage.close().catch(() => {});
+
+            if (loggedIn) {
+              // Token was saved to profile cookies — re-read
+              const glmCookies = await context.cookies('https://chat.z.ai');
+              tokenCookie = glmCookies.find((c: any) => c.name === 'token' && c.value);
+              if (tokenCookie?.value) {
+                logStore.log('info', 'browser', `Loaded GLM JWT from profile cookie after manual login for ${email}`);
+                const glmCookieStr = glmCookies
+                  .filter((c: any) => c.value)
+                  .map((c: any) => `${c.name}=${c.value}`)
+                  .join('; ');
+                await context.close().catch(() => {});
+                return {
+                  token: tokenCookie.value,
+                  expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
+                  cookieStr: glmCookieStr,
+                };
+              }
+            } else {
+              logStore.log('warn', 'browser', `GLM manual login timed out for ${email}`);
+            }
+          } finally {
+            if (loginPage) await loginPage.close().catch(() => {});
+          }
+        } catch (err: any) {
+          logStore.log('warn', 'browser', `GLM manual login failed for ${email}: ${err.message}`);
+        }
+
+        if (context) await context.close().catch(() => {});
         return null;
       }
 

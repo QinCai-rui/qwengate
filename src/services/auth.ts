@@ -225,48 +225,12 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       }
     }
 
-    // Persist any provider states loaded from profiles (cookies, captchaVerifyParam)
+    // Persist any provider states loaded from profiles
     const { saveAccountsToFile } = await import('./accountManager.ts');
     saveAccountsToFile(accounts);
 
-    // Phase 2: Auto-login Qwen accounts (saves cookies to profile localStorage)
-    // Only login accounts configured for qwen
-    const needLogin = accounts.filter((a) => (a.providers || ['qwen']).includes('qwen') && !a.providerStates.qwen?.token && a.password);
-    if (needLogin.length > 0) {
-      logStore.log('info', 'auth', `Logging in ${needLogin.length} Qwen accounts (max ${MAX_CONCURRENT_PROFILE_LOADS} concurrent)...`);
-      for (let i = 0; i < needLogin.length; i += MAX_CONCURRENT_PROFILE_LOADS) {
-        const batch = needLogin.slice(i, i + MAX_CONCURRENT_PROFILE_LOADS);
-        await Promise.allSettled(
-          batch.map(async (acct) => {
-            const newState = await loginFresh(acct.email, acct.password);
-            if (newState) {
-              acct.providerStates.qwen = { ...newState, lastLoginAttempt: null };
-              await saveCookies(acct.email, newState.token, newState.refreshToken, newState.expiresAt);
-            }
-          }),
-        );
-      }
-    }
-
-    // Phase 2.5: Auto-login DeepSeek accounts (saves cookies to profile localStorage)
-    const dsNeedLogin = accounts.filter(
-      (a) => (a.providers || ['qwen']).includes('deepseek') && !a.providerStates.deepseek?.token && a.password,
-    );
-    for (const acct of dsNeedLogin) {
-      try {
-        const { loginDeepseekAuto } = await import('./deepseekLogin.ts');
-        const result = await loginDeepseekAuto(acct.email, acct.password);
-        if (result.status === 'success' && result.result) {
-          acct.providerStates.deepseek = result.result;
-        }
-      } catch (err: any) {
-        logStore.log('error', 'auth', `DeepSeek auto-login failed for ${acct.email}: ${err.message}`);
-      }
-    }
-
-    // GLM: no auto-login (always requires captcha). Token must come from profile or token file.
-
-    saveAccountsToFile(accounts);
+    // Phase 2: No auto-login at startup. All tokens loaded from profiles above.
+    // Auto-login (Qwen/DeepSeek) only happens when user clicks Login button in dashboard.
 
     // Phase 3: Run post-login callbacks in parallel
     if (onAccountReady) {

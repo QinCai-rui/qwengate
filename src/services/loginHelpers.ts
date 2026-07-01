@@ -429,10 +429,9 @@ export async function manualBrowserLogin(email: string, password: string, opts: 
     // Close any leftover initial pages to avoid blank tab clutter
     for (const p of pages) await p.close().catch(() => {});
 
-    // Use networkidle — DeepSeek is an SPA that renders via JS after DOMContentLoaded.
-    // domcontentloaded fires too early (before React renders), so the page shows blank.
-    // Original code used networkidle successfully.
-    await page.goto(opts.loginUrl, { waitUntil: 'networkidle', timeout: 30000 });
+    // Wait for JS rendering (SPAs like GLM need time after 'load')
+    await page.goto(opts.loginUrl, { waitUntil: 'load', timeout: 30000 });
+    await page.waitForTimeout(3000);
 
     // Optional pre-fill setup (e.g., click "Continue with Email")
     if (opts.beforeFill) {
