@@ -23,7 +23,6 @@ import { getHifLeim } from './leim.ts';
 import { buildDeepSeekHeaders, createDeepSeekContext, DEEPSEEK_BASE_URL } from './spoofing.ts';
 import { createStreamState, parseDeepSeekData, type DeepSeekStreamState } from './stream.ts';
 import { cleanTextOfXmlArtifacts } from '../../../tools/xmlToolParser.ts';
-import { filterContent } from '../../../utils/contentFilter.ts';
 
 const CHAT_ENDPOINT = '/api/v0/chat/completion';
 const DEEPSEEK_FETCH_TIMEOUT = 60_000;
@@ -143,8 +142,7 @@ export async function proxyViaDeepSeekWebChat(
     }
 
     const rawContent = state.content || ' ';
-    const filtered = filterContent(rawContent);
-    const cleanedText = cleanTextOfXmlArtifacts(filtered.cleanText).cleanedText || ' ';
+    const cleanedText = cleanTextOfXmlArtifacts(rawContent).cleanedText || ' ';
 
     return c.json(
       {
@@ -158,7 +156,7 @@ export async function proxyViaDeepSeekWebChat(
             message: {
               role: 'assistant',
               content: cleanedText,
-              ...(filtered.thinking ? { reasoning_content: filtered.thinking } : {}),
+              ...(state.thinkingContent ? { reasoning_content: state.thinkingContent } : {}),
             },
             finish_reason: 'stop',
           },
