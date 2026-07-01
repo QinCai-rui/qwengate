@@ -42,6 +42,7 @@ export type LoginResult = 'success' | 'captcha' | 'closed' | 'error';
 
 export interface BrowserProfileOptions {
   headless?: boolean;
+  fillOnly?: boolean;
 }
 
 import { validateQwenUrl } from './playwright.ts';
@@ -73,7 +74,7 @@ async function checkExistingToken(context: any): Promise<boolean> {
   return !!(existingToken && (!existingToken.expires || existingToken.expires <= 0 || existingToken.expires * 1000 > Date.now()));
 }
 
-export async function fillLoginForm(page: any, email: string, password: string): Promise<void> {
+export async function fillLoginForm(page: any, email: string, password: string, skipSubmit?: boolean): Promise<void> {
   try {
     // Use broad selectors for email/username input — some sites use type="text" or type="tel" (e.g. DeepSeek: "Phone number / email address")
     await page.waitForSelector(
@@ -104,15 +105,17 @@ export async function fillLoginForm(page: any, email: string, password: string):
         )
         .first();
       const isVisible = await submitBtn.isVisible({ timeout: 2000 }).catch(() => false);
-      if (isVisible) {
+      if (isVisible && !skipSubmit) {
         await submitBtn.click({ timeout: 3000 });
-      } else {
+      } else if (!skipSubmit) {
         // Fallback: press Enter on the password field
         await page.keyboard.press('Enter');
       }
     } catch {
-      // ponytail: pressing Enter is the universal fallback for any login form
-      await page.keyboard.press('Enter').catch(() => {});
+      if (!skipSubmit) {
+        // ponytail: pressing Enter is the universal fallback for any login form
+        await page.keyboard.press('Enter').catch(() => {});
+      }
     }
   } catch {
     logStore.log('warn', 'browser', 'form fill failed - selector not found for fillLoginForm');

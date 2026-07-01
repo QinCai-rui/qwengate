@@ -114,36 +114,17 @@ function renderTable(accts) {
     var status = (provAuth && provAuth.status) || 'disconnected';
     var isLive = status === 'live';
 
-    // Login buttons: auto-login + manual login
+    // Login buttons
     var loginBtns = '';
     if (isLive) {
       loginBtns = '<button class="prov-login-btn logged-in" disabled>Logged In</button>';
     } else {
-      if (pk === 'qwen') {
-        loginBtns =
-          '<button class="prov-login-btn" data-action="auto-login" data-email="' +
-          escHtml(a.email) +
-          '" data-provider="' +
-          pk +
-          '">Auto</button>' +
-          '<button class="prov-login-btn" data-action="login" data-email="' +
-          escHtml(a.email) +
-          '" data-provider="' +
-          pk +
-          '">Login</button>';
-      } else {
-        loginBtns =
-          '<button class="prov-login-btn" data-action="auto-login" data-email="' +
-          escHtml(a.email) +
-          '" data-provider="' +
-          pk +
-          '">Auto</button>' +
-          '<button class="prov-login-btn" data-action="login" data-email="' +
-          escHtml(a.email) +
-          '" data-provider="' +
-          pk +
-          '">Login</button>';
-      }
+      loginBtns =
+        '<button class="prov-login-btn" data-action="login" data-email="' +
+        escHtml(a.email) +
+        '" data-provider="' +
+        pk +
+        '">Login</button>';
     }
 
     var cols = '';
@@ -196,17 +177,7 @@ async function loadAccounts() {
     return a.configuredProviders && a.configuredProviders.indexOf(pk) !== -1;
   });
   renderTable(filtered);
-
-  // Auto-login for disconnected accounts
-  autoLoginProvider(filtered, pk);
 }
-
-/* ── Auto-login endpoints ── */
-var autoProviderEndpoints = {
-  qwen: '/api/accounts/EMAIL_PLACEHOLDER/login',
-  deepseek: '/api/accounts/EMAIL_PLACEHOLDER/auto-login/deepseek',
-  glm: '/api/accounts/EMAIL_PLACEHOLDER/auto-login/glm',
-};
 
 var manualProviderEndpoints = {
   qwen: '/api/accounts/EMAIL_PLACEHOLDER/autofill',
@@ -214,41 +185,31 @@ var manualProviderEndpoints = {
   glm: '/api/accounts/EMAIL_PLACEHOLDER/login/glm',
 };
 
-function autoLoginEndpoint(email, provider) {
-  return (autoProviderEndpoints[provider] || '').replace('EMAIL_PLACEHOLDER', encodeURIComponent(email));
-}
-
 function manualLoginEndpoint(email, provider) {
   return (manualProviderEndpoints[provider] || '').replace('EMAIL_PLACEHOLDER', encodeURIComponent(email));
 }
 
 /* ── Handle login ── */
-function handleProviderLogin(email, provider, action) {
-  var isAuto = action === 'auto-login';
+function handleProviderLogin(email, provider) {
   setError(null);
-
-  if (isAuto) {
-    autoLoginForProvider(email, provider);
-  } else {
-    (async function () {
+  (async function () {
+    try {
+      var ep = manualLoginEndpoint(email, provider);
+      var res = await fetch(ep, { method: 'GET', headers: authHeaders() });
+      var result;
       try {
-        var ep = manualLoginEndpoint(email, provider);
-        var res = await fetch(ep, { method: 'GET', headers: authHeaders() });
-        var result;
-        try {
-          result = await res.json();
-        } catch {
-          result = null;
-        }
-        if (!res.ok) throw new Error(result && result.error ? result.error.message : provider + ' login failed (' + res.status + ')');
-        showToast('Browser opened for ' + email + '. Complete login in the browser window.', 'info');
-        pollProviderLogin(email, provider, 90);
-      } catch (e) {
-        setError(e.message);
-        showToast(e.message, 'error');
+        result = await res.json();
+      } catch {
+        result = null;
       }
-    })();
-  }
+      if (!res.ok) throw new Error(result && result.error ? result.error.message : provider + ' login failed (' + res.status + ')');
+      showToast('Browser opened for ' + email + '. Complete login in the browser window.', 'info');
+      pollProviderLogin(email, provider, 90);
+    } catch (e) {
+      setError(e.message);
+      showToast(e.message, 'error');
+    }
+  })();
 }
 
 /* ── Poll provider login ── */
@@ -290,60 +251,6 @@ function pollProviderLogin(email, provider, maxAttempts) {
     }
   }, 2000);
   activeProviderPollTimers[timerId] = timer;
-}
-
-/* ── Auto-login ── */
-async function autoLoginForProvider(email, provider) {
-  try {
-    var ep = autoLoginEndpoint(email, provider);
-    var res = await fetch(ep, { method: 'GET', headers: authHeaders() });
-    var result;
-    try {
-      result = await res.json();
-    } catch {
-      result = null;
-    }
-    if (!res.ok) {
-      showToast(provider + ' auto-login failed (' + res.status + ')', 'warning');
-      return;
-    }
-    if (result.status === 'success') {
-      pollProviderLogin(email, provider, 15);
-    } else if (result.status === 'captcha') {
-      showToast(provider + ': ' + (result.message || 'Bot detection \u2014 click Login to complete manually'), 'warning');
-      loadAccounts();
-    } else {
-      showToast(result.message || provider + ' auto-login failed', 'warning');
-      loadAccounts();
-    }
-  } catch (e) {
-    showToast(e.message, 'error');
-  }
-}
-
-/* ── Auto-login on page load ── */
-var autoTriggered = {};
-function autoLoginProvider(accts, pk) {
-  for (var i = 0; i < accts.length; i++) {
-    var a = accts[i];
-    var key = a.email + '-' + pk;
-    if (autoTriggered[key]) continue;
-    var provAuth = a.providerAuth && a.providerAuth[pk];
-    var status = (provAuth && provAuth.status) || 'disconnected';
-    if (status === 'live') {
-      autoTriggered[key] = true;
-      continue;
-    }
-    autoTriggered[key] = true;
-    setTimeout(
-      (function (em, prov) {
-        return function () {
-          autoLoginForProvider(em, prov);
-        };
-      })(a.email, pk),
-      i * 3000,
-    );
-  }
 }
 
 /* ── Add Account ── */
@@ -475,7 +382,7 @@ function init() {
       var provider = btn.getAttribute('data-provider');
       if (!email) return;
       if (action === 'remove-provider') handleRemove(email, provider || PROVIDER_KEY);
-      else if (action === 'login' || action === 'auto-login') handleProviderLogin(email, provider || PROVIDER_KEY, action);
+      else if (action === 'login') handleProviderLogin(email, provider || PROVIDER_KEY);
     });
   }
 
