@@ -777,75 +777,10 @@ export async function loadSessionFromProfile(
       const cookies = await context.cookies('https://chat.z.ai');
       let tokenCookie = cookies.find((c: any) => c.name === 'token' && c.value);
 
-      // If no GLM token in profile, open headed browser for manual login
+      // If no GLM token in profile, skip — user clicks Login button in dashboard
       if (!tokenCookie?.value) {
         await context.close().catch(() => {});
-        context = null;
-
-        logStore.log('info', 'browser', `No GLM token in profile for ${email} — opening headed browser for manual login`);
-
-        // Use openBrowserProfile-style flow: headed browser, user logs in manually
-        try {
-          // Open headed browser with persistent profile
-          context = await setupBrowserContext(email, false);
-          let loginPage: any = null;
-          try {
-            loginPage = context.pages()[0] || (await context.newPage());
-
-            // Navigate to GLM auth page — use 'load' not 'networkidle' (SPA issue)
-            await loginPage.goto('https://chat.z.ai/auth', { waitUntil: 'load', timeout: 30000 }).catch(() => {});
-
-            // Give JS time to render
-            await new Promise((r) => setTimeout(r, 4000));
-
-            logStore.log('info', 'browser', `Waiting for manual GLM login for ${email} at https://chat.z.ai/auth...`);
-
-            // Wait up to 5 minutes for login (URL changes away from /auth)
-            const loginTimeout = Date.now() + 5 * 60 * 1000;
-            let loggedIn = false;
-            while (Date.now() < loginTimeout) {
-              await new Promise((r) => setTimeout(r, 3000));
-              try {
-                const currentUrl = loginPage.url();
-                if (!currentUrl.includes('/auth')) {
-                  loggedIn = true;
-                  break;
-                }
-              } catch {
-                break;
-              }
-            }
-
-            await loginPage.close().catch(() => {});
-
-            if (loggedIn) {
-              // Token was saved to profile cookies — re-read
-              const glmCookies = await context.cookies('https://chat.z.ai');
-              tokenCookie = glmCookies.find((c: any) => c.name === 'token' && c.value);
-              if (tokenCookie?.value) {
-                logStore.log('info', 'browser', `Loaded GLM JWT from profile cookie after manual login for ${email}`);
-                const glmCookieStr = glmCookies
-                  .filter((c: any) => c.value)
-                  .map((c: any) => `${c.name}=${c.value}`)
-                  .join('; ');
-                await context.close().catch(() => {});
-                return {
-                  token: tokenCookie.value,
-                  expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
-                  cookieStr: glmCookieStr,
-                };
-              }
-            } else {
-              logStore.log('warn', 'browser', `GLM manual login timed out for ${email}`);
-            }
-          } finally {
-            if (loginPage) await loginPage.close().catch(() => {});
-          }
-        } catch (err: any) {
-          logStore.log('warn', 'browser', `GLM manual login failed for ${email}: ${err.message}`);
-        }
-
-        if (context) await context.close().catch(() => {});
+        logStore.log('info', 'browser', `No GLM token in profile for ${email} — use Login button to authenticate`);
         return null;
       }
 
