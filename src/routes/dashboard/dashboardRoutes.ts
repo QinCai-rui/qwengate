@@ -364,9 +364,19 @@ export function registerDashboardRoutes(app: Hono): void {
           mod.setAccountDisabled(c.req.param('email'), body.disabled === true);
         }
         if (body.disabledProviders !== undefined) {
+          // Clear account-level disabled, then sync provider disabled list
           mod.setAccountDisabled(c.req.param('email'), false);
           for (const p of body.disabledProviders) {
             mod.setProviderDisabled(c.req.param('email'), p, true);
+          }
+          // Clear any providers that were removed from the list
+          const acct = mod.getAccountByEmail(c.req.param('email'));
+          if (acct?.disabledProviders) {
+            for (const existing of [...acct.disabledProviders]) {
+              if (!body.disabledProviders.includes(existing)) {
+                mod.setProviderDisabled(c.req.param('email'), existing, false);
+              }
+            }
           }
         }
         return c.json({ ok: true });
