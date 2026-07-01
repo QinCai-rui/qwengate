@@ -32,10 +32,8 @@ const DEEPSEEK_FETCH_TIMEOUT = 60_000;
  */
 function messagesToPrompt(messages: Array<{ role: string; content: string | null }>): string {
   return messages
-    .filter(function (m) {
-      return m.role !== 'system';
-    })
     .map(function (m) {
+      if (m.role === 'system') return '<system>' + (m.content ?? '') + '</system>';
       if (m.role === 'assistant') return '<Assistant>' + (m.content ?? '') + '</Assistant>';
       return '<user>' + (m.content ?? '') + '</user>';
     })

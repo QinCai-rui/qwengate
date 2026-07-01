@@ -80,8 +80,8 @@ export async function proxyViaGlmWebChat(
   }
 
   // 3. Convert messages to GLM format
-  // Filter out system messages — context.txt is Qwen-only
-  const chatMessages = (body.messages || []).filter((m: any) => m.role !== 'system');
+  // Keep all messages including system prompts — wrap system in <system> tag
+  const chatMessages = body.messages || [];
   const history = messagesToGlmFormat(chatMessages);
   const variables = buildGlmVariables(ctx);
 
