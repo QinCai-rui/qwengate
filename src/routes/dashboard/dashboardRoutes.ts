@@ -405,8 +405,8 @@ export function registerDashboardRoutes(app: Hono): void {
             models.length > 0
               ? models
               : [
-                  { id: 'deepseek-chat', name: 'DeepSeek Chat', description: 'Standard conversational model' },
-                  { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', description: 'Reasoning-enhanced model' },
+                  { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', description: 'Default model — fast and efficient' },
+                  { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', description: 'Expert model with enhanced reasoning' },
                 ],
           );
         } else if (provider === 'glm') {

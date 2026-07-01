@@ -72,7 +72,8 @@ export async function proxyViaDeepSeekWebChat(
 
   // ── Step 4: Build the DeepSeek web chat request body ──
   const prompt = messagesToPrompt(body.messages || []);
-  const modelType = model === 'deepseek-reasoner' ? 'expert' : session.model_type || 'default';
+  const isPro = model === 'deepseek-v4-pro' || model === 'deepseek-reasoner';
+  const modelType = isPro ? 'expert' : session.model_type || 'default';
 
   const deepseekBody: Record<string, any> = {
     chat_session_id: session.id,
