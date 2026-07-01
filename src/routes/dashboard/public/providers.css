@@ -16,7 +16,10 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
   text-decoration: none;
-  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+  transition:
+    transform 0.15s,
+    box-shadow 0.15s,
+    border-color 0.15s;
   box-shadow: var(--clay-shadow), var(--clay-puff);
 }
 .provider-card:hover {
@@ -496,6 +499,35 @@
 }
 
 /* ── Responsive ── */
+/* ── Models table ── */
+.models-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.models-table th,
+.models-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.models-table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.models-table td code {
+  font-size: 0.85rem;
+  background: var(--surface-alt);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.text-secondary {
+  color: var(--text-secondary);
+}
+
 @media (max-width: 600px) {
   .provider-cards {
     grid-template-columns: 1fr;

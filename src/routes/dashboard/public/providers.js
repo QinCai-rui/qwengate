@@ -253,6 +253,32 @@ function pollProviderLogin(email, provider, maxAttempts) {
   activeProviderPollTimers[timerId] = timer;
 }
 
+/* ── Provider Models ── */
+async function loadProviderModels(provider) {
+  var container = document.getElementById('modelsSection');
+  if (!container) return;
+  try {
+    var res = await fetch('/api/models/' + encodeURIComponent(provider), { headers: authHeaders() });
+    if (!res.ok) {
+      container.innerHTML = '<p class="text-secondary">Failed to load models</p>';
+      return;
+    }
+    var models = await res.json();
+    if (!Array.isArray(models) || models.length === 0) {
+      container.innerHTML = '<p class="text-secondary">No models available</p>';
+      return;
+    }
+    var html = '<table class="models-table"><thead><tr><th>Model ID</th><th>Description</th></tr></thead><tbody>';
+    for (var i = 0; i < models.length; i++) {
+      html += '<tr><td><code>' + escHtml(models[i].id) + '</code></td><td>' + escHtml(models[i].description || '') + '</td></tr>';
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<p class="text-secondary">Failed to load models</p>';
+  }
+}
+
 /* ── Add Account ── */
 function handleAdd(email, password) {
   var btn = document.getElementById('addBtn');
@@ -355,6 +381,7 @@ function init() {
   if (!PROVIDER_KEY) return; // Provider list page — no data loading needed
 
   loadAccounts();
+  loadProviderModels(PROVIDER_KEY);
 
   var addForm = document.getElementById('addForm');
   if (addForm) {

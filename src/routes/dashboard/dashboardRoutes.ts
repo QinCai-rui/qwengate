@@ -316,6 +316,40 @@ export function registerDashboardRoutes(app: Hono): void {
 
   app.get('/dashboard/static/:file', dashboardStaticHandler);
 
+  // ── Models API ──
+  app.get(
+    '/api/models/:provider',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      const provider = c.req.param('provider').toLowerCase();
+      try {
+        if (provider === 'qwen') {
+          const { fetchQwenModels } = await import('../../services/qwenModels.ts');
+          const models = await fetchQwenModels();
+          return c.json(models.map((m: any) => ({ id: m.id, name: m.id, description: m.description || '' })));
+        } else if (provider === 'deepseek') {
+          const models = [
+            { id: 'deepseek-chat', name: 'DeepSeek Chat', description: 'Standard conversational model' },
+            { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', description: 'Reasoning-enhanced model with chain-of-thought' },
+            { id: 'deepseek-pro', name: 'DeepSeek Pro', description: 'High-performance model for complex tasks' },
+          ];
+          return c.json(models);
+        } else if (provider === 'glm') {
+          const models = [
+            { id: 'glm-4.7', name: 'GLM-4.7', description: 'Latest general-purpose model' },
+            { id: 'glm-4v', name: 'GLM-4V', description: 'Vision-capable multimodal model' },
+            { id: 'glm-4', name: 'GLM-4', description: 'Previous generation general model' },
+          ];
+          return c.json(models);
+        } else {
+          return c.json({ error: 'Unknown provider' }, 400);
+        }
+      } catch (err: any) {
+        return c.json({ error: err.message }, 500);
+      }
+    },
+  );
+
   app.get('/', (c) => c.redirect('/dashboard'));
   app.get('/health', healthHandler);
   app.get(

@@ -7,7 +7,7 @@
  *
  * Extensible: add entries to the PROVIDERS array below to register new providers.
  */
-import { sidebarHtml } from "./sidebar.ts";
+import { sidebarHtml } from './sidebar.ts';
 
 /* ── Provider Metadata ──────────────────────────────────────────────── */
 
@@ -22,28 +22,28 @@ interface ProviderMeta {
 
 const PROVIDERS: ProviderMeta[] = [
   {
-    key: "qwen",
-    label: "Qwen",
-    color: "#5D5EB5",
+    key: 'qwen',
+    label: 'Qwen',
+    color: '#5D5EB5',
     icon: '<path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>',
-    description: "Free Qwen models (3.7-Max, 3-Max, 3-Plus) via chat.qwen.ai.",
-    loginUrlLabel: "chat.qwen.ai",
+    description: 'Free Qwen models (3.7-Max, 3-Max, 3-Plus) via chat.qwen.ai.',
+    loginUrlLabel: 'chat.qwen.ai',
   },
   {
-    key: "deepseek",
-    label: "DeepSeek",
-    color: "#4D6BFE",
+    key: 'deepseek',
+    label: 'DeepSeek',
+    color: '#4D6BFE',
     icon: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
-    description: "DeepSeek models (reasoner, chat) via chat.deepseek.com.",
-    loginUrlLabel: "chat.deepseek.com",
+    description: 'DeepSeek models (reasoner, chat) via chat.deepseek.com.',
+    loginUrlLabel: 'chat.deepseek.com',
   },
   {
-    key: "glm",
-    label: "GLM",
-    color: "#484a58",
+    key: 'glm',
+    label: 'GLM',
+    color: '#484a58',
     icon: '<polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/>',
-    description: "GLM models (GLM-5, GLM-4) via chat.z.ai.",
-    loginUrlLabel: "chat.z.ai",
+    description: 'GLM models (GLM-5, GLM-4) via chat.z.ai.',
+    loginUrlLabel: 'chat.z.ai',
   },
 ];
 
@@ -52,7 +52,7 @@ const PROVIDERS: ProviderMeta[] = [
 function providerCardHtml(p: ProviderMeta): string {
   return `<a href="/dashboard/providers/${p.key}" class="provider-card" style="--card-accent:${p.color}">
     <div class="provider-card-icon">
-      <img src="/dashboard/static/${p.key === "glm" ? "zai-logo.png" : p.key + "-logo.png"}" width="28" height="28" alt="${p.label}">
+      <img src="/dashboard/static/${p.key === 'glm' ? 'zai-logo.png' : p.key + '-logo.png'}" width="28" height="28" alt="${p.label}">
     </div>
     <div class="provider-card-body">
       <h3>${p.label}</h3>
@@ -73,14 +73,14 @@ export const providersListHtml = `<!DOCTYPE html>
 </head>
 <body>
 <div class="dashboard-layout">
-${sidebarHtml("providers")}
+${sidebarHtml('providers')}
   <main class="main-content">
     <div class="page-header" style="margin-bottom:24px">
       <h1>Providers</h1>
       <span style="font-size:0.8rem;color:var(--text-secondary)">Manage accounts per provider</span>
     </div>
     <div class="provider-cards">
-      ${PROVIDERS.map(providerCardHtml).join("\n")}
+      ${PROVIDERS.map(providerCardHtml).join('\n')}
     </div>
   </main>
 </div>
@@ -107,7 +107,7 @@ function providerPageHtml(p: ProviderMeta): string {
 </head>
 <body>
 <div class="dashboard-layout">
-${sidebarHtml("providers")}
+${sidebarHtml('providers')}
   <main class="main-content">
     <div class="page-header" style="margin-bottom:24px;display:flex;align-items:center;gap:12px">
       <a href="/dashboard/providers" class="back-link" style="display:inline-flex;align-items:center;gap:4px;color:var(--text-secondary);text-decoration:none;font-size:0.8rem">
@@ -165,6 +165,18 @@ ${sidebarHtml("providers")}
           </table>
         </div>
         <div class="empty-state" id="provEmpty">No accounts configured for ${label}.</div>
+      </div>
+    </div>
+
+    <!-- Models -->
+    <div class="panel">
+      <div class="panel-header open">
+        <span class="panel-title">Models</span>
+      </div>
+      <div class="panel-body open">
+        <div id="modelsSection">
+          <p class="text-secondary">Loading models...</p>
+        </div>
       </div>
     </div>
   </main>
