@@ -171,7 +171,7 @@ function renderTable(accts) {
     cols +=
       '<td><div class="action-cell">' +
       loginBtns +
-      '<button class="account-btn small danger" data-action="remove-producer" data-email="' +
+      '<button class="account-btn small danger" data-action="remove-provider" data-email="' +
       escHtml(a.email) +
       '" data-provider="' +
       pk +
@@ -235,7 +235,11 @@ function handleProviderLogin(email, provider, action) {
         var ep = manualLoginEndpoint(email, provider);
         var res = await fetch(ep, { method: 'GET', headers: authHeaders() });
         var result;
-        try { result = await res.json(); } catch { result = null; }
+        try {
+          result = await res.json();
+        } catch {
+          result = null;
+        }
         if (!res.ok) throw new Error(result && result.error ? result.error.message : provider + ' login failed (' + res.status + ')');
         showToast('Browser opened for ' + email + '. Complete login in the browser window.', 'info');
         pollProviderLogin(email, provider, 90);
@@ -294,7 +298,11 @@ async function autoLoginForProvider(email, provider) {
     var ep = autoLoginEndpoint(email, provider);
     var res = await fetch(ep, { method: 'GET', headers: authHeaders() });
     var result;
-    try { result = await res.json(); } catch { result = null; }
+    try {
+      result = await res.json();
+    } catch {
+      result = null;
+    }
     if (!res.ok) {
       showToast(provider + ' auto-login failed (' + res.status + ')', 'warning');
       return;
@@ -329,7 +337,9 @@ function autoLoginProvider(accts, pk) {
     autoTriggered[key] = true;
     setTimeout(
       (function (em, prov) {
-        return function () { autoLoginForProvider(em, prov); };
+        return function () {
+          autoLoginForProvider(em, prov);
+        };
       })(a.email, pk),
       i * 3000,
     );
@@ -355,9 +365,15 @@ function handleAdd(email, password) {
         }),
       });
       var result;
-      try { result = await res.json(); } catch { result = null; }
+      try {
+        result = await res.json();
+      } catch {
+        result = null;
+      }
       if (!res.ok) {
-        throw new Error(result && result.error && result.error.message ? result.error.message : 'Failed to add account (' + res.status + ')');
+        throw new Error(
+          result && result.error && result.error.message ? result.error.message : 'Failed to add account (' + res.status + ')',
+        );
       }
       if (result.loginSucceeded) {
         showToast('Account added and logged in: ' + email, 'success');
@@ -388,7 +404,11 @@ function handleRemove(email, provider) {
       var url = '/api/accounts/' + encodeURIComponent(email) + '/provider/' + encodeURIComponent(provider);
       var res = await fetch(url, { method: 'DELETE', headers: authHeaders() });
       var result;
-      try { result = await res.json(); } catch { result = null; }
+      try {
+        result = await res.json();
+      } catch {
+        result = null;
+      }
       if (!res.ok) {
         throw new Error(result && result.error && result.error.message ? result.error.message : 'Failed to remove (' + res.status + ')');
       }
@@ -416,7 +436,9 @@ async function handleToggleProviderDisabled(event, email, provider, currentlyDis
     showToast(email + ' ' + provider + ' ' + (currentlyDisabled ? 'enabled' : 'disabled'), 'success');
     loadAccounts();
   } else {
-    var err = await res.json().catch(function () { return { error: 'Failed' }; });
+    var err = await res.json().catch(function () {
+      return { error: 'Failed' };
+    });
     showToast(err.error || 'Failed to toggle', 'error');
   }
 }
