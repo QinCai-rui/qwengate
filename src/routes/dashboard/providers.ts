@@ -32,7 +32,7 @@ const PROVIDERS: ProviderMeta[] = [
   {
     key: 'deepseek',
     label: 'DeepSeek',
-    color: '#ff6b35',
+    color: '#4D6BFE',
     icon: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
     description: 'DeepSeek models (reasoner, chat) via chat.deepseek.com.',
     loginUrlLabel: 'chat.deepseek.com',
@@ -40,7 +40,7 @@ const PROVIDERS: ProviderMeta[] = [
   {
     key: 'glm',
     label: 'GLM',
-    color: '#34c759',
+    color: '#484a58',
     icon: '<polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/>',
     description: 'GLM models (GLM-5, GLM-4) via chat.z.ai.',
     loginUrlLabel: 'chat.z.ai',

@@ -38,14 +38,19 @@ const serveHtml = (html: string) => (c: any) => {
 
 function dashboardStaticHandler(c: any) {
   const file = c.req.param('file');
-  if (!/^[a-z0-9_-]+\.(css|js|svg)$/i.test(file)) return c.json({ error: 'Invalid file' }, 400);
+  if (!/^[a-z0-9_-]+\.(css|js|svg|png|jpe?g|webp)$/i.test(file)) return c.json({ error: 'Invalid file' }, 400);
   const DASHBOARD_STATIC = projectPath('src', 'routes', 'dashboard', 'public');
   const filePath = resolve(DASHBOARD_STATIC, file);
   if (!filePath.startsWith(DASHBOARD_STATIC) || !existsSync(filePath)) return c.json({ error: 'Not found' }, 404);
-  const mime: Record<string, string> = { css: 'text/css', js: 'application/javascript', svg: 'image/svg+xml' };
   const ext = file.split('.').pop() || '';
-  const contentType = mime[ext] || 'application/octet-stream';
-  return c.text(readFileSync(filePath, 'utf-8'), 200, { 'Content-Type': contentType });
+  const textTypes = ['css', 'js', 'svg'];
+  if (textTypes.includes(ext)) {
+    const mime: Record<string, string> = { css: 'text/css', js: 'application/javascript', svg: 'image/svg+xml' };
+    return c.text(readFileSync(filePath, 'utf-8'), 200, { 'Content-Type': mime[ext] || 'text/plain' });
+  }
+  // Binary image files
+  const imgMime: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+  return c.body(readFileSync(filePath), 200, { 'Content-Type': imgMime[ext] || 'application/octet-stream' });
 }
 
 function healthHandler(c: any) {
