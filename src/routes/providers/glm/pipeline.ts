@@ -1,41 +1,22 @@
 /*
  * File: providers/glm/pipeline.ts
- * GLM proxy pipeline — full flow with captcha solving, session management,
- * browser fingerprint spoofing, x-signature HMAC, and three-phase SSE parsing.
+ * GLM proxy pipeline — uses wreqFetch (Rust + BoringSSL) for TLS/HTTP2
+ * fingerprint impersonation to bypass GLM anti-bot detection.
+ *
+ * Full flow: validate user → get session → build spoofed request → send via wreqFetch → parse SSE → content filter.
  */
 
 import type { Context } from 'hono';
 import type { OpenAIRequest } from '../../../types/openai.ts';
 import { logStore } from '../../../services/logStore.ts';
+import { getProviderState } from '../../../services/accountManager.ts';
 import { getOrCreateChatSession, getCurrentUser } from './session.ts';
 import { buildFingerprintParams, buildGlmHeaders, buildGlmVariables, GLM_BASE_URL } from './spoofing.ts';
 import { type GlmStreamState, createGlmStreamState, parseGlmSseLine } from './stream.ts';
+import { cleanTextOfXmlArtifacts } from '../../../tools/xmlToolParser.ts';
+import { filterContent } from '../../../utils/contentFilter.ts';
 
-export interface GlmProxyContext {
-  jwt: string;
-  userId: string;
-  userName: string;
-  cookieStr?: string;
-}
-
-/**
- * Build the GLM proxy context from account state.
- * Validates JWT and fetches user info.
- */
-export async function buildGlmContext(jwt: string): Promise<GlmProxyContext | null> {
-  try {
-    const user = await getCurrentUser(jwt);
-    if (!user) return null;
-    return {
-      jwt,
-      userId: user.id,
-      userName: user.name,
-    };
-  } catch (err: any) {
-    logStore.log('warn', 'glm-pipeline', `buildGlmContext error: ${err.message}`);
-    return null;
-  }
-}
+const GLM_FETCH_TIMEOUT = 60_000;
 
 /**
  * Convert OpenAI messages to GLM history format.
@@ -66,51 +47,41 @@ function messagesToGlmFormat(messages: Array<{ role: string; content: string | n
 }
 
 /**
- * Proxy a request through GLM's chat completions API.
- * Full flow: build context → get/create session → build spoofed request → send → parse SSE.
+ * Proxy a request through GLM's chat completions API via wreqFetch.
  */
-export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: string): Promise<Response> {
-  const isStream = body.stream === true;
-  const model = body.model.replace(/^glm\//, '');
+export async function proxyViaGlmWebChat(
+  c: Context,
+  body: OpenAIRequest,
+  email: string,
+  jwt: string,
+  model: string,
+  isStream: boolean,
+): Promise<Response> {
+  const { wreqFetch } = await import('../../../services/wreqFetch.ts');
 
-  // 1. Build context
-  const ctx = await buildGlmContext(jwt);
-  if (!ctx) {
-    return c.json(
-      {
-        error: {
-          message: 'Cannot validate GLM account. Login via dashboard first.',
-          type: 'auth_error',
-        },
-      },
-      503,
-    );
+  // 1. Validate JWT and get user info via wreqFetch
+  const user = await getCurrentUser(jwt);
+  if (!user) {
+    throw Object.assign(new Error('Cannot validate GLM account. Login via dashboard first.'), { upstreamStatus: 401 });
   }
 
-  // 2. Get or create chat session
+  const providerState = getProviderState(email, 'glm');
+  const ctx = {
+    jwt,
+    userId: user.id,
+    userName: user.name,
+  };
+
+  // 2. Get or create chat session via wreqFetch
   const session = await getOrCreateChatSession(jwt, model);
   if (!session) {
-    return c.json(
-      {
-        error: {
-          message: 'Cannot create GLM chat session. Login via dashboard first.',
-          type: 'auth_error',
-        },
-      },
-      503,
-    );
+    throw Object.assign(new Error('Cannot create GLM chat session. Login via dashboard first.'), { upstreamStatus: 503 });
   }
 
   // 3. Convert messages to GLM format
   const history = messagesToGlmFormat(body.messages || []);
   const variables = buildGlmVariables(ctx);
 
-  // Extract browser cookies from provider state
-  const { getProviderState } = await import('../../../services/accountManager.ts');
-  const acct = (await import('../../../services/accountManager.ts')).accounts.find((a: any) => a.providerStates.glm?.token === jwt);
-  ctx.cookieStr = acct?.providerStates.glm?.cookies || undefined;
-
-  // ponytail: features and background_tasks must be objects, not arrays — GLM crashes (500) on array types
   const glmFeatures: Record<string, any> = {
     image_generation: false,
     web_search: false,
@@ -120,7 +91,7 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
     vlm_tools_enable: false,
     vlm_web_search_enable: false,
     vlm_website_mode: false,
-    enable_thinking: model.includes('glm-5') || model.includes('glm-4'),
+    enable_thinking: true,
     reasoning_effort: model.includes('glm-5') ? 'max' : '',
   };
 
@@ -138,6 +109,7 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
     current_user_message_id: history.currentId,
     current_user_message_parent_id: null,
     background_tasks: { title_generation: true, tags_generation: true },
+    captcha_verify_param: providerState?.captchaVerifyParam || '',
   };
 
   // 4. Build fingerprint query string
@@ -149,173 +121,153 @@ export async function proxyViaGlmWebChat(c: Context, body: OpenAIRequest, jwt: s
   const requestId = crypto.randomUUID();
   const headers = await buildGlmHeaders(ctx, bodyStr, requestId);
 
-  // 6. Send request to GLM
-  try {
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: bodyStr,
-      signal: AbortSignal.timeout(120000),
-    });
+  // 6. Send request to GLM via wreqFetch
+  logStore.log('debug', 'glm-pipeline', `Fetching ${url.slice(0, 100)} via wreqFetch`);
+  const resp = await wreqFetch(url, {
+    method: 'POST',
+    headers,
+    body: bodyStr,
+    stream: isStream,
+    timeout: Math.ceil(GLM_FETCH_TIMEOUT / 1000),
+    impersonate: 'chrome_142',
+  });
 
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => 'unknown error');
-      const respHeaders = Object.fromEntries(resp.headers.entries());
-      logStore.log('warn', 'glm-pipeline', `GLM API error (${resp.status}): ${errText.slice(0, 1000)}`);
-      logStore.log('warn', 'glm-pipeline', `GLM response headers: ${JSON.stringify(respHeaders)}`);
-      logStore.log('warn', 'glm-pipeline', `GLM request body (truncated): ${bodyStr.slice(0, 2000)}`);
-      logStore.log('warn', 'glm-pipeline', `GLM request URL: ${url.slice(0, 500)}`);
-      logStore.log(
-        'warn',
-        'glm-pipeline',
-        `GLM request headers: ${JSON.stringify(Object.fromEntries(Object.entries(headers).filter(([k]) => !k.toLowerCase().includes('auth') && !k.toLowerCase().includes('token'))))}`,
-      );
-      return c.json(
-        {
-          error: {
-            message: `GLM API error (${resp.status}): ${errText.slice(0, 500)}`,
-            type: 'upstream_error',
-          },
-        },
-        resp.status as any,
-      );
+  const upstreamStatus = parseInt(resp.headers.get('X-Upstream-Status') || '0', 10);
+  logStore.log('debug', 'glm-pipeline', `Response: status=${upstreamStatus || resp.status}`);
+
+  if (!resp.ok || upstreamStatus >= 400) {
+    const errText = await resp.text().catch(() => 'unknown error');
+    const effStatus = upstreamStatus || resp.status;
+
+    // Detect captcha errors in response body
+    if (errText.includes('FRONTEND_CAPTCHA') || errText.includes('captcha') || effStatus === 403) {
+      const err = new Error('GLM requires CAPTCHA verification. Login via dashboard → GLM → Login.');
+      (err as any).upstreamStatus = 403;
+      throw err;
     }
 
-    const contentType = resp.headers.get('content-type') || '';
+    const err = new Error(`GLM API error (${effStatus}): ${errText.slice(0, 500)}`);
+    (err as any).upstreamStatus = effStatus;
+    throw err;
+  }
 
-    if (!isStream || contentType.includes('json')) {
-      // Non-streaming: read entire body
-      const text = await resp.text();
-      logStore.log('debug', 'glm-raw', 'CT=' + contentType + ' len=' + text.length + ' head=' + text.slice(0, 1000));
+  // Non-streaming: buffer entire SSE response, extract content, filter
+  if (!isStream) {
+    const text = await resp.text();
+    logStore.log('debug', 'glm-raw', `len=${text.length} head=${text.slice(0, 1000)}`);
 
-      const lines = text.split('\n').filter((l) => l.startsWith('data: '));
-      let fullContent = '';
-      let fullThinking = '';
-      let usage: any = null;
-      let captchaError: string | undefined;
+    const lines = text.split('\n').filter((l) => l.startsWith('data: '));
+    let fullContent = '';
+    let fullThinking = '';
+    let usage: any = null;
 
-      for (const line of lines) {
-        try {
-          const raw = line.slice(6);
-          if (raw === '[DONE]') continue;
-          const parsed = JSON.parse(raw);
-          const data = parsed.data || parsed;
+    for (const line of lines) {
+      try {
+        const raw = line.slice(6);
+        if (raw === '[DONE]') continue;
+        const parsed = JSON.parse(raw);
+        const data = parsed.data || parsed;
 
-          // Check for captcha/error responses from GLM
-          if (data.error?.code === 'FRONTEND_CAPTCHA_REQUIRED') {
-            captchaError = data.error.detail || 'CAPTCHA verification required';
-            logStore.log('warn', 'glm-pipeline', `GLM captcha error: ${captchaError}`);
-            break;
-          }
-
-          if (data.phase === 'thinking') {
-            fullThinking += data.delta_content || '';
-          } else if (data.phase === 'answer') {
-            fullContent += data.delta_content || '';
-          } else if (data.phase === 'other' && data.usage) {
-            usage = data.usage;
-          }
-        } catch {
-          // Skip unparseable lines
+        if (data.error?.code === 'FRONTEND_CAPTCHA_REQUIRED') {
+          const err = new Error('GLM requires CAPTCHA verification: ' + (data.error.detail || 'CAPTCHA required'));
+          (err as any).upstreamStatus = 403;
+          throw err;
         }
-      }
 
-      if (captchaError) {
-        return c.json(
-          {
-            error: {
-              message: `GLM requires CAPTCHA verification: ${captchaError}. Login via dashboard → GLM → Login button.`,
-              type: 'auth_error',
-            },
-          },
-          503,
-        );
+        if (data.phase === 'thinking') {
+          fullThinking += data.delta_content || '';
+        } else if (data.phase === 'answer') {
+          fullContent += data.delta_content || '';
+        } else if (data.phase === 'other' && data.usage) {
+          usage = data.usage;
+        }
+      } catch (e: any) {
+        if ((e as any)?.upstreamStatus) throw e;
       }
+    }
 
-      const responseMsg: Record<string, any> = {
-        role: 'assistant',
-        content: fullContent || ' ',
-      };
-      if (fullThinking) {
-        responseMsg.reasoning_content = fullThinking;
-      }
+    // Content filter pipeline (same as Qwen — strip thinking tags, XML artifacts)
+    const rawContent = fullContent || ' ';
+    const filtered = filterContent(rawContent);
+    const cleanedText = cleanTextOfXmlArtifacts(filtered.cleanText).cleanedText || ' ';
 
-      return c.json({
+    const responseMsg: Record<string, any> = {
+      role: 'assistant',
+      content: cleanedText,
+    };
+    if (fullThinking || filtered.thinking) {
+      responseMsg.reasoning_content = fullThinking || filtered.thinking;
+    }
+
+    return c.json(
+      {
         id: session.id,
         object: 'chat.completion',
         created: Math.floor(Date.now() / 1000),
         model: body.model,
-        choices: [
-          {
-            index: 0,
-            message: responseMsg,
-            finish_reason: 'stop',
-          },
-        ],
+        choices: [{ index: 0, message: responseMsg, finish_reason: 'stop' }],
         usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-      });
-    }
-
-    // 7. Streaming: convert three-phase SSE to OpenAI format
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-    const reader = resp.body!.getReader();
-    const decoder = new TextDecoder();
-    const encoder = new TextEncoder();
-
-    const state: GlmStreamState = createGlmStreamState();
-
-    (async () => {
-      let buffer = '';
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            if (!state.isFinished) {
-              await writer.write(encoder.encode('data: [DONE]\n\n'));
-            }
-            await writer.close();
-            break;
-          }
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || ''; // Keep incomplete line
-
-          for (const line of lines) {
-            const { chunks, done: streamDone } = parseGlmSseLine(line, state, model, session.id);
-            for (const chunk of chunks) {
-              await writer.write(encoder.encode(chunk));
-            }
-            if (streamDone) {
-              await writer.close();
-              return;
-            }
-          }
-        }
-      } catch (err: any) {
-        logStore.log('error', 'glm-stream', `Stream error: ${err.message}`);
-        await writer.close().catch(() => {});
-      }
-    })();
-
-    return new Response(readable, {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
       },
-    });
-  } catch (err: any) {
-    return c.json(
-      {
-        error: {
-          message: `GLM proxy error: ${err.message}`,
-          type: 'proxy_error',
-        },
-      },
-      502,
+      { headers: { 'content-type': 'application/json' } },
     );
   }
+
+  // ── Streaming: convert GLM three-phase SSE to OpenAI format ──
+  if (!resp.body) {
+    throw Object.assign(new Error('GLM returned empty response body'), { upstreamStatus: 502 });
+  }
+
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+
+  const state: GlmStreamState = createGlmStreamState();
+
+  (async () => {
+    let buffer = '';
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (!state.isFinished) {
+            await writer.write(encoder.encode('data: [DONE]\n\n'));
+          }
+          await writer.close();
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const { chunks, done: streamDone } = parseGlmSseLine(line, state, model, session.id);
+          for (const chunk of chunks) {
+            await writer.write(encoder.encode(chunk));
+          }
+          if (streamDone) {
+            await writer.close();
+            return;
+          }
+        }
+      }
+    } catch (err: any) {
+      logStore.log('error', 'glm-stream', `Stream error: ${err.message}`);
+      try {
+        await writer.write(encoder.encode('data: [DONE]\n\n'));
+        await writer.close();
+      } catch {}
+    }
+  })();
+
+  return new Response(readable, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    },
+  });
 }

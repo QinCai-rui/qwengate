@@ -1,10 +1,13 @@
 /*
  * File: providers/glm/spoofing.ts
- * Browser fingerprint query string, headers, and x-signature HMAC for GLM API calls.
+ * Browser fingerprint query string, headers for GLM API calls.
+ *
+ * x-signature is NOT required — the real gate is Aliyun Captcha (FRONTEND_CAPTCHA_REQUIRED),
+ * which is session-bound and must be solved from a browser context.
  */
 
 export const GLM_BASE_URL = 'https://chat.z.ai';
-export const GLM_FE_VERSION = 'prod-fe-1.1.67';
+export const GLM_FE_VERSION = 'prod-fe-1.1.69';
 
 const GLM_QUERY_VERSION = '0.0.1';
 
@@ -12,7 +15,6 @@ export interface GlmContext {
   jwt: string;
   userId: string;
   userName: string;
-  cookieStr?: string;
 }
 
 /**
@@ -48,6 +50,9 @@ export function buildFingerprintParams(ctx: GlmContext): URLSearchParams {
   params.set('host', 'chat.z.ai');
   params.set('hostname', 'chat.z.ai');
   params.set('protocol', 'https:');
+  params.set('search', '');
+  params.set('hash', '');
+  params.set('referrer', '');
   params.set('title', '');
   params.set('timezone_offset', String(-new Date().getTimezoneOffset()));
   params.set('local_time', new Date().toLocaleString());
@@ -62,87 +67,16 @@ export function buildFingerprintParams(ctx: GlmContext): URLSearchParams {
   return params;
 }
 
-// ponytail: simple HMAC cache keyed by body length + jwt suffix to avoid recomputing duplicate payloads
-const hmacCache = new Map<string, string>();
-
-async function subtleHmac(data: string, key: string): Promise<string> {
-  const enc = new TextEncoder();
-  const cryptoKey = await crypto.subtle.importKey('raw', enc.encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const sig = await crypto.subtle.sign('HMAC', cryptoKey, enc.encode(data));
-  return Array.from(new Uint8Array(sig))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-async function sha256Hex(data: string): Promise<string> {
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(data));
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-/**
- * Compute x-signature value.
- * Tries multiple HMAC-SHA256 strategies in order, returns first that produces a non-empty hex.
- * Falls back to unkeyed SHA-256 of the body.
- */
-export async function computeSignature(body: string, jwt: string, _timestamp: string, _requestId: string): Promise<string> {
-  const cacheKey = `${body.length}:${jwt.slice(-8)}`;
-  const cached = hmacCache.get(cacheKey);
-  if (cached) return cached;
-
-  // Strategy 1: HMAC-SHA256(body) with key = JWT
-  try {
-    const sig = await subtleHmac(body, jwt);
-    if (sig) {
-      hmacCache.set(cacheKey, sig);
-      return sig;
-    }
-  } catch {
-    /* next */
-  }
-
-  // Strategy 2: HMAC-SHA256(body, '') — unkeyed hash via HMAC
-  try {
-    const sig = await subtleHmac(body, '');
-    if (sig) {
-      hmacCache.set(cacheKey, sig);
-      return sig;
-    }
-  } catch {
-    /* next */
-  }
-
-  // ponytail: unkeyed SHA-256 fallback
-  const fallback = await sha256Hex(body);
-  hmacCache.set(cacheKey, fallback);
-  return fallback;
-}
-
 /**
  * Build the full set of headers for a GLM API call.
- * Computes x-signature as HMAC-SHA256 of the body.
+ * No x-signature — server accepts requests without it.
  */
-export async function buildGlmHeaders(ctx: GlmContext, body: string, requestId: string): Promise<Record<string, string>> {
-  const signature = await computeSignature(body, ctx.jwt, '', requestId);
-
+export function buildGlmHeaders(_ctx: GlmContext, _body: string, _requestId: string): Record<string, string> {
   return {
-    Cookie: ctx.cookieStr || `token=${ctx.jwt}`,
-    Authorization: `Bearer ${ctx.jwt}`,
+    Authorization: `Bearer ${_ctx.jwt}`,
     'Content-Type': 'application/json',
-    'x-fe-version': GLM_FE_VERSION,
-    'x-signature': signature,
-    'x-region': 'overseas',
-    'x-request-id': requestId,
-    Accept: '*/*',
-    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
-    Origin: 'https://chat.z.ai',
-    Referer: '',
-    'accept-language': 'en-US',
-    'sec-fetch-dest': 'empty',
-    'sec-fetch-mode': 'cors',
-    'sec-fetch-site': 'same-origin',
-    'sec-gpc': '1',
+    'Accept-Language': 'en-US',
+    'X-FE-Version': GLM_FE_VERSION,
   };
 }
 
@@ -151,12 +85,23 @@ export async function buildGlmHeaders(ctx: GlmContext, body: string, requestId: 
  * Includes {{USER_NAME}}, {{CURRENT_DATETIME}}, etc.
  */
 export function buildGlmVariables(ctx: GlmContext): Record<string, string> {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const y = now.getFullYear();
+  const mo = pad(now.getMonth() + 1);
+  const d = pad(now.getDate());
+  const h = pad(now.getHours());
+  const mi = pad(now.getMinutes());
+  const s = pad(now.getSeconds());
+
   return {
     '{{USER_NAME}}': ctx.userName || 'User',
-    '{{CURRENT_DATETIME}}': new Date().toISOString(),
-    '{{CURRENT_DATE}}': new Date().toISOString().slice(0, 10),
-    '{{CURRENT_TIME}}': new Date().toTimeString().slice(0, 8),
-    '{{USER_ID}}': ctx.userId || '',
-    '{{MODEL}}': 'glm',
+    '{{USER_LOCATION}}': 'Unknown',
+    '{{CURRENT_DATETIME}}': `${y}-${mo}-${d} ${h}:${mi}:${s}`,
+    '{{CURRENT_DATE}}': `${y}-${mo}-${d}`,
+    '{{CURRENT_TIME}}': `${h}:${mi}:${s}`,
+    '{{CURRENT_WEEKDAY}}': ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][now.getDay()],
+    '{{CURRENT_TIMEZONE}}': Intl.DateTimeFormat().resolvedOptions().timeZone,
+    '{{USER_LANGUAGE}}': 'en-US',
   };
 }

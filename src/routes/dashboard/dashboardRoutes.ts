@@ -12,7 +12,7 @@ import { sessionPool } from '../../services/sessionPool.ts';
 import { checkApiKeyAuth } from '../../utils/auth.ts';
 import { projectPath } from '../../utils/paths.ts';
 import { APP_VERSION } from '../../utils/version.ts';
-import { accountsHtml } from './accounts.ts';
+import { getProviderKeys, getProviderPageHtml, providersListHtml } from './providers.ts';
 import { monitorHtml } from './monitor.ts';
 import { networkHtml } from './network.ts';
 import { overviewHtml } from './overview.ts';
@@ -294,10 +294,20 @@ function requireApiKey(c: any, next: () => Promise<void>) {
 
 export function registerDashboardRoutes(app: Hono): void {
   app.get('/dashboard', serveHtml(overviewHtml));
-  app.get('/dashboard/accounts', serveHtml(accountsHtml));
+  app.get('/dashboard/accounts', (c) => c.redirect('/dashboard/providers'));
   app.get('/dashboard/network', serveHtml(networkHtml));
   app.get('/dashboard/settings', serveHtml(settingsHtml));
   app.get('/dashboard/monitor', serveHtml(monitorHtml));
+
+  // Provider management pages
+  app.get('/dashboard/providers', serveHtml(providersListHtml));
+  const providerKeys = getProviderKeys();
+  for (const key of providerKeys) {
+    const html = getProviderPageHtml(key);
+    if (html) {
+      app.get(`/dashboard/providers/${key}`, serveHtml(html));
+    }
+  }
 
   app.get('/dashboard/static/:file', dashboardStaticHandler);
 

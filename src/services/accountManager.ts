@@ -538,8 +538,9 @@ export function isAvailable(acct: AccountEntry, provider?: string): boolean {
   if (acct.disabled) return false;
   if (provider && acct.disabledProviders?.includes(provider)) return false;
   if (acct.throttledUntil > Date.now()) return false;
-  // For now, "available" means Qwen authenticated (primary routing)
-  if (!acct.providerStates.qwen?.token) return false;
+  // Check the specific provider's token if one is specified
+  const targetProvider = provider || 'qwen';
+  if (!acct.providerStates[targetProvider]?.token) return false;
   return true;
 }
 export async function pickAccount(excludeEmail?: string): Promise<AccountEntry | null> {
@@ -594,6 +595,52 @@ export async function pickAccount(excludeEmail?: string): Promise<AccountEntry |
     return null;
   }
 }
+/**
+ * Pick the best available account for a specific provider (e.g. 'deepseek', 'glm').
+ * Falls back to any non-throttled, non-disabled account with a valid token for that provider.
+ */
+export async function pickAccountForProvider(provider: string, excludeEmail?: string): Promise<AccountEntry | null> {
+  try {
+    let available = accounts.filter((a) => isAvailable(a, provider));
+    if (excludeEmail) {
+      available = available.filter((a) => a.email !== excludeEmail);
+    }
+    if (available.length === 0) {
+      const throttled = accounts.filter((a) => a.throttledUntil > Date.now()).length;
+      const noState = accounts.filter((a) => !a.providerStates[provider]?.token).length;
+      logStore.log('warn', 'auth', `All accounts exhausted for provider ${provider} — ${throttled} throttled, ${noState} no ${provider} token`);
+      return null;
+    }
+    const pool = available.filter((a) => a.inFlight === 0);
+    const candidates = pool.length > 0 ? pool : available;
+    let bestIdx = 0;
+    for (let i = 1; i < candidates.length; i++) {
+      const a = candidates[i];
+      const b = candidates[bestIdx];
+      if (
+        a.inFlight < b.inFlight ||
+        (a.inFlight === b.inFlight && a.totalRequests < b.totalRequests) ||
+        (a.inFlight === b.inFlight && a.totalRequests === b.totalRequests && (a.lastUsed || 0) < (b.lastUsed || 0))
+      ) {
+        bestIdx = i;
+      }
+    }
+    const picked = candidates[bestIdx];
+    logStore.log(
+      'debug',
+      'auth',
+      `[Account] Picked ${picked.email} for ${provider} — inFlight=${picked.inFlight} totalReqs=${picked.totalRequests} lastUsed=${picked.lastUsed ? Date.now() - picked.lastUsed + 'ms ago' : 'never'}${excludeEmail ? ` (excluded: ${excludeEmail})` : ''}`,
+    );
+    picked.lastUsed = Date.now();
+    picked.inFlight++;
+    if (picked.inFlight > 20) picked.inFlight = 0;
+    return picked;
+  } catch (err: any) {
+    logStore.log('error', 'auth', `pickAccountForProvider error:`, err);
+    return null;
+  }
+}
+
 export function incrementInFlight(email: string): void {
   const acct = getAccountByEmail(email);
   if (acct) acct.inFlight++;

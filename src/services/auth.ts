@@ -17,6 +17,7 @@ import {
   getAccountByEmail,
   loadAccountsFromFile,
   migrateFromOldPaths,
+  pickAccountForProvider,
   rebuildEmailIndex,
   resetWatcherState,
   setupAccountWatcher as setupAccountWatcherImpl,
@@ -46,11 +47,13 @@ export {
   isAccountThrottled,
   isAvailable,
   pickAccount,
+  pickAccountForProvider,
   rebuildEmailIndex,
   reloadAccounts,
   removeAccount,
   setAccountDisabled,
   setAccountProviders,
+  setProviderStateLastError,
   throttleAccount,
 } from './accountManager.ts';
 export { ensureAccountFresh, needsRefresh, tryRefreshToken } from './tokenRefresh.ts';

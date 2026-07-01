@@ -1,6 +1,7 @@
 /*
  * File: providers/glm/session.ts
  * GLM chat session and user info management.
+ * Uses wreqFetch (Rust + BoringSSL) for TLS/HTTP2 fingerprint impersonation.
  */
 
 import { GLM_BASE_URL } from './spoofing.ts';
@@ -22,24 +23,27 @@ export interface GlmChatSession {
   updated_at: number;
 }
 
-// ponytail: simple in-memory cache per JWT
 const sessionCache = new Map<string, { session: GlmChatSession; timestamp: number }>();
-const SESSION_TTL = 30 * 60 * 1000; // 30 minutes
+const SESSION_TTL = 30 * 60 * 1000;
 
 /**
- * Get current user info from GLM (validates JWT, returns user details).
+ * Get current user info from GLM via wreqFetch (validates JWT, returns user details).
  */
 export async function getCurrentUser(jwt: string): Promise<GlmUser | null> {
   try {
-    const res = await fetch(`${GLM_BASE_URL}/api/v1/auths/`, {
+    const { wreqFetch } = await import('../../../services/wreqFetch.ts');
+    const res = await wreqFetch(`${GLM_BASE_URL}/api/v1/auths/`, {
+      method: 'GET',
       headers: {
         Authorization: `Bearer ${jwt}`,
         'Content-Type': 'application/json',
       },
-      signal: AbortSignal.timeout(10000),
+      timeout: 10,
+      impersonate: 'chrome_142',
     });
-    if (!res.ok) {
-      logStore.log('warn', 'glm-session', `GET /api/v1/auths/ returned ${res.status}`);
+    const upstreamStatus = parseInt(res.headers.get('X-Upstream-Status') || '0', 10);
+    if (upstreamStatus >= 400 || !res.ok) {
+      logStore.log('warn', 'glm-session', `GET /api/v1/auths/ returned ${upstreamStatus || res.status}`);
       return null;
     }
     const data: any = await res.json();
@@ -62,7 +66,7 @@ export async function getCurrentUser(jwt: string): Promise<GlmUser | null> {
 
 /**
  * Get or create a chat session for this JWT.
- * Caches for 30 minutes.
+ * Uses wreqFetch for all API calls. Caches for 30 minutes.
  */
 export async function getOrCreateChatSession(jwt: string, model: string): Promise<GlmChatSession | null> {
   const cached = sessionCache.get(jwt);
@@ -70,29 +74,35 @@ export async function getOrCreateChatSession(jwt: string, model: string): Promis
     return cached.session;
   }
 
+  const { wreqFetch } = await import('../../../services/wreqFetch.ts');
+
   try {
-    // Get current user
     const user = await getCurrentUser(jwt);
     if (!user) return null;
 
     // Clean up old sessions (keep max 5)
     try {
-      const sessionsRes = await fetch(`${GLM_BASE_URL}/api/v1/chats/`, {
+      const sessionsRes = await wreqFetch(`${GLM_BASE_URL}/api/v1/chats/`, {
+        method: 'GET',
         headers: { Authorization: `Bearer ${jwt}` },
-        signal: AbortSignal.timeout(10000),
+        timeout: 10,
+        impersonate: 'chrome_142',
       });
-      if (sessionsRes.ok) {
+      const sessionsUpstream = parseInt(sessionsRes.headers.get('X-Upstream-Status') || '0', 10);
+      if (sessionsRes.ok || sessionsUpstream < 400) {
         const chatsData: any = await sessionsRes.json();
         const chats = Array.isArray(chatsData) ? chatsData : chatsData?.data || [];
         for (let i = 5; i < chats.length; i++) {
-          fetch(`${GLM_BASE_URL}/api/v1/chats/${chats[i].id}`, {
+          wreqFetch(`${GLM_BASE_URL}/api/v1/chats/${chats[i].id}`, {
             method: 'DELETE',
             headers: { Authorization: `Bearer ${jwt}` },
+            timeout: 10,
+            impersonate: 'chrome_142',
           }).catch(() => {});
         }
       }
     } catch {
-      // Non-critical — proceed with session creation
+      // Non-critical
     }
 
     // Create new chat session
@@ -118,18 +128,20 @@ export async function getOrCreateChatSession(jwt: string, model: string): Promis
       },
     };
 
-    const chatRes = await fetch(`${GLM_BASE_URL}/api/v1/chats/new`, {
+    const chatRes = await wreqFetch(`${GLM_BASE_URL}/api/v1/chats/new`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${jwt}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(chatBody),
-      signal: AbortSignal.timeout(15000),
+      timeout: 15,
+      impersonate: 'chrome_142',
     });
 
-    if (!chatRes.ok) {
-      logStore.log('warn', 'glm-session', `POST /api/v1/chats/new returned ${chatRes.status}`);
+    const chatUpstream = parseInt(chatRes.headers.get('X-Upstream-Status') || '0', 10);
+    if (!chatRes.ok || chatUpstream >= 400) {
+      logStore.log('warn', 'glm-session', `POST /api/v1/chats/new returned ${chatUpstream || chatRes.status}`);
       return null;
     }
 
