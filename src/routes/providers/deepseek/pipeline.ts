@@ -1,19 +1,32 @@
 /*
  * File: providers/deepseek/pipeline.ts
- * DeepSeek web chat API pipeline — converts OpenAI requests to DeepSeek's internal format.
- * Full flow: build context -> solve PoW -> create session -> send chat -> parse SSE.
+ * DeepSeek web chat API pipeline — browserless, using wreqFetch for TLS.
+ *
+ * Full flow:
+ *   1. Get hif-leim (global cache, 10 min TTL)
+ *   2. Solve PoW via direct WASM (per-email cache, up to 2 min TTL)
+ *   3. Create chat session (per-token cache, 30 min TTL)
+ *   4. Send chat completion with all bypass headers
+ *   5. Parse SSE → OpenAI format + content filtering
+ *
+ * ALL 4 requests include the full browser impersonation headers.
+ * TLS impersonation via wreqFetch (Rust + BoringSSL, chrome_142).
  */
 
 import type { Context } from 'hono';
 import type { OpenAIRequest } from '../../../types/openai.ts';
 import { logStore } from '../../../services/logStore.ts';
-import { getAccountByEmail, getProviderState, getProviderToken } from '../../../services/accountManager.ts';
-import { getOrCreateChatSession, getCurrentUser } from './session.ts';
+import { getProviderState } from '../../../services/accountManager.ts';
+import { getOrCreateChatSession } from './session.ts';
 import { getPowResponseHeader } from './pow.ts';
+import { getHifLeim } from './leim.ts';
 import { buildDeepSeekHeaders, createDeepSeekContext, DEEPSEEK_BASE_URL } from './spoofing.ts';
 import { createStreamState, parseDeepSeekData, type DeepSeekStreamState } from './stream.ts';
+import { cleanTextOfXmlArtifacts } from '../../../tools/xmlToolParser.ts';
+import { filterContent } from '../../../utils/contentFilter.ts';
 
 const CHAT_ENDPOINT = '/api/v0/chat/completion';
+const DEEPSEEK_FETCH_TIMEOUT = 60_000;
 
 /**
  * Convert OpenAI messages to a single prompt string (DeepSeek web chat uses prompt, not messages).
@@ -21,107 +34,51 @@ const CHAT_ENDPOINT = '/api/v0/chat/completion';
 function messagesToPrompt(messages: Array<{ role: string; content: string | null }>): string {
   return messages
     .map(function (m) {
-      var role: string;
-      if (m.role === 'assistant') role = 'Assistant';
-      else if (m.role === 'system') role = 'System';
-      else role = 'User';
+      const role = m.role === 'assistant' ? 'Assistant' : m.role === 'system' ? 'System' : 'User';
       return role + ': ' + (m.content ?? '');
     })
     .join('\n');
 }
 
 /**
- * Get the deepseek provider state for an account email.
- * Returns the bearer token from the account's provider state, or null.
+ * Proxy a request through DeepSeek's web chat API via wreqFetch.
+ * Browserless: PoW via direct WASM, leim via fetch, session via API.
  */
-function getDeepSeekTokenForEmail(email: string): string | null {
-  var state = getProviderState(email, 'deepseek');
-  if (state && state.token) return state.token;
-  return null;
-}
-
-/**
- * Proxy a request through DeepSeek's web chat API.
- * Full flow: build context -> solve PoW -> create session -> send chat -> parse SSE.
- *
- * If accountEmail is omitted, picks any account with a valid deepseek token.
- */
-export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, accountEmail?: string): Promise<Response> {
-  var model = body.model.replace(/^deepseek\//, '');
-  var isStream = body.stream === true;
-
-  // 1. Get bearer token
-  var bearerToken: string | null = null;
-  var email: string = accountEmail || '';
-
-  if (email) {
-    bearerToken = getDeepSeekTokenForEmail(email);
-  } else {
-    // Fall back to any account with deepseek token — also track the email
-    bearerToken = getProviderToken('deepseek');
-    if (bearerToken) {
-      var { accounts } = await import('../../../services/accountManager.ts');
-      var dsAccount = accounts.find(
-        (a) => !a.disabled && !(a.disabledProviders || []).includes('deepseek') && a.providerStates.deepseek?.token === bearerToken,
-      );
-      if (dsAccount) email = dsAccount.email;
-    }
-  }
-
-  if (!bearerToken) {
-    return c.json(
-      {
-        error: {
-          message: 'No DeepSeek account logged in. Login via dashboard first.',
-          type: 'auth_error',
-        },
-      },
-      { status: 503, headers: { 'content-type': 'application/json' } },
-    );
-  }
-
-  // 2. Build spoofing context
-  var ctx = createDeepSeekContext(bearerToken);
+export async function proxyViaDeepSeekWebChat(
+  c: Context,
+  body: OpenAIRequest,
+  email: string,
+  bearerToken: string,
+  model: string,
+  isStream: boolean,
+): Promise<Response> {
   logStore.log('debug', 'deepseek-pipeline', `email=${email} model=${model} stream=${isStream}`);
 
-  // Get provider state (cookies, wafToken)
-  var providerState = getProviderState(email, 'deepseek');
+  // ── Step 1: Get hif-leim (global cache, 10 min) ──
+  const leim = await getHifLeim();
+  logStore.log('debug', 'deepseek-pipeline', `Leim: ${leim.slice(0, 20)}...`);
 
-  // 3. Solve PoW challenge
-  var powHeader: string | null = null;
-  var cookies = providerState?.cookies || undefined;
-  try {
-    powHeader = await getPowResponseHeader(email || 'unknown', bearerToken, '/api/v0/chat/completion', cookies);
-    logStore.log('debug', 'deepseek-pipeline', `PoW solved: ${powHeader ? 'yes (' + powHeader.length + ' chars)' : 'no'}`);
-  } catch (err: any) {
-    logStore.log('warn', 'deepseek-pow', 'PoW solving failed: ' + err.message + ' — proceeding without PoW');
-  }
+  // ── Step 2: Solve PoW challenge via direct WASM (per-email cache) ──
+  const powHeader = await getPowResponseHeader(email, bearerToken, CHAT_ENDPOINT);
+  logStore.log('debug', 'deepseek-pipeline', `PoW solved: ${powHeader.length} chars`);
 
-  // 4. Get or create chat session
-  var session = await getOrCreateChatSession(bearerToken);
+  // ── Step 3: Get or create chat session (per-token cache, 30 min) ──
+  const session = await getOrCreateChatSession(bearerToken, email, powHeader);
   if (!session) {
     logStore.log('warn', 'deepseek-session', 'Failed to create chat session');
-    return c.json(
-      {
-        error: {
-          message: 'Failed to create DeepSeek chat session. Token may be expired.',
-          type: 'auth_error',
-        },
-      },
-      { status: 503, headers: { 'content-type': 'application/json' } },
-    );
+    throw Object.assign(new Error('Failed to create DeepSeek chat session — token may be expired'), { upstreamStatus: 401 });
   }
   logStore.log('debug', 'deepseek-pipeline', `Session: ${session.id}`);
 
-  // 5. Build the DeepSeek web chat request body
-  var prompt = messagesToPrompt(body.messages || []);
-  var modelType = model === 'deepseek-reasoner' ? 'reasoner' : session.model_type || 'default';
+  // ── Step 4: Build the DeepSeek web chat request body ──
+  const prompt = messagesToPrompt(body.messages || []);
+  const modelType = model === 'deepseek-reasoner' ? 'reasoner' : session.model_type || 'default';
 
-  var deepseekBody: Record<string, any> = {
+  const deepseekBody: Record<string, any> = {
     chat_session_id: session.id,
     parent_message_id: null,
     model_type: modelType,
-    prompt: prompt,
+    prompt,
     ref_file_ids: [],
     thinking_enabled: model === 'deepseek-reasoner',
     search_enabled: true,
@@ -129,190 +86,169 @@ export async function proxyViaDeepSeekWebChat(c: Context, body: OpenAIRequest, a
     preempt: false,
   };
 
-  // 6. Build spoofed browser headers (include wafToken from provider state)
-  var providerState = getProviderState(email, 'deepseek');
-  var wafToken = providerState?.wafToken || undefined;
-  // Extract aws-waf-token from cookies if not explicitly stored
-  if (!wafToken && providerState?.cookies) {
-    var wafMatch = providerState.cookies.match(/aws-waf-token=([^;]+)/);
-    if (wafMatch) wafToken = wafMatch[1];
-  }
-  var headers = buildDeepSeekHeaders(ctx, {
-    powResponse: powHeader || undefined,
-    hifLeim: ctx.hifLeim,
+  // ── Step 5: Build full browser headers with ALL bypass fields ──
+  const ctx = createDeepSeekContext(bearerToken);
+  const providerState = getProviderState(email, 'deepseek');
+  const wafToken = providerState?.wafToken || undefined;
+  const headers = buildDeepSeekHeaders(ctx, {
+    powResponse: powHeader,
+    hifLeim: leim,
     dsSessionId: session.id,
-    wafToken: wafToken,
+    wafToken,
   });
 
-  // 7. Send request to DeepSeek web chat API
   logStore.log(
     'debug',
     'deepseek-pipeline',
-    `Fetching ${DEEPSEEK_BASE_URL + CHAT_ENDPOINT} (wafToken=${wafToken ? 'yes' : 'no'}, pow=${powHeader ? 'yes' : 'no'})`,
+    `Fetching ${DEEPSEEK_BASE_URL}${CHAT_ENDPOINT} via wreqFetch (pow=yes, leim=yes, waf=${wafToken ? 'yes' : 'no'})`,
   );
-  try {
-    var resp = await fetch(DEEPSEEK_BASE_URL + CHAT_ENDPOINT, {
-      method: 'POST',
-      headers: headers as unknown as Record<string, string>,
-      body: JSON.stringify(deepseekBody),
-      signal: AbortSignal.timeout(30000),
-    });
-    logStore.log('debug', 'deepseek-pipeline', `Response: ${resp.status} ${resp.headers.get('content-type')}`);
 
-    if (!resp.ok) {
-      var errText = await resp.text().catch(function () {
-        return 'unknown error';
-      });
-      return c.json(
-        {
-          error: {
-            message: 'DeepSeek web chat API error (' + resp.status + '): ' + errText,
-            type: 'upstream_error',
-          },
-        },
-        { status: resp.status as any, headers: { 'content-type': 'application/json' } },
-      );
+  // ── Step 6: Send chat completion via wreqFetch ──
+  const { wreqFetch } = await import('../../../services/wreqFetch.ts');
+  const resp = await wreqFetch(DEEPSEEK_BASE_URL + CHAT_ENDPOINT, {
+    method: 'POST',
+    headers: headers as unknown as Record<string, string>,
+    body: JSON.stringify(deepseekBody),
+    stream: isStream,
+    timeout: Math.ceil(DEEPSEEK_FETCH_TIMEOUT / 1000),
+    impersonate: 'chrome_142',
+  });
+
+  const upstreamStatus = parseInt(resp.headers.get('X-Upstream-Status') || '0', 10);
+  logStore.log(
+    'debug',
+    'deepseek-pipeline',
+    `Response: status=${upstreamStatus || resp.status} content-type=${resp.headers.get('content-type')}`,
+  );
+
+  if (!resp.ok || upstreamStatus >= 400) {
+    const errText = await resp.text().catch(() => 'unknown error');
+    const effectiveStatus = upstreamStatus || resp.status;
+    const err = new Error('DeepSeek web chat API error (' + effectiveStatus + '): ' + errText.slice(0, 500));
+    (err as any).upstreamStatus = effectiveStatus;
+    throw err;
+  }
+
+  // ── Non-streaming: buffer SSE, extract content, filter ──
+  if (!isStream) {
+    const text = await resp.text();
+    logStore.log('debug', 'deepseek-raw', `len=${text.length} head=${text.slice(0, 1000)}`);
+    const state: DeepSeekStreamState = createStreamState();
+    const lines = text.split('\n').filter((l) => l.startsWith('data: '));
+    for (const line of lines) {
+      const data = line.slice(6);
+      if (data === '[DONE]') continue;
+      parseDeepSeekData(data, state, body.model, session.id);
     }
 
-    var contentType = resp.headers.get('content-type') || '';
+    const rawContent = state.content || ' ';
+    const filtered = filterContent(rawContent);
+    const cleanedText = cleanTextOfXmlArtifacts(filtered.cleanText).cleanedText || ' ';
 
-    // Non-streaming: buffer entire SSE response and extract content
-    if (!isStream) {
-      var text = await resp.text();
-      logStore.log('debug', 'deepseek-raw', 'CT=' + contentType + ' len=' + text.length + ' head=' + text.slice(0, 1000));
-      var state: DeepSeekStreamState = createStreamState();
-      var lines = text.split('\n').filter(function (l) {
-        return l.startsWith('data: ');
-      });
-      for (var i = 0; i < lines.length; i++) {
-        var lineData = lines[i].slice(6);
-        if (lineData === '[DONE]') continue;
-        parseDeepSeekData(lineData, state, body.model, session.id);
-      }
-
-      return c.json(
-        {
-          id: session.id,
-          object: 'chat.completion',
-          created: Math.floor(Date.now() / 1000),
-          model: body.model,
-          choices: [
-            {
-              index: 0,
-              message: {
-                role: 'assistant',
-                content: state.content || ' ',
-              },
-              finish_reason: 'stop',
+    return c.json(
+      {
+        id: session.id,
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: body.model,
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: cleanedText,
+              ...(filtered.thinking ? { reasoning_content: filtered.thinking } : {}),
             },
-          ],
-          usage: state.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-        },
-        { headers: { 'content-type': 'application/json' } },
-      );
-    }
+            finish_reason: 'stop',
+          },
+        ],
+        usage: state.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      },
+      { headers: { 'content-type': 'application/json' } },
+    );
+  }
 
-    // 8. Streaming: convert DeepSeek SSE to OpenAI SSE on the fly
-    var { readable, writable } = new TransformStream();
-    var writer = writable.getWriter();
-    var reader = resp.body!.getReader();
-    var decoder = new TextDecoder();
-    var encoder = new TextEncoder();
+  // ── Streaming: convert DeepSeek SSE → OpenAI SSE ──
+  if (!resp.body) {
+    throw Object.assign(new Error('DeepSeek returned empty response body'), { upstreamStatus: 502 });
+  }
 
-    (async function () {
-      var buffer = '';
-      var state: DeepSeekStreamState = createStreamState();
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const reader = resp.body.getReader();
+  const encoder = new TextEncoder();
 
-      try {
-        while (true) {
-          var result = await reader.read();
-          if (result.done) {
-            // Flush remaining buffer
-            if (buffer.trim()) {
-              var dataMatch = buffer.match(/^data: (.+)$/m);
-              if (dataMatch) {
-                var result2 = parseDeepSeekData(dataMatch[1], state, body.model, session.id);
-                for (var k = 0; k < result2.chunks.length; k++) {
-                  await writer.write(encoder.encode(result2.chunks[k]));
-                }
-              }
+  (async () => {
+    let buffer = '';
+    const state: DeepSeekStreamState = createStreamState();
+    const decoder = new TextDecoder();
+
+    try {
+      while (true) {
+        const result = await reader.read();
+        if (result.done) {
+          if (buffer.trim()) {
+            const dataMatch = buffer.match(/^data: (.+)$/m);
+            if (dataMatch) {
+              const pr = parseDeepSeekData(dataMatch[1], state, body.model, session.id);
+              for (const chunk of pr.chunks) await writer.write(encoder.encode(chunk));
             }
-            // Emit [DONE]
-            await writer.write(encoder.encode('data: [DONE]\n\n'));
-            await writer.close();
-            break;
+          }
+          await writer.write(encoder.encode('data: [DONE]\n\n'));
+          await writer.close();
+          break;
+        }
+
+        buffer += decoder.decode(result.value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+
+          if (trimmed.startsWith('event: ')) {
+            state._pendingEvent = trimmed.slice(7).trim();
+            continue;
           }
 
-          buffer += decoder.decode(result.value, { stream: true });
-
-          // Process complete lines from buffer
-          var lines2 = buffer.split('\n');
-          // Keep the last (potentially incomplete) line in the buffer
-          buffer = lines2.pop() || '';
-
-          for (var j = 0; j < lines2.length; j++) {
-            var line = lines2[j].trim();
-
-            if (!line) continue;
-
-            // Track event: lines
-            if (line.startsWith('event: ')) {
-              state._pendingEvent = line.slice(7).trim();
+          if (trimmed.startsWith('data: ')) {
+            const dataContent = trimmed.slice(6).trim();
+            if (dataContent === '[DONE]') {
+              await writer.write(encoder.encode('data: [DONE]\n\n'));
               continue;
             }
 
-            // Process data: lines
-            if (line.startsWith('data: ')) {
-              var dataContent = line.slice(6).trim();
+            const parseResult = parseDeepSeekData(dataContent, state, body.model, session.id);
+            for (const chunk of parseResult.chunks) {
+              await writer.write(encoder.encode(chunk));
+            }
 
-              // Skip [DONE] (unlikely from DeepSeek, but handle it)
-              if (dataContent === '[DONE]') {
-                await writer.write(encoder.encode('data: [DONE]\n\n'));
-                continue;
-              }
-
-              var parseResult = parseDeepSeekData(dataContent, state, body.model, session.id);
-
-              for (var m = 0; m < parseResult.chunks.length; m++) {
-                await writer.write(encoder.encode(parseResult.chunks[m]));
-              }
-
-              if (parseResult.done) {
-                await writer.write(encoder.encode('data: [DONE]\n\n'));
-                await writer.close();
-                return;
-              }
+            if (parseResult.done) {
+              await writer.write(encoder.encode('data: [DONE]\n\n'));
+              await writer.close();
+              return;
             }
           }
         }
-      } catch (err: any) {
-        logStore.log('error', 'deepseek-stream', 'Stream error: ' + err.message);
-        try {
-          await writer.write(encoder.encode('data: [DONE]\n\n'));
-          await writer.close();
-        } catch {
-          // writer may already be closed
-        }
       }
-    })();
+    } catch (err: any) {
+      logStore.log('error', 'deepseek-stream', 'Stream error: ' + err.message);
+      try {
+        await writer.write(encoder.encode('data: [DONE]\n\n'));
+        await writer.close();
+      } catch {
+        /* writer may already be closed */
+      }
+    }
+  })();
 
-    return new Response(readable, {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      },
-    });
-  } catch (err: any) {
-    return c.json(
-      {
-        error: {
-          message: 'DeepSeek proxy error: ' + err.message,
-          type: 'proxy_error',
-        },
-      },
-      { status: 502, headers: { 'content-type': 'application/json' } },
-    );
-  }
+  return new Response(readable, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    },
+  });
 }

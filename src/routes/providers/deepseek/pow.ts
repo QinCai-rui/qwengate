@@ -1,14 +1,24 @@
 /*
  * File: providers/deepseek/pow.ts
- * DeepSeek Proof-of-Work (PoW) challenge solver.
- * DeepSeekHashV1 algorithm uses SHA3 WASM — we solve via browser profile or direct WASM loading.
+ * DeepSeek Proof-of-Work (PoW) solver — direct WebAssembly, browserless.
+ *
+ * Loads the official DeepSeek SHA3 WASM once and reuses it to solve PoW
+ * challenges. The WASM is downloaded on first use and cached in memory.
+ * PoW solutions cached per (email, target_path) up to challenge.expire_after.
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { logStore } from '../../../services/logStore.ts';
 import { DEEPSEEK_BASE_URL } from './spoofing.ts';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const WASM_PATH = resolve(__dirname, 'sha3_wasm_bg.wasm');
+
 const POW_ENDPOINT = '/api/v0/chat/create_pow_challenge';
-const WASM_URL = 'https://fe-static.deepseek.com/chat/static/sha3_wasm_bg.7b9ca65ddd.wasm';
+
+// ── Types ──
 
 export interface PowChallenge {
   algorithm: string;
@@ -30,320 +40,142 @@ export interface PowSolution {
   target_path: string;
 }
 
-// ponytail: simple in-memory cache — keyed by (email, target_path)
+// ── WASM singleton ──
+
+let wasmExports: Record<string, any> | null = null;
+
+function getWasm(): Record<string, any> {
+  if (wasmExports) return wasmExports;
+  const bytes = readFileSync(WASM_PATH);
+  const module = new WebAssembly.Module(bytes);
+  const instance = new WebAssembly.Instance(module, { wbg: {} });
+  const e = instance.exports as Record<string, any>;
+  if (typeof e.__wbindgen_start === 'function') {
+    try {
+      e.__wbindgen_start();
+    } catch (_) {
+      /* wasm init noise */
+    }
+  }
+  e.memory.grow(20);
+  wasmExports = e;
+  return e;
+}
+
+function encodeString(text: string): { ptr: number; len: number } {
+  const e = getWasm();
+  const bytes = new TextEncoder().encode(text);
+  const ptr = e.__wbindgen_export_0(bytes.length, 1) >>> 0;
+  new Uint8Array(e.memory.buffer, ptr, bytes.length).set(bytes);
+  return { ptr, len: bytes.length };
+}
+
+function solveWasm(challenge: PowChallenge): number {
+  const e = getWasm();
+  const c = encodeString(challenge.challenge);
+  const p = encodeString(challenge.salt + '_' + challenge.expire_at + '_');
+  const retptr = e.__wbindgen_add_to_stack_pointer(-16);
+  try {
+    e.wasm_solve(retptr, c.ptr, c.len, p.ptr, p.len, challenge.difficulty);
+    const view = new DataView(e.memory.buffer);
+    const flag = view.getInt32(retptr, true);
+    const ans = view.getFloat64(retptr + 8, true);
+    if (flag === 0) throw new Error('No PoW solution found');
+    return ans;
+  } finally {
+    e.__wbindgen_add_to_stack_pointer(16);
+  }
+}
+
+function buildPowHeader(challenge: PowChallenge, answer: number): string {
+  return Buffer.from(
+    JSON.stringify({
+      algorithm: challenge.algorithm,
+      challenge: challenge.challenge,
+      salt: challenge.salt,
+      answer,
+      signature: challenge.signature,
+      target_path: challenge.target_path,
+    }),
+  ).toString('base64');
+}
+
+// ── Cache (per-key: email:target_path) ──
+
 interface PowCacheEntry {
   header: string;
   expiresAt: number;
 }
 const powResponseCache = new Map<string, PowCacheEntry>();
 
+// ── API ──
+
 /**
- * Request a new PoW challenge from DeepSeek.
- * Requires Bearer token in authorization header.
+ * Fetch a PoW challenge from DeepSeek via wreqFetch.
  */
-export async function getPowChallenge(
-  bearerToken: string,
-  targetPath: string = '/api/v0/chat/completion',
-  cookies?: string,
-): Promise<PowChallenge | null> {
-  try {
-    const headers: Record<string, string> = {
+async function getPowChallenge(bearerToken: string, targetPath = '/api/v0/chat/completion'): Promise<PowChallenge> {
+  const { wreqFetch } = await import('../../../services/wreqFetch.ts');
+  const res = await wreqFetch(DEEPSEEK_BASE_URL + POW_ENDPOINT, {
+    method: 'POST',
+    headers: {
       Authorization: 'Bearer ' + bearerToken,
       'Content-Type': 'application/json',
-    };
-    if (cookies) headers['cookie'] = cookies;
-    const res = await fetch(DEEPSEEK_BASE_URL + POW_ENDPOINT, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ target_path: targetPath }),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!res.ok) return null;
-    const body: any = await res.json();
-    const data = body.data || body;
-    return {
-      algorithm: data.algorithm || 'DeepSeekHashV1',
-      challenge: data.challenge,
-      salt: data.salt,
-      signature: data.signature,
-      difficulty: data.difficulty,
-      expire_at: data.expire_at,
-      expire_after: data.expire_after,
-      target_path: data.target_path || targetPath,
-    };
-  } catch {
-    return null;
+    },
+    body: JSON.stringify({ target_path: targetPath }),
+    timeout: 10,
+    impersonate: 'chrome_142',
+  });
+  const upstreamStatus = parseInt(res.headers.get('X-Upstream-Status') || '0', 10);
+  if (upstreamStatus >= 400 || !res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`PoW challenge failed: ${upstreamStatus || res.status} ${errText.slice(0, 200)}`);
   }
+  const body: any = await res.json();
+  const ch = body.data?.biz_data?.challenge;
+  if (!ch) throw new Error('No challenge in PoW response: ' + JSON.stringify(body).slice(0, 300));
+  return {
+    algorithm: ch.algorithm || 'DeepSeekHashV1',
+    challenge: ch.challenge,
+    salt: ch.salt,
+    signature: ch.signature,
+    difficulty: ch.difficulty,
+    expire_at: ch.expire_at,
+    expire_after: ch.expire_after || 120_000,
+    target_path: ch.target_path || targetPath,
+  };
 }
 
 /**
- * Solve a PoW challenge using the browser profile (page.evaluate).
- * Opens a page, loads the DeepSeek WASM, and calls the solver function.
+ * Get a PoW response header (base64-encoded solution JSON).
+ * Cached per (email, target_path) up to the challenge's expire_after.
+ * Throws on failure — caller should catch and retry.
  */
-export async function solvePowViaBrowser(email: string, challenge: PowChallenge): Promise<number | null> {
-  try {
-    const { setupBrowserContext } = await import('../../../services/browserProfiles.ts');
-    const context = await setupBrowserContext(email, true);
-    const page = context.pages()[0] || (await context.newPage());
-
-    try {
-      // Navigate to DeepSeek chat page so the WASM module is loaded in the page context
-      await page.goto(DEEPSEEK_BASE_URL + '/chat', {
-        waitUntil: 'domcontentloaded',
-        timeout: 15000,
-      });
-
-      // Use JSON-serializable params to avoid template string issues
-      const params = {
-        challenge: challenge.challenge,
-        salt: challenge.salt,
-        signature: challenge.signature,
-        difficulty: challenge.difficulty,
-        wasmUrl: WASM_URL,
-      };
-
-      // Evaluate the PoW solver in the browser page context
-      const answer: number = await page.evaluate(
-        (p: { challenge: string; salt: string; signature: string; difficulty: number; wasmUrl: string }) => {
-          return new Promise<number>((resolve, _reject) => {
-            const timeout = setTimeout(() => {
-              resolve(-1);
-            }, 30000);
-
-            // Fetch and instantiate the SHA3 WASM module
-            fetch(p.wasmUrl)
-              .then(function (r) {
-                return r.arrayBuffer();
-              })
-              .then(function (bytes) {
-                return WebAssembly.instantiate(bytes, {
-                  env: { memory: new WebAssembly.Memory({ initial: 256 }) },
-                });
-              })
-              .then(function (wasmResult) {
-                const wasmExports: any = wasmResult.instance.exports;
-
-                // Try to find the solve function (various possible export names)
-                var solveFn = wasmExports.pow_solve || wasmExports.solve || wasmExports.pow_solve_js;
-
-                if (typeof solveFn === 'function') {
-                  // Try calling with string parameters directly (Rust WASM with &str params)
-                  // The function expects (challenge_ptr, challenge_len, salt_ptr, salt_len, ...)
-                  var enc = new TextEncoder();
-
-                  function writeStr(mem: WebAssembly.Memory, str: string): number {
-                    var buf = enc.encode(str);
-                    var allocFn = wasmExports.__wbindgen_malloc || wasmExports.malloc;
-                    if (!allocFn) return 0;
-                    var ptr: number = allocFn(buf.length);
-                    if (!ptr && ptr !== 0) return 0;
-                    new Uint8Array(mem.buffer, ptr, buf.length).set(buf);
-                    return ptr;
-                  }
-
-                  var mem: WebAssembly.Memory = wasmExports.memory;
-                  if (!mem) {
-                    // No memory export — try calling with raw strings
-                    try {
-                      var ans: number = solveFn(p.challenge, p.salt, p.signature, p.difficulty);
-                      clearTimeout(timeout);
-                      resolve(ans);
-                      return;
-                    } catch (_e) {
-                      clearTimeout(timeout);
-                      resolve(-1);
-                      return;
-                    }
-                  }
-
-                  var cPtr: number = writeStr(mem, p.challenge);
-                  var sPtr: number = writeStr(mem, p.salt);
-                  var sigPtr: number = writeStr(mem, p.signature);
-
-                  try {
-                    var ans: number = solveFn(cPtr, p.challenge.length, sPtr, p.salt.length, sigPtr, p.signature.length, p.difficulty);
-                    clearTimeout(timeout);
-                    resolve(ans);
-                  } catch (_e) {
-                    // Pure integer solve as last resort
-                    try {
-                      var ans: number = solveFn(p.challenge, p.salt, p.signature, p.difficulty);
-                      clearTimeout(timeout);
-                      resolve(ans);
-                    } catch (_e2) {
-                      clearTimeout(timeout);
-                      resolve(-1);
-                    }
-                  }
-                } else {
-                  // No solve function found — try calling exports[0] as a catch-all
-                  clearTimeout(timeout);
-                  resolve(-1);
-                }
-              })
-              .catch(function () {
-                clearTimeout(timeout);
-                resolve(-1);
-              });
-          });
-        },
-        params,
-      );
-
-      if (answer < 0) return null;
-      return answer;
-    } finally {
-      await context.close().catch(function () {
-        /* ignore */
-      });
-    }
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Solve PoW by loading WASM directly in Node.js (fallback).
- * Uses WebAssembly.instantiate to load the SHA3 WASM module and calls exported solve function.
- */
-export async function solvePowViaWasm(challenge: PowChallenge): Promise<number | null> {
-  try {
-    const wasmBytes = await fetch(WASM_URL).then(function (r) {
-      if (!r.ok) throw new Error('WASM fetch failed: ' + r.status);
-      return r.arrayBuffer();
-    });
-
-    // wasm-pack generated modules expect env imports with memory
-    const memory = new WebAssembly.Memory({ initial: 256, maximum: 65536 });
-    let heapBase = 1024;
-
-    const importObj: Record<string, any> = {
-      env: {
-        memory: memory,
-      },
-    };
-    // Add optional wbindgen imports needed by wasm-pack
-    importObj.env.__wbindgen_throw = function (_ptr: number, _len: number) {
-      // silent — PoW failures are non-fatal
-    };
-    importObj.env.__wbindgen_malloc = function (size: number) {
-      var ptr = heapBase;
-      heapBase += size;
-      // Align to 8 bytes
-      heapBase = (heapBase + 7) & ~7;
-      return ptr;
-    };
-    importObj.env.__wbindgen_free = function (_ptr: number, _len: number) {
-      // no-op — our simple allocator doesn't free
-    };
-
-    const { instance } = await WebAssembly.instantiate(wasmBytes, importObj);
-    const exports = instance.exports as Record<string, Function>;
-
-    // Find the solve function
-    const solveFn = exports.pow_solve || exports.solve || exports.pow_solve_js;
-    if (typeof solveFn !== 'function') {
-      return null;
-    }
-
-    // Helper to write a string into WASM memory
-    const enc = new TextEncoder();
-    function writeString(str: string): number {
-      var buf = enc.encode(str);
-      var ptr = (importObj.env as any).__wbindgen_malloc(buf.length);
-      new Uint8Array(memory.buffer, ptr, buf.length).set(buf);
-      return ptr;
-    }
-
-    // Try calling with string pointers (wasm-bindgen convention)
-    try {
-      var cPtr = writeString(challenge.challenge);
-      var sPtr = writeString(challenge.salt);
-      var sigPtr = writeString(challenge.signature);
-      var answer: any = (solveFn as Function)(
-        cPtr,
-        challenge.challenge.length,
-        sPtr,
-        challenge.salt.length,
-        sigPtr,
-        challenge.signature.length,
-        challenge.difficulty,
-      );
-      if (typeof answer === 'number' && answer >= 0) return answer;
-    } catch {
-      // Try direct number-based call
-    }
-
-    // Fallback: try direct string pass (some WASM exports handle JS strings)
-    try {
-      var answer2: any = (solveFn as Function)(challenge.challenge, challenge.salt, challenge.signature, challenge.difficulty);
-      if (typeof answer2 === 'number' && answer2 >= 0) return answer2;
-    } catch {
-      // WASM approach failed
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Full flow: get challenge + solve + return base64-encoded solution header.
- * Caches the solution for the challenge's expire_after ms to avoid re-solving.
- */
-export async function getPowResponseHeader(
-  email: string,
-  bearerToken: string,
-  targetPath: string = '/api/v0/chat/completion',
-  cookies?: string,
-): Promise<string | null> {
-  var cacheKey = email + ':' + targetPath;
-  var cached = powResponseCache.get(cacheKey);
+export async function getPowResponseHeader(email: string, bearerToken: string, targetPath = '/api/v0/chat/completion'): Promise<string> {
+  const cacheKey = email + ':' + targetPath;
+  const cached = powResponseCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.header;
   }
 
-  var challenge = await getPowChallenge(bearerToken, targetPath, cookies);
-  if (!challenge) {
-    logStore.log('warn', 'deepseek-pow', 'Failed to get PoW challenge');
-    return null;
-  }
+  const challenge = await getPowChallenge(bearerToken, targetPath);
   logStore.log('debug', 'deepseek-pow', `Challenge: difficulty=${challenge.difficulty} algorithm=${challenge.algorithm}`);
 
-  var answer: number | null = null;
+  const answer = solveWasm(challenge);
+  const header = buildPowHeader(challenge, answer);
+  logStore.log('debug', 'deepseek-pow', `Solved: answer=${answer} header_len=${header.length}`);
 
-  // Try WASM direct first (fastest, no browser needed)
-  answer = await solvePowViaWasm(challenge);
-  logStore.log('debug', 'deepseek-pow', `WASM solver: ${answer !== null ? 'success' : 'failed'}`);
-
-  // Fallback: try via browser profile
-  if (answer === null) {
-    answer = await solvePowViaBrowser(email, challenge);
-    logStore.log('debug', 'deepseek-pow', `Browser solver: ${answer !== null ? 'success' : 'failed'}`);
-  }
-
-  if (answer === null) {
-    logStore.log('warn', 'deepseek-pow', 'All PoW solvers failed');
-    return null;
-  }
-
-  var solution: PowSolution = {
-    algorithm: challenge.algorithm,
-    challenge: challenge.challenge,
-    salt: challenge.salt,
-    answer: answer,
-    signature: challenge.signature,
-    target_path: challenge.target_path,
-  };
-
-  // Encode as base64 JSON for the x-ds-pow-response header
-  var json = JSON.stringify(solution);
-  var header = Buffer.from(json).toString('base64');
-
-  // Cache until expire_after ms before the challenge expires
-  var ttl = Math.min(challenge.expire_after || 120000, 120000);
-  powResponseCache.set(cacheKey, { header: header, expiresAt: Date.now() + ttl });
+  const ttl = Math.min(challenge.expire_after || 120_000, 120_000);
+  powResponseCache.set(cacheKey, { header, expiresAt: Date.now() + ttl });
 
   return header;
+}
+
+/**
+ * Solves PoW inline without caching — for one-shot use where the caller
+ * manages its own caching (e.g. session create with a different target_path).
+ */
+export async function solvePowInline(bearerToken: string, targetPath = '/api/v0/chat/completion'): Promise<string> {
+  const challenge = await getPowChallenge(bearerToken, targetPath);
+  const answer = solveWasm(challenge);
+  return buildPowHeader(challenge, answer);
 }

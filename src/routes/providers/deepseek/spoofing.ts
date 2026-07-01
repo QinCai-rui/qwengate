@@ -38,7 +38,6 @@ export interface DeepSeekContext {
   bearerToken: string;
   deviceId: string;
   smidV2: string;
-  hifLeim: string;
 }
 
 const CHROME_VERSION = '136';
@@ -122,14 +121,9 @@ export function createDeepSeekContext(bearerToken: string, deviceId?: string): D
   // ponytail: smidV2 is synthetic — DeepSeek uses it for rate limiting correlation
   const smidV2 = crypto.randomUUID();
 
-  // hifLeim is a cache key stored in localStorage.hif_leim_cached by the browser
-  // ponytail: generated deterministically from deviceId — DeepSeek uses it for session caching
-  const hifLeim = crypto.createHash('md5').update(`hif_${id}`).digest('hex');
-
   return {
     bearerToken,
     deviceId: id,
     smidV2,
-    hifLeim,
   };
 }

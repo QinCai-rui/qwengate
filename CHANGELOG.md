@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **DeepSeek Browserless Rewrite**: Full rewrite of PoW solver (`pow.ts`) — uses real DeepSeek WebAssembly (`sha3_wasm_bg.wasm`, custom LE Keccak-256) directly in Node.js, no browser needed. New `leim.ts` fetches hif-leim WAF bypass token (10-min cache). Session creation (`session.ts`) fixed to use `/api/v0/chat/completion` PoW target (server rejects other targets). Pipeline (`pipeline.ts`) uses wreqFetch TLS impersonation with full browser headers + PoW + leim. Handler (`handler.ts`) adds 5x retry loop with account rotation and error classification (rate limit, bot detection, auth failure, timeout). Verified working end-to-end from Node.js with WASM PoW solve (~30ms). (#deepseek, pow.ts/leim.ts/session.ts/pipeline.ts/handler.ts/spoofing.ts)
+
 ### Added
 - **Bot Detection Status via `lastError`**: `ProviderAuthState.lastError?: string` field; `setProviderStateLastError()` helper; `getAuthStatus()` checks `/captcha|bot|waf/i` first and returns `'captcha'`; `getAccountStats()` exposes `lastError` per provider. Dashboard renders "Bot Detect" badge. (#auth, types/auth.ts/accountManager.ts)
 - **Auto-Login Sets `lastError`**: `/api/accounts/:email/auto-login/{deepseek,glm}` endpoints set `lastError` on captcha/error, clear it on success. (#auth, dashboardRoutes.ts)
