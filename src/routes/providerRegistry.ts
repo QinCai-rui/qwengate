@@ -20,7 +20,7 @@ import type { OpenAIRequest } from '../types/openai.ts';
 export type ProviderHandler = (c: Context, body: OpenAIRequest) => Promise<Response>;
 
 /** Known provider prefixes, checked in order (longest first for sub-prefix safety) */
-const PROVIDER_PREFIXES = ['deepseek/', 'glm/'] as const;
+const PROVIDER_PREFIXES = ['deepseek/', 'glm/', 'qwen/'] as const;
 
 type ProviderMap = Map<string, ProviderHandler>;
 

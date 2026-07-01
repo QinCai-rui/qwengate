@@ -12,6 +12,7 @@ import { config } from '../../../services/configService.ts';
 import { logStore } from '../../../services/logStore.ts';
 import { cleanTextOfXmlArtifacts } from '../../../tools/xmlToolParser.ts';
 import type { OpenAIRequest } from '../../../types/openai.ts';
+import { registerProvider } from '../../providerRegistry.ts';
 import { setupSession } from './session.ts';
 import { handleNonStreamingRequest } from './pipeline-nonstream.ts';
 import { handleStreamingRequest } from './pipeline-stream.ts';
@@ -119,3 +120,14 @@ export async function handleQwen(c: Context, body: OpenAIRequest, availableToken
     return c.json({ error: { message: cleanMessage, type: err.type || 'server_error', code: err.code || undefined } }, status);
   }
 }
+
+/**
+ * Handler wrapper for registered provider interface (strips qwen/ prefix).
+ * Register Qwen as a prefixed provider so qwen/qwen-max works alongside glm/glm-4.7.
+ */
+export const qwenProviderHandler: import('../../providerRegistry.ts').ProviderHandler = async (c, body) => {
+  // Strip qwen/ prefix, keep the original model name for internal dispatch
+  const model = body.model.replace(/^qwen\//, '');
+  return handleQwen(c, { ...body, model }, 0);
+};
+registerProvider('qwen/', qwenProviderHandler);
