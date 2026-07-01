@@ -16,7 +16,7 @@ export function getProfileDir(email: string): string {
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]/g, '_');
-  const dir = projectPath('.auth', 'browser-profiles', safe);
+  const dir = projectPath('.auth', 'account-profile', safe);
   mkdirSync(dir, { recursive: true });
   // Set profile name to email so the Chrome window shows the account
   const prefsFile = `${dir}/Preferences`;

@@ -33,7 +33,7 @@ function getProfileDirForEmail(email: string): string {
     .toLowerCase()
     .trim()
     .replace(/[^a-z0-9]/g, '_');
-  return projectPath('.auth', 'browser-profiles', safe);
+  return projectPath('.auth', 'account-profile', safe);
 }
 
 export function migrateFromOldPaths(): void {
