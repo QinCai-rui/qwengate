@@ -6,6 +6,7 @@
  * to bypass DeepSeek's WAF, with per-account PoW solving.
  */
 
+import crypto from 'node:crypto';
 import { registerProvider } from '../../providerRegistry.ts';
 import type { Context } from 'hono';
 import type { OpenAIRequest } from '../../../types/openai.ts';
@@ -19,16 +20,30 @@ export async function deepseekHandler(c: Context, body: OpenAIRequest): Promise<
   let lastFailedEmail: string | undefined;
   let lastError: unknown;
 
+  const logId = crypto.randomUUID();
+  logStore.createEntry(logId, body.model, isStream);
+  logStore.updateEntry(logId, (entry) => {
+    entry.apiType = 'openai';
+  });
+
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const { pickAccountForProvider, decrementInFlight } = await import('../../../services/auth.ts');
     const acct = await pickAccountForProvider('deepseek', lastFailedEmail);
     const email = acct?.email || '';
 
-    logStore.log('debug', 'deepseek-handler', `Attempt ${attempt + 1}/${MAX_RETRIES} picked=${email || 'NONE'} lastFailed=${lastFailedEmail || 'none'}`);
+    logStore.log(
+      'debug',
+      'deepseek-handler',
+      `Attempt ${attempt + 1}/${MAX_RETRIES} picked=${email || 'NONE'} lastFailed=${lastFailedEmail || 'none'}`,
+    );
 
     if (!acct) {
       if (attempt > 0) {
-        logStore.log('error', 'deepseek-handler', `All ${MAX_RETRIES} attempts exhausted — ${lastError instanceof Error ? lastError.message : String(lastError || 'unknown error')}`);
+        logStore.log(
+          'error',
+          'deepseek-handler',
+          `All ${MAX_RETRIES} attempts exhausted — ${lastError instanceof Error ? lastError.message : String(lastError || 'unknown error')}`,
+        );
         return c.json(
           {
             error: {
@@ -59,13 +74,14 @@ export async function deepseekHandler(c: Context, body: OpenAIRequest): Promise<
 
     try {
       const { proxyViaDeepSeekWebChat } = await import('./pipeline.ts');
-      const result = await proxyViaDeepSeekWebChat(c, body, email, bearerToken, model, isStream);
+      const result = await proxyViaDeepSeekWebChat(c, body, email, bearerToken, model, isStream, logId);
 
       // For non-streaming, decrement inFlight immediately (response is complete).
       // For streaming, the response body reader holds the stream open; decrement
       // is a load-balancing heuristic, so slight over-counting is harmless
       // (safety valve at 20, auto-correction on next request from same account).
       decrementInFlight(email);
+      logStore.finalizeRequest(logId);
       return result;
     } catch (err: any) {
       // Decrement inFlight since we're failing this account
@@ -110,14 +126,19 @@ export async function deepseekHandler(c: Context, body: OpenAIRequest): Promise<
 
       // Non-retryable — propagate immediately
       logStore.log('error', 'deepseek-handler', `Non-retryable error on ${email}: ${errMsg}`);
+      logStore.addError(logId, errMsg);
+      logStore.finalizeRequest(logId);
       throw err;
     }
   }
 
+  const exhaustedErr = lastError instanceof Error ? lastError.message : 'DeepSeek request failed after retries';
+  logStore.addError(logId, exhaustedErr);
+  logStore.finalizeRequest(logId);
   return c.json(
     {
       error: {
-        message: lastError instanceof Error ? lastError.message : 'DeepSeek request failed after retries',
+        message: exhaustedErr,
         type: 'server_error',
       },
     },

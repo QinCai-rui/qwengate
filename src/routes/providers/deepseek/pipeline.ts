@@ -60,6 +60,7 @@ export async function proxyViaDeepSeekWebChat(
   bearerToken: string,
   model: string,
   isStream: boolean,
+  logId: string,
 ): Promise<Response> {
   logStore.log('debug', 'deepseek-pipeline', `email=${email} model=${model} stream=${isStream}`);
 
@@ -154,6 +155,9 @@ export async function proxyViaDeepSeekWebChat(
     const rawContent = state.content || ' ';
     const cleanedText = cleanTextOfXmlArtifacts(rawContent).cleanedText || ' ';
 
+    logStore.addProcessedOutput(logId, cleanedText);
+    if (state.thinkingContent) logStore.addProcessedOutput(logId, '[THINKING] ' + state.thinkingContent);
+
     return c.json(
       {
         id: session.id,
@@ -208,7 +212,9 @@ export async function proxyViaDeepSeekWebChat(
           break;
         }
 
-        buffer += decoder.decode(result.value, { stream: true });
+        const chunkStr = decoder.decode(result.value, { stream: true });
+        logStore.addRawChunk(logId, chunkStr);
+        buffer += chunkStr;
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 

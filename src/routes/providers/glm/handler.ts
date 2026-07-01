@@ -6,6 +6,7 @@
  * to bypass GLM's anti-bot detection, with per-account captcha handling.
  */
 
+import crypto from 'node:crypto';
 import { registerProvider } from '../../providerRegistry.ts';
 import type { Context } from 'hono';
 import type { OpenAIRequest } from '../../../types/openai.ts';
@@ -19,16 +20,30 @@ export async function glmHandler(c: Context, body: OpenAIRequest): Promise<Respo
   let lastFailedEmail: string | undefined;
   let lastError: unknown;
 
+  const logId = crypto.randomUUID();
+  logStore.createEntry(logId, body.model, isStream);
+  logStore.updateEntry(logId, (entry) => {
+    entry.apiType = 'openai';
+  });
+
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const { pickAccountForProvider, decrementInFlight } = await import('../../../services/auth.ts');
     const acct = await pickAccountForProvider('glm', lastFailedEmail);
     const email = acct?.email || '';
 
-    logStore.log('debug', 'glm-handler', `Attempt ${attempt + 1}/${MAX_RETRIES} picked=${email || 'NONE'} lastFailed=${lastFailedEmail || 'none'}`);
+    logStore.log(
+      'debug',
+      'glm-handler',
+      `Attempt ${attempt + 1}/${MAX_RETRIES} picked=${email || 'NONE'} lastFailed=${lastFailedEmail || 'none'}`,
+    );
 
     if (!acct) {
       if (attempt > 0) {
-        logStore.log('error', 'glm-handler', `All ${MAX_RETRIES} attempts exhausted — ${lastError instanceof Error ? lastError.message : String(lastError || 'unknown error')}`);
+        logStore.log(
+          'error',
+          'glm-handler',
+          `All ${MAX_RETRIES} attempts exhausted — ${lastError instanceof Error ? lastError.message : String(lastError || 'unknown error')}`,
+        );
         return c.json(
           {
             error: {
@@ -59,9 +74,10 @@ export async function glmHandler(c: Context, body: OpenAIRequest): Promise<Respo
 
     try {
       const { proxyViaGlmWebChat } = await import('./pipeline.ts');
-      const result = await proxyViaGlmWebChat(c, body, email, jwt, model, isStream);
+      const result = await proxyViaGlmWebChat(c, body, email, jwt, model, isStream, logId);
 
       decrementInFlight(email);
+      logStore.finalizeRequest(logId);
       return result;
     } catch (err: any) {
       const { decrementInFlight: dec, throttleAccount, setProviderStateLastError } = await import('../../../services/auth.ts');
@@ -103,14 +119,19 @@ export async function glmHandler(c: Context, body: OpenAIRequest): Promise<Respo
       }
 
       logStore.log('error', 'glm-handler', `Non-retryable error on ${email}: ${errMsg}`);
+      logStore.addError(logId, errMsg);
+      logStore.finalizeRequest(logId);
       throw err;
     }
   }
 
+  const exhaustedErr = lastError instanceof Error ? lastError.message : 'GLM request failed after retries';
+  logStore.addError(logId, exhaustedErr);
+  logStore.finalizeRequest(logId);
   return c.json(
     {
       error: {
-        message: lastError instanceof Error ? lastError.message : 'GLM request failed after retries',
+        message: exhaustedErr,
         type: 'server_error',
       },
     },

@@ -67,6 +67,7 @@ export async function proxyViaGlmWebChat(
   jwt: string,
   model: string,
   isStream: boolean,
+  logId: string,
 ): Promise<Response> {
   const { wreqFetch } = await import('../../../services/wreqFetch.ts');
 
@@ -211,6 +212,9 @@ export async function proxyViaGlmWebChat(
     const filtered = filterContent(rawContent);
     const cleanedText = cleanTextOfXmlArtifacts(filtered.cleanText).cleanedText || ' ';
 
+    logStore.addProcessedOutput(logId, cleanedText);
+    if (fullThinking || filtered.thinking) logStore.addProcessedOutput(logId, '[THINKING] ' + (fullThinking || filtered.thinking));
+
     const responseMsg: Record<string, any> = {
       role: 'assistant',
       content: cleanedText,
@@ -257,7 +261,9 @@ export async function proxyViaGlmWebChat(
           await writer.close();
           break;
         }
-        buffer += decoder.decode(value, { stream: true });
+        const chunkStr = decoder.decode(value, { stream: true });
+        logStore.addRawChunk(logId, chunkStr);
+        buffer += chunkStr;
 
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
