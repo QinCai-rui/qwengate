@@ -297,6 +297,78 @@ function requireApiKey(c: any, next: () => Promise<void>) {
   return next();
 }
 
+// ── GLM model fetch ──
+async function fetchGlmModels(): Promise<Array<{ id: string; name: string; description: string }>> {
+  try {
+    const { getProviderToken } = await import('../../services/accountManager.ts');
+    const token = getProviderToken('glm');
+    if (!token) return [];
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Accept-Language': 'en-US',
+      'X-FE-Version': 'prod-fe-1.1.69',
+      'x-region': 'overseas',
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+    };
+
+    // GLM returns { data: [{ id, name, info: { meta: { description } } }, ...] }
+    const res = await fetch('https://chat.z.ai/api/models', { headers });
+    if (!res.ok) return [];
+    const body = await res.json();
+    const models = body?.data;
+    if (!Array.isArray(models)) return [];
+
+    return models
+      .map((m: any) => ({
+        id: m.id || m.name || String(m),
+        name: m.name || m.id || String(m),
+        description: m.info?.meta?.description || m.description || '',
+      }))
+      .filter((m: { id: string }) => m.id);
+  } catch {
+    return [];
+  }
+}
+
+// ── DeepSeek model fetch ──
+async function fetchDeepseekModels(): Promise<Array<{ id: string; name: string; description: string }>> {
+  try {
+    const { getProviderToken } = await import('../../services/accountManager.ts');
+    const token = getProviderToken('deepseek');
+    if (!token) return [];
+
+    const res = await fetch('https://chat.deepseek.com/api/v0/models', {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+    if (!res.ok) {
+      const res2 = await fetch('https://api.deepseek.com/models', {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      });
+      if (!res2.ok) return [];
+      const data = await res2.json();
+      return (data?.data || []).map((m: any) => ({
+        id: m.id || String(m),
+        name: m.id || String(m),
+        description: m.description || m.object || '',
+      }));
+    }
+    const data = await res.json();
+    const models = data.models || data.data || data;
+    if (Array.isArray(models)) {
+      return models.map((m: any) => ({
+        id: m.id || String(m),
+        name: m.id || m.name || String(m),
+        description: m.description || '',
+      }));
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
 export function registerDashboardRoutes(app: Hono): void {
   app.get('/dashboard', serveHtml(overviewHtml));
   app.get('/dashboard/accounts', (c) => c.redirect('/dashboard/providers'));
@@ -328,19 +400,25 @@ export function registerDashboardRoutes(app: Hono): void {
           const models = await fetchQwenModels();
           return c.json(models.map((m: any) => ({ id: m.id, name: m.id, description: m.description || '' })));
         } else if (provider === 'deepseek') {
-          const models = [
-            { id: 'deepseek-chat', name: 'DeepSeek Chat', description: 'Standard conversational model' },
-            { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', description: 'Reasoning-enhanced model with chain-of-thought' },
-            { id: 'deepseek-pro', name: 'DeepSeek Pro', description: 'High-performance model for complex tasks' },
-          ];
-          return c.json(models);
+          const models = await fetchDeepseekModels();
+          return c.json(
+            models.length > 0
+              ? models
+              : [
+                  { id: 'deepseek-chat', name: 'DeepSeek Chat', description: 'Standard conversational model' },
+                  { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', description: 'Reasoning-enhanced model' },
+                ],
+          );
         } else if (provider === 'glm') {
-          const models = [
-            { id: 'glm-4.7', name: 'GLM-4.7', description: 'Latest general-purpose model' },
-            { id: 'glm-4v', name: 'GLM-4V', description: 'Vision-capable multimodal model' },
-            { id: 'glm-4', name: 'GLM-4', description: 'Previous generation general model' },
-          ];
-          return c.json(models);
+          const models = await fetchGlmModels();
+          return c.json(
+            models.length > 0
+              ? models
+              : [
+                  { id: 'glm-4.7', name: 'GLM-4.7', description: 'Latest general-purpose model' },
+                  { id: 'glm-4v', name: 'GLM-4V', description: 'Vision-capable multimodal model' },
+                ],
+          );
         } else {
           return c.json({ error: 'Unknown provider' }, 400);
         }
