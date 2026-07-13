@@ -1,21 +1,24 @@
 /*
  * File: providers/glm/captcha-solver.ts
- * Aliyun Captcha V3 solver using Playwright headless Chrome.
+ * Aliyun Captcha V3 solver using CloakBrowser (C++ patched Chromium).
  *
- * Loads the AliyunCaptcha.js SDK into a headless Chromium page with stealth
- * mitigations, then calls startTracelessVerification() to obtain a
- * captcha_verify_param. Tokens are cached for 45 seconds.
+ * Uses CloakBrowser's patched Chromium binary with playwright-core.
+ * CloakBrowser patches Chromium at the C++ source level for canvas, WebGL,
+ * audio, fonts, and other fingerprint domains — ensuring feilin101.js generates
+ * valid fingerprint blobs that pass Aliyun's server-side validation.
  *
- * The browser instance is reused across solves (launched once).
+ * Loads the AliyunCaptcha.js SDK into a headless page, then calls
+ * startTracelessVerification() to obtain a captcha_verify_param.
+ * Tokens are cached for 45 seconds. The browser instance is reused across solves.
  */
 
 import { chromium, type Browser } from 'playwright-core';
-import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { logStore } from '../../../services/logStore.ts';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const __dirname = dirname(new URL(import.meta.url).pathname);
 const ALIYUN_SDK = readFileSync(resolve(__dirname, 'AliyunCaptcha.js.txt'), 'utf-8');
 
 const TOKEN_TTL_MS = 45_000;
@@ -23,33 +26,23 @@ const SOLVE_RETRIES = 3;
 const SOLVE_TIMEOUT_MS = 40_000;
 const SDK_LOAD_TIMEOUT_MS = 20_000;
 
-// z.ai Aliyun Captcha config (from window.AliyunCaptchaConfig on the page)
 const CAPTCHA_CONFIG = {
   region: 'sgp',
   prefix: 'no8xfe',
   sceneId: 'didk33e0',
 };
 
-const LAUNCH_ARGS = [
-  '--headless=new',
-  '--no-sandbox',
-  '--disable-blink-features=AutomationControlled',
-  '--disable-features=ChromeWhatsNewUI',
-  '--no-first-run',
-  '--no-default-browser-check',
-];
+const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 
-const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36';
-
-const STEALTH_INIT_SCRIPT = `
-Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-window.chrome = { runtime: {}, loadTimes: () => ({}), csi: () => ({}), app: {} };
-Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
-`;
+function findCloakBrowserBinary(): string | null {
+  const cloakDir = join(homedir(), '.cloakbrowser');
+  if (!existsSync(cloakDir)) return null;
+  const dirs = readdirSync(cloakDir).filter((d) => d.startsWith('chromium-'));
+  if (dirs.length === 0) return null;
+  dirs.sort().reverse();
+  const bin = join(cloakDir, dirs[0], 'chrome');
+  return existsSync(bin) ? bin : null;
+}
 
 interface CaptchaToken {
   verifyParam: string;
@@ -68,10 +61,49 @@ async function getBrowser(): Promise<Browser> {
       // previous launch failed — retry
     }
   }
-  browserPromise = chromium.launch({
-    headless: true,
-    args: LAUNCH_ARGS,
-  });
+
+  const MEMORY_ARGS = [
+    '--no-sandbox',
+    '--no-zygote',
+    '--single-process',
+    '--disable-gpu',
+    '--disable-dev-shm-usage',
+    '--disable-extensions',
+    '--disable-background-networking',
+    '--disable-default-apps',
+    '--disable-translate',
+    '--disable-sync',
+    '--no-first-run',
+    '--disable-renderer-backgrounding',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-background-timer-throttling',
+    '--disable-features=TranslateUI,IsolateOrigins,site-per-process,BackForwardCache',
+    '--disable-hang-monitor',
+    '--disable-popup-blocking',
+    '--disable-prompt-on-repost',
+    '--metrics-recording-only',
+    '--no-default-browser-check',
+    '--disable-component-update',
+    '--disable-ipc-flooding-protection',
+    '--disable-breakpad',
+    '--disable-logging',
+  ];
+
+  const cloakBin = findCloakBrowserBinary();
+  if (cloakBin) {
+    logStore.debug('glm-captcha', `Using CloakBrowser binary: ${cloakBin}`);
+    browserPromise = chromium.launch({
+      executablePath: cloakBin,
+      headless: true,
+      args: MEMORY_ARGS,
+    });
+  } else {
+    logStore.debug('glm-captcha', 'CloakBrowser not found, falling back to Playwright Chromium');
+    browserPromise = chromium.launch({
+      headless: true,
+      args: ['--headless=new', ...MEMORY_ARGS],
+    });
+  }
   return browserPromise;
 }
 
@@ -119,10 +151,6 @@ async function solveInBrowser(): Promise<string> {
   const page = await context.newPage();
 
   try {
-    // Stealth init script
-    await page.addInitScript(STEALTH_INIT_SCRIPT);
-
-    // Serve the captcha page by intercepting chat.z.ai
     const html = buildPageHtml();
     await page.route('https://chat.z.ai/**', (route) => {
       const url = route.request().url();
@@ -135,15 +163,12 @@ async function solveInBrowser(): Promise<string> {
 
     await page.goto('https://chat.z.ai/', { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-    // Set captcha config after navigation
     await page.evaluate((cfg) => {
       (window as any).AliyunCaptchaConfig = { region: cfg.region, prefix: cfg.prefix };
     }, CAPTCHA_CONFIG);
 
-    // Wait for SDK to load
     await page.waitForFunction(() => typeof (window as any).initAliyunCaptcha === 'function', { timeout: SDK_LOAD_TIMEOUT_MS });
 
-    // Solve captcha
     const param = await page.evaluate(
       async (cfg) => {
         const w = window as any;
