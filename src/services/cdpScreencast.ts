@@ -5,6 +5,7 @@
  */
 
 import { spawn, execFileSync, type ChildProcess } from 'child_process';
+import { existsSync, rmSync } from 'fs';
 import WebSocket from 'ws';
 import { logStore } from './logStore.ts';
 import { getProfileDir } from './browserProfiles.ts';
@@ -25,7 +26,10 @@ export interface ScreencastSession {
 const sessions = new Map<string, ScreencastSession>();
 
 function findChromeBinary(): string {
+  const home = process.env.HOME || '/home/youssefsrv';
   const candidates = [
+    `${home}/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`,
+    `${home}/.cache/puppeteer/chrome/linux-150.0.7871.24/chrome-linux64/chrome`,
     'chromium-browser',
     'chromium',
     'google-chrome',
@@ -36,11 +40,20 @@ function findChromeBinary(): string {
   ];
   for (const bin of candidates) {
     try {
-      execFileSync('which', [bin], { stdio: 'ignore' });
+      execFileSync(bin, ['--version'], { stdio: 'ignore' });
       return bin;
     } catch {}
   }
-  return 'chromium-browser'; // fallback
+  // Fallback: try to find any chrome binary
+  try {
+    const result = execFileSync('find', [`${home}/.cache`, '-name', 'chrome', '-executable', '-type', 'f'], {
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const lines = result.trim().split('\n');
+    if (lines.length > 0 && lines[0]) return lines[0].trim();
+  } catch {}
+  return 'chromium-browser';
 }
 
 export async function startScreencast(
@@ -54,40 +67,53 @@ export async function startScreencast(
       existing.clients.add(wsClient);
       return { debugPort: existing.debugPort };
     }
-    // Clean up stale session
     cleanupSession(email);
   }
 
   const profileDir = getProfileDir(email);
+  // Clean up stale singleton locks from previous browser sessions
+  for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+    try {
+      const f = `${profileDir}/${name}`;
+      if (existsSync(f)) rmSync(f, { recursive: true });
+    } catch {}
+  }
   const chromeBin = findChromeBinary();
-  const debugPort = 9222 + Math.floor(Math.random() * 1000); // random port to avoid conflicts
+  const debugPort = 9222 + Math.floor(Math.random() * 1000);
 
-  logStore.log('info', 'screencast', `Starting Chrome for ${email} on debug port ${debugPort}`);
+  logStore.log('info', 'screencast', `Starting Chrome for ${email} on debug port ${debugPort} (bin: ${chromeBin})`);
 
-  // Launch Chrome with remote debugging
-  const chromeProcess = spawn(
-    chromeBin,
-    [
-      `--remote-debugging-port=${debugPort}`,
-      `--user-data-dir=${profileDir}`,
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-gpu',
-      '--window-size=1280,800',
-      '--ozone-platform-hint=auto',
-      'https://chat.qwen.ai/auth',
-    ],
-    {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, DISPLAY: process.env.DISPLAY || ':0' },
-    },
-  );
+  const chromeProcess = spawn(chromeBin, [
+    `--remote-debugging-port=${debugPort}`,
+    `--user-data-dir=${profileDir}`,
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-gpu',
+    '--headless=new',
+    '--disable-dev-shm-usage',
+    '--no-first-run',
+    '--disable-background-networking',
+    '--disable-sync',
+    '--use-gl=angle',
+    '--use-angle=swiftshader',
+    '--window-size=1280,800',
+    '--ozone-platform-hint=auto',
+    'about:blank',
+  ], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, DISPLAY: process.env.DISPLAY || ':0' },
+  });
 
   chromeProcess.stderr?.on('data', (data: Buffer) => {
     const msg = data.toString();
+    logStore.log('debug', 'screencast', `Chrome stderr: ${msg.trim().slice(0, 200)}`);
     if (msg.includes('DevTools listening on')) {
       logStore.log('info', 'screencast', `Chrome ready: ${msg.trim()}`);
     }
+  });
+
+  chromeProcess.stdout?.on('data', (data: Buffer) => {
+    logStore.log('debug', 'screencast', `Chrome stdout: ${data.toString().trim().slice(0, 200)}`);
   });
 
   chromeProcess.on('exit', (code) => {
@@ -98,6 +124,10 @@ export async function startScreencast(
       broadcastToClients(session, JSON.stringify({ type: 'browser_closed' }));
       cleanupSession(email);
     }
+  });
+
+  chromeProcess.on('error', (err) => {
+    logStore.log('error', 'screencast', `Chrome spawn error for ${email}: ${err.message}`);
   });
 
   const session: ScreencastSession = {
@@ -115,7 +145,7 @@ export async function startScreencast(
   sessions.set(email, session);
 
   // Wait for Chrome to be ready, then connect CDP
-  const maxWait = 15000;
+  const maxWait = 30000;
   const start = Date.now();
   while (Date.now() - start < maxWait) {
     try {
@@ -124,6 +154,7 @@ export async function startScreencast(
         const data = (await resp.json()) as any;
         const wsUrl = data.webSocketDebuggerUrl;
         if (wsUrl) {
+          logStore.log('info', 'screencast', `CDP endpoint found: ${wsUrl}`);
           await connectCDP(session, wsUrl);
           return { debugPort };
         }
@@ -134,7 +165,7 @@ export async function startScreencast(
     await new Promise((r) => setTimeout(r, 200));
   }
 
-  logStore.log('error', 'screencast', `Chrome failed to start for ${email}`);
+  logStore.log('error', 'screencast', `Chrome failed to start for ${email} (waited ${maxWait}ms)`);
   cleanupSession(email);
   return { error: 'Chrome failed to start' };
 }
@@ -144,12 +175,18 @@ async function connectCDP(session: ScreencastSession, wsUrl: string): Promise<vo
     const ws = new WebSocket(wsUrl, { perMessageDeflate: false });
     let msgId = 1;
     const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+    let pageSessionId: string | null = null;
 
     function send(method: string, params?: any): Promise<any> {
       return new Promise((res, rej) => {
         const id = msgId++;
         pending.set(id, { resolve: res, reject: rej });
-        ws.send(JSON.stringify({ id, method, params }));
+        const msg: any = { id, method, params };
+        // If we have a page session, send to that session
+        if (pageSessionId && !method.startsWith('Target.')) {
+          msg.sessionId = pageSessionId;
+        }
+        ws.send(JSON.stringify(msg));
       });
     }
 
@@ -164,7 +201,6 @@ async function connectCDP(session: ScreencastSession, wsUrl: string): Promise<vo
           (t: any) => t.type === 'page' && t.url.includes('chat.qwen.ai'),
         );
         if (!page) {
-          // Try the first page target
           const anyPage = targets.targetInfos?.find((t: any) => t.type === 'page');
           if (anyPage) {
             session.pageId = anyPage.targetId;
@@ -177,12 +213,19 @@ async function connectCDP(session: ScreencastSession, wsUrl: string): Promise<vo
           session.pageId = page.targetId;
         }
 
-        // Attach to the page
-        await send('Target.attachToTarget', { targetId: session.pageId, flatten: true });
+        // Attach to the page — get a session ID for flat mode
+        const attachResult = await send('Target.attachToTarget', { targetId: session.pageId, flatten: true });
+        pageSessionId = attachResult?.sessionId || null;
+        if (!pageSessionId) {
+          logStore.log('error', 'screencast', 'No session ID from attachToTarget');
+          reject(new Error('No session ID from attachToTarget'));
+          return;
+        }
+        logStore.log('info', 'screencast', `Attached to page, sessionId=${pageSessionId}`);
 
-        // Enable needed domains
+        // Enable needed domains (using page session)
         await send('Page.enable');
-        await send('DOM.enable');
+        await send('Runtime.enable');
 
         // Get page dimensions
         const layout = await send('Page.getLayoutMetrics');
@@ -191,7 +234,7 @@ async function connectCDP(session: ScreencastSession, wsUrl: string): Promise<vo
           session.viewportHeight = Math.ceil(layout.cssContentSize.height);
         }
 
-        // Start screencast — JPEG at moderate quality for speed
+        // Start screencast
         await send('Page.startScreencast', {
           format: 'jpeg',
           quality: 60,
@@ -200,9 +243,13 @@ async function connectCDP(session: ScreencastSession, wsUrl: string): Promise<vo
           everyNthFrame: 1,
         });
 
+        // Navigate to auth page
+        await send('Page.navigate', { url: 'https://chat.qwen.ai/auth' });
+
         // Start polling for login completion
         startLoginPolling(session);
 
+        logStore.log('info', 'screencast', `Screencast started for ${session.email}`);
         resolve();
       } catch (err: any) {
         logStore.log('error', 'screencast', `CDP setup failed: ${err.message}`);
@@ -228,7 +275,6 @@ async function connectCDP(session: ScreencastSession, wsUrl: string): Promise<vo
       // Handle screencast frames
       if (msg.method === 'Page.screencastFrame') {
         const frame = msg.params;
-        // Broadcast frame to all connected dashboard clients
         broadcastToClients(
           session,
           JSON.stringify({
@@ -270,17 +316,15 @@ async function connectCDP(session: ScreencastSession, wsUrl: string): Promise<vo
 function startLoginPolling(session: ScreencastSession): void {
   session.loginCheckInterval = setInterval(async () => {
     if (session.closed || !session.cdpWs || session.cdpWs.readyState !== WebSocket.OPEN) {
-      clearInterval(session.loginCheckInterval!);
+      if (session.loginCheckInterval) clearInterval(session.loginCheckInterval);
       return;
     }
 
     try {
-      // Check cookies via CDP
       const result = await cdpSend(session, 'Network.getCookies', { urls: ['https://chat.qwen.ai'] });
       const tokenCookie = result?.cookies?.find((c: any) => c.name === 'token');
       if (tokenCookie && tokenCookie.expires && tokenCookie.expires * 1000 > Date.now()) {
         logStore.log('info', 'screencast', `Token found for ${session.email} — login successful`);
-        // Save the token
         const { saveCookies } = await import('./auth.ts');
         const refreshCookie = result.cookies.find((c: any) => c.name.toLowerCase().includes('refresh'));
         await saveCookies(session.email, tokenCookie.value, refreshCookie?.value);
@@ -332,87 +376,45 @@ export function handleInputEvent(
     cdp.send(JSON.stringify({ id: msgId++, method, params }));
   }
 
-  // Scale coordinates from viewport to page
-  const scaleX = session.viewportWidth / event.x || 1;
-  const scaleY = session.viewportHeight / event.y || 1;
-
   switch (event.type) {
     case 'click':
       send('Input.dispatchMouseEvent', {
-        type: 'mousePressed',
-        x: event.x,
-        y: event.y,
-        button: event.button === 2 ? 'right' : 'left',
-        clickCount: 1,
+        type: 'mousePressed', x: event.x, y: event.y,
+        button: event.button === 2 ? 'right' : 'left', clickCount: 1,
       });
       send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased',
-        x: event.x,
-        y: event.y,
-        button: event.button === 2 ? 'right' : 'left',
-        clickCount: 1,
+        type: 'mouseReleased', x: event.x, y: event.y,
+        button: event.button === 2 ? 'right' : 'left', clickCount: 1,
       });
       break;
-
     case 'mousemove':
-      send('Input.dispatchMouseEvent', {
-        type: 'mouseMoved',
-        x: event.x,
-        y: event.y,
-      });
+      send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: event.x, y: event.y });
       break;
-
     case 'mousedown':
       send('Input.dispatchMouseEvent', {
-        type: 'mousePressed',
-        x: event.x,
-        y: event.y,
-        button: event.button === 2 ? 'right' : 'left',
-        clickCount: 1,
+        type: 'mousePressed', x: event.x, y: event.y,
+        button: event.button === 2 ? 'right' : 'left', clickCount: 1,
       });
       break;
-
     case 'mouseup':
       send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased',
-        x: event.x,
-        y: event.y,
-        button: event.button === 2 ? 'right' : 'left',
-        clickCount: 1,
+        type: 'mouseReleased', x: event.x, y: event.y,
+        button: event.button === 2 ? 'right' : 'left', clickCount: 1,
       });
       break;
-
     case 'keydown':
-      send('Input.dispatchKeyEvent', {
-        type: 'keyDown',
-        key: event.key,
-        code: event.code,
-        text: event.text || '',
-      });
+      send('Input.dispatchKeyEvent', { type: 'keyDown', key: event.key, code: event.code, text: event.text || '' });
       break;
-
     case 'keyup':
-      send('Input.dispatchKeyEvent', {
-        type: 'keyUp',
-        key: event.key,
-        code: event.code,
-      });
+      send('Input.dispatchKeyEvent', { type: 'keyUp', key: event.key, code: event.code });
       break;
-
     case 'keypress':
-      send('Input.dispatchKeyEvent', {
-        type: 'char',
-        text: event.text || '',
-      });
+      send('Input.dispatchKeyEvent', { type: 'char', text: event.text || '' });
       break;
-
     case 'scroll':
       send('Input.dispatchMouseEvent', {
-        type: 'mouseWheel',
-        x: event.x,
-        y: event.y,
-        deltaX: 0,
-        deltaY: event.y > 0 ? -100 : 100,
+        type: 'mouseWheel', x: event.x, y: event.y,
+        deltaX: 0, deltaY: event.y > 0 ? -100 : 100,
       });
       break;
   }
@@ -433,19 +435,14 @@ function cleanupSession(email: string): void {
   session.closed = true;
   if (session.loginCheckInterval) clearInterval(session.loginCheckInterval);
 
-  // Disconnect CDP
   if (session.cdpWs) {
-    try {
-      session.cdpWs.close();
-    } catch {}
+    try { session.cdpWs.close(); } catch {}
   }
 
-  // Kill Chrome
   if (session.chromeProcess && !session.chromeProcess.killed) {
     session.chromeProcess.kill('SIGTERM');
   }
 
-  // Close all client connections
   for (const client of session.clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(JSON.stringify({ type: 'session_closed' }));
