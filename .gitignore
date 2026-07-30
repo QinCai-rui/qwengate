@@ -91,3 +91,6 @@ toolcall_study
 extract output qwen/
 research
 token-usage-output.txt
+.auth/
+.cortexkit/
+test-*.ts
