@@ -1,6 +1,8 @@
 import { Hono } from 'hono';
+import { setAccountQuota } from '../services/accountManager.ts';
 import { addAccount, getAccountByEmail, getAccounts, removeAccount, setAccountDisabled } from '../services/auth.ts';
 import { logStore } from '../services/logStore.ts';
+import { fetchAccountQuota } from '../services/quotaService.ts';
 
 const accountActionRateLimit = new Map<string, number[]>();
 
@@ -29,8 +31,39 @@ accountsRouter.get('/', (c) => {
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
     startupStatus: a.startupStatus || null,
+    quota: a.quota || null,
+    quotaFetchedAt: a.quotaFetchedAt || null,
   }));
   return c.json({ count: masked.length, accounts: masked });
+});
+
+/** Refresh entitlement quota for one or all accounts. */
+accountsRouter.post('/quota/refresh', async (c) => {
+  try {
+    if (!checkRateLimit('quota-refresh', 6)) {
+      return c.json({ error: 'Rate limit exceeded' }, 429);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const email = typeof body?.email === 'string' ? body.email : null;
+
+    const targets = email
+      ? [getAccountByEmail(email)].filter((a): a is NonNullable<typeof a> => a !== null)
+      : getAccounts().filter((a) => a.state?.token);
+
+    const results = await Promise.all(
+      targets.map(async (acct) => {
+        const quota = await fetchAccountQuota(acct.email);
+        if (quota) {
+          setAccountQuota(acct.email, { ...quota.model, ...quota.features });
+          return { email: acct.email, success: true, quota, fetchedAt: Date.now() };
+        }
+        return { email: acct.email, success: false };
+      }),
+    );
+    return c.json({ results });
+  } catch (err: any) {
+    return c.json({ error: { message: err.message } }, 500);
+  }
 });
 
 accountsRouter.post('/', async (c) => {
