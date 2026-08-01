@@ -44,6 +44,7 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
   c.header('Content-Type', 'text/event-stream');
   c.header('Cache-Control', 'no-cache');
   c.header('Connection', 'close');
+  c.header('X-Accel-Buffering', 'no');
 
   return honoStream(c, async (streamWriter: any) => {
     const _streamStartTime = Date.now();

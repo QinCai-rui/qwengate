@@ -509,6 +509,33 @@ test('Anthropic streaming strips XML artifacts from text deltas', async () => {
     if (url.includes('/api/models')) {
       return new Response(JSON.stringify({ data: [{ id: 'qwen3.7-max', owned_by: 'qwen' }] }), { status: 200 });
     }
+    if (url.includes('/api/v2/files/getstsToken')) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            access_key_id: 'test-key',
+            access_key_secret: 'test-secret',
+            security_token: 'test-token',
+            bucketname: 'test-bucket',
+            region: 'oss-cn-hangzhou',
+            endpoint: 'oss-cn-hangzhou.aliyuncs.com',
+            file_id: 'test-file-id',
+            file_path: 'test-user/test-file-id_context.txt',
+            file_url: 'https://test-bucket.oss-cn-hangzhou.aliyuncs.com/test-file-id_context.txt',
+          },
+        }),
+        { status: 200 },
+      );
+    }
+    if (url.includes('/api/v2/files/parse/status')) {
+      return new Response(JSON.stringify({ data: [{ status: 'success' }] }), { status: 200 });
+    }
+    if (url.includes('/api/v2/files/parse')) {
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    }
+    if (url.includes('aliyuncs.com') || url.includes('oss-')) {
+      return new Response(null, { status: 200 });
+    }
     if (url.includes('/api/v2/chat/completions')) {
       const stream = new ReadableStream({
         start(c) {
@@ -635,6 +662,33 @@ test('Anthropic /v1/messages streaming with local_mcp tool call emits correct to
     const url = typeof input === 'string' ? input : input.url;
     if (url.includes('/api/models')) {
       return new Response(JSON.stringify({ data: [{ id: 'qwen3.7-max', owned_by: 'qwen' }] }), { status: 200 });
+    }
+    if (url.includes('/api/v2/files/getstsToken')) {
+      return new Response(
+        JSON.stringify({
+          data: {
+            access_key_id: 'test-key',
+            access_key_secret: 'test-secret',
+            security_token: 'test-token',
+            bucketname: 'test-bucket',
+            region: 'oss-cn-hangzhou',
+            endpoint: 'oss-cn-hangzhou.aliyuncs.com',
+            file_id: 'test-file-id',
+            file_path: 'test-user/test-file-id_context.txt',
+            file_url: 'https://test-bucket.oss-cn-hangzhou.aliyuncs.com/test-file-id_context.txt',
+          },
+        }),
+        { status: 200 },
+      );
+    }
+    if (url.includes('/api/v2/files/parse/status')) {
+      return new Response(JSON.stringify({ data: [{ status: 'success' }] }), { status: 200 });
+    }
+    if (url.includes('/api/v2/files/parse')) {
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    }
+    if (url.includes('aliyuncs.com') || url.includes('oss-')) {
+      return new Response(null, { status: 200 });
     }
     if (url.includes('/api/v2/chat/completions')) {
       const stream = new ReadableStream({

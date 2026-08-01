@@ -12,6 +12,7 @@ import { getProfileDir } from './browserProfiles.ts';
 
 export interface ScreencastSession {
   email: string;
+  password?: string;
   debugPort: number;
   chromeProcess: ChildProcess;
   cdpWs: WebSocket | null;
@@ -136,6 +137,7 @@ export async function startScreencast(
 
   const session: ScreencastSession = {
     email,
+    password,
     debugPort,
     chromeProcess,
     cdpWs: null,
@@ -251,6 +253,44 @@ async function connectCDP(session: ScreencastSession, wsUrl: string): Promise<vo
 
         // Navigate to auth page
         await send('Page.navigate', { url: 'https://chat.qwen.ai/auth' });
+
+        // Autofill email + password once the login form renders.
+        // The auth page is a React SPA — the form appears seconds after
+        // navigation, so poll for the inputs before filling. Uses the native
+        // input value setter + dispatched events so React state picks the
+        // values up (React ignores direct .value writes).
+        const fillScript = `(async () => {
+          const setVal = (el, val) => {
+            if (!el) return false;
+            const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+            const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+            setter.call(el, val);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          };
+          const email = ${JSON.stringify(session.email)};
+          const password = ${JSON.stringify(session.password || '')};
+          const deadline = Date.now() + 15000;
+          while (Date.now() < deadline) {
+            const emailInputs = Array.from(document.querySelectorAll('input[type="email"], input[name*="mail" i], input[placeholder*="mail" i], input[autocomplete="username"]'));
+            const pwInputs = Array.from(document.querySelectorAll('input[type="password"], input[autocomplete="current-password"], input[name*="password" i]'));
+            if (emailInputs.length && pwInputs.length) {
+              setVal(emailInputs[0], email);
+              setVal(pwInputs[0], password);
+              return JSON.stringify({ filled: true, emailCount: emailInputs.length, pwCount: pwInputs.length });
+            }
+            await new Promise(r => setTimeout(r, 500));
+          }
+          return JSON.stringify({ filled: false, url: location.href });
+        })()`;
+        try {
+          const fillResult = await send('Runtime.evaluate', { expression: fillScript, awaitPromise: true, returnByValue: true });
+          const fillInfo = fillResult?.result?.value;
+          logStore.log('info', 'screencast', `Autofill for ${session.email}: ${fillInfo}`);
+        } catch (err: any) {
+          logStore.log('warn', 'screencast', `Autofill failed for ${session.email}: ${err.message}`);
+        }
 
         // Start polling for login completion
         startLoginPolling(session);

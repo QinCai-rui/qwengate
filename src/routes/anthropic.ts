@@ -384,7 +384,14 @@ async function setupAnthropicSession(
         const file = await uploadLargeTextAsFile(accountEmail, parts.join('\n\n'), 'context.txt');
         processedMessages[0] = { ...processedMessages[0], files: [file] };
       } catch (err: any) {
-        logStore.log('debug', 'chat', '[Anthropic] Failed to upload context file: ' + (err.message || err));
+        // NEVER fall back to sending the payload inline: Qwen bot-detects
+        // oversized user messages and the request hangs/spins. Retry on the
+        // next account (upload failure is per-account); if all exhaust, the
+        // loop throws a real error instead of silently sending inline.
+        logStore.log('error', 'chat', `[Anthropic] Context file upload failed for ${accountEmail}: ${err.message || err}`);
+        lastFailedEmail = accountEmail;
+        lastError = err;
+        continue;
       }
     }
 
@@ -505,6 +512,9 @@ async function setupAnthropicSession(
           while (true) {
             const { done, value } = await streamReader.read();
             if (done) break;
+            if (controller.desiredSize !== null && controller.desiredSize <= 0) {
+              await new Promise((r) => setTimeout(r, 1));
+            }
             controller.enqueue(value);
           }
           controller.close();
@@ -552,6 +562,7 @@ async function handleAnthropicStream(
   c.header('Content-Type', 'text/event-stream');
   c.header('Cache-Control', 'no-cache');
   c.header('Connection', 'close');
+  c.header('X-Accel-Buffering', 'no');
 
   return honoStream(c, async (streamWriter: any) => {
     // Ping keepalive every 10s (issue 5)
