@@ -66,6 +66,7 @@ async function parseRequestBody(c: Context) {
   const cleanOutput = config.getBool('CLEAN_OUTPUT', true);
 
   const messages = body.messages || [];
+
   await handleImageModelFallback(body, messages);
   const { maxContext, maxOutput } = await getModelSpecs(body);
 
@@ -203,7 +204,14 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
         const file = await uploadLargeTextAsFile(accountEmail, combinedContent, 'context.txt');
         processedMessages[0] = { ...processedMessages[0], files: [file] };
       } catch (err: any) {
-        logStore.log('debug', 'chat', '[Chat] Failed to upload context file: ' + (err.message || err));
+        // NEVER fall back to sending the payload inline: Qwen bot-detects
+        // oversized user messages and the request hangs/spins. Retry on the
+        // next account (upload failure is per-account); if all exhaust, the
+        // loop throws a real error instead of silently sending inline.
+        logStore.log('error', 'chat', `[Chat] Context file upload failed for ${accountEmail}: ${err.message || err}`);
+        lastFailedEmail = accountEmail;
+        lastError = err;
+        continue;
       }
     }
 
@@ -340,6 +348,12 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
           while (true) {
             const { done, value } = await streamReader.read();
             if (done) break;
+            // Honor backpressure: if the consumer is behind, wait before
+            // enqueueing so the client's socket drains instead of receiving
+            // a pre-filled queue all at once.
+            if (controller.desiredSize !== null && controller.desiredSize <= 0) {
+              await new Promise((r) => setTimeout(r, 1));
+            }
             controller.enqueue(value);
           }
           controller.close();

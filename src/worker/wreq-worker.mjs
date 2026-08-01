@@ -74,7 +74,11 @@ const server = http.createServer(async (req, res) => {
           headers,
           body: reqBody,
           disableDefaultHeaders: true,
-          signal: AbortSignal.timeout(timeout * 1000),
+          // ponytail: stream requests must never be aborted by this timer —
+          // Qwen thinking models can idle 30-60s+ before/within a stream, and
+          // the gate has its own STREAM_IDLE_TIMEOUT_MS (60s) per-read race.
+          // Only non-stream requests keep the 30s wall-clock cap.
+          ...(stream ? {} : { signal: AbortSignal.timeout(timeout * 1000) }),
         };
 
         const wreqResp = await session.fetch(url, opts);
@@ -97,7 +101,7 @@ const server = http.createServer(async (req, res) => {
             headerLines.push('', '--- BODY ---', '');
             writeFileSync(dumpPath, headerLines.join('\n'), 'utf8');
             spec._debugDumpPath = dumpPath;
-          } catch (e) {
+          } catch  {
             // debug dump is best-effort
           }
         }

@@ -81,6 +81,11 @@ export async function runStreamLoop(
         const chunk = JSON.parse(dataStr);
 
         const result = await processStreamData(chunk, streamState, streamCtx);
+        // Yield to the event loop after each event so Bun gets a socket flush
+        // point per SSE event. Without this, one upstream-batched read with N
+        // complete lines writes all N events back-to-back (0-4ms gaps) — the
+        // client sees "everything at once" instead of a stream.
+        await new Promise((r) => setTimeout(r, 0));
         if (result === 'break_stream') {
           streamDone = true;
           break;
@@ -134,24 +139,11 @@ export async function handlePostStreamCompletion(
   const { reader, heartbeatInterval, chatId, sessionHeaders, email, sessionPool } = cleanup;
 
   try {
-    const upstreamError = parseQwenErrorPayload(buffer);
-    if (upstreamError) {
-      try {
-        require('fs').writeFileSync('/tmp/qwen-error-buffer.json', buffer.slice(0, 10000));
-      } catch (e) {}
-      const cleanErrorMessage = cleanTextOfXmlArtifacts(upstreamError.message).cleanedText || upstreamError.message;
-      await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ content: cleanErrorMessage })]));
-      await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({}, 'stop')]));
-      await streamWriter.write('data: [DONE]\n\n');
-      logStore.updateEntry(logId, (entry) => {
-        entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
-        entry.finalResponse.finishReason = 'upstream_error';
-      });
-      logStore.finalizeRequest(logId);
-      return;
-    }
-
-    // Flush any pending chunk left in the one-chunk buffer
+    // ── Flush partial content FIRST ──────────────────────────────────
+    // If upstream aborted mid-stream (content filter, rate limit, etc.),
+    // the chunks the user already saw must stay visible. Flush the
+    // accumulated buffer before surfacing any error, so the client keeps
+    // the partial answer instead of rolling back to a bare server error.
     if (streamState.pendingChunk) {
       streamState.lastFullContent += streamState.pendingChunk;
       streamState.pendingChunk = '';
@@ -205,10 +197,36 @@ export async function handlePostStreamCompletion(
           if (ct) {
             logStore.addProcessedOutput(logId, ct);
             ampState.emittedOutputBytes += ct.length;
-            await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ content: ct })]));
+            // Emit the end-of-stream delta in ≤256-char pieces with a flush
+            // yield between each — prevents the whole remaining answer from
+            // arriving as one burst right before finish_reason.
+            for (let i = 0; i < ct.length; i += 256) {
+              await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ content: ct.slice(i, i + 256) })]));
+              await new Promise((r) => setTimeout(r, 0));
+            }
           }
         }
       }
+    }
+
+    // ── Upstream error: emit it AFTER the partial content ────────────
+    const upstreamError = parseQwenErrorPayload(buffer) || (streamState.upstreamError ? { message: streamState.upstreamError, status: 502 as const } : null);
+    if (upstreamError) {
+      try {
+        require('fs').writeFileSync('/tmp/qwen-error-buffer.json', buffer.slice(0, 10000));
+      } catch  {}
+      const cleanErrorMessage = cleanTextOfXmlArtifacts(upstreamError.message).cleanedText || upstreamError.message;
+      // Append the error as a final content chunk — the partial answer
+      // stays visible, and the user sees why the stream stopped.
+      await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ content: `\n\n[Error] ${cleanErrorMessage}` })]));
+      await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({}, 'stop')]));
+      await streamWriter.write('data: [DONE]\n\n');
+      logStore.updateEntry(logId, (entry) => {
+        entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
+        entry.finalResponse.finishReason = 'upstream_error';
+      });
+      logStore.finalizeRequest(logId);
+      return;
     }
 
     const usage = buildUsage(streamState.promptTokens, streamState.completionTokens, streamState.reasoningBuffer);
