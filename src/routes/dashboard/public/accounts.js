@@ -76,7 +76,21 @@ function makeQuotaBadge(acct) {
     return '<span class="badge badge-neutral" title="Click Refresh Quota">—</span>';
   }
   var parts = [];
-  var keys = ['qwen3-max', 'qwen3.7-max', 'qwen3.7-plus', 'qwen3.6-plus', 'qwen2.5-max', 'thinking', 't2i', 't2v', 'search'];
+  var keys = [
+    'qwen3.8-max-preview',
+    'qwen3.7-max',
+    'qwen3.7-plus',
+    'qwen3.6-plus',
+    'qwen3.5-plus',
+    'qwen3.5-flash',
+    'qwen3-max',
+    'qwen2.5-max',
+    'thinking',
+    't2i',
+    't2v',
+    'search',
+    'code',
+  ];
   for (var i = 0; i < keys.length; i++) {
     var k = keys[i];
     var v = q[k];
