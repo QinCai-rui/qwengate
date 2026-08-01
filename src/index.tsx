@@ -444,10 +444,15 @@ if (import.meta.main) {
       try {
         const acctList = getAccounts().filter((a) => a.state?.token);
         for (const acct of acctList) {
-          setStartupStatus(acct.email, 'ready');
-          configureAccount(acct.email).catch((err: any) =>
-            logStore.log('warn', 'boot', `[2/5] Account config failed for ${acct.email}: ${err.message}`),
-          );
+          setStartupStatus(acct.email, 'pending');
+          try {
+            await configureAccount(acct.email);
+            setStartupStatus(acct.email, 'ready');
+            logStore.log('info', 'boot', `[2/5] Account configured: ${acct.email}`);
+          } catch (err: any) {
+            logStore.log('warn', 'boot', `[2/5] Account config failed for ${acct.email}: ${err.message}`);
+            setStartupStatus(acct.email, 'ready'); // still usable, just might have old prompt
+          }
         }
         logStore.log('info', 'boot', `[2/5] Accounts configured: ${acctList.length} ready`);
       } catch (err: any) {

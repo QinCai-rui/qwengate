@@ -5,10 +5,10 @@
  * Login is in loginService.ts. Login helpers are in loginHelpers.ts.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { join } from 'path';
 import type { Cookie } from 'playwright';
-import type { AccountEntry, AuthState } from '../types/auth.ts';
+import type { AuthState } from '../types/auth.ts';
 import {
   accounts,
   decodeJwt,
@@ -18,14 +18,12 @@ import {
   loadAccountsFromFile,
   migrateFromOldPaths,
   rebuildEmailIndex,
-  resetWatcherState,
   setupAccountWatcher as setupAccountWatcherImpl,
 } from './accountManager.ts';
 import { config } from './configService.ts';
 import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
-import { getActivePage, getBrowser } from './playwright.ts';
-import { ensureAccountFresh, needsRefresh } from './tokenRefresh.ts';
+import { getActivePage } from './playwright.ts';
 
 export {
   addAccount,

@@ -88,6 +88,10 @@ export interface StreamProcessingState {
   lastDeltaThinkingFull: string;
   loggedToolCalls: Set<string>;
   lastParsePosition: number;
+  /** Set when upstream Qwen aborts the stream with an error (content filter,
+   *  rate limit, etc.). The post-stream handler flushes partial content first,
+   *  then surfaces this to the client instead of dropping what was received. */
+  upstreamError?: string;
   /** Depth tracking for nested tool call XML blocks. >0 means suppress content emission. */
   toolCallDepth: number;
   /**
@@ -171,6 +175,10 @@ export async function processStreamData(data: any, state: StreamProcessingState,
       entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
       entry.finalResponse.finishReason = 'error';
     });
+    // Stash the error so handlePostStreamCompletion can flush the partial
+    // content already received, THEN surface the error to the client —
+    // instead of dropping everything and showing a bare server error.
+    state.upstreamError = `Qwen upstream error: ${errMsg}`;
     return 'break_stream';
   }
   const deltaStatus = data.choices?.[0]?.delta?.status;
@@ -180,6 +188,7 @@ export async function processStreamData(data: any, state: StreamProcessingState,
       entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
       entry.finalResponse.finishReason = 'error';
     });
+    state.upstreamError = 'Qwen stream delta returned error status';
     return 'break_stream';
   }
   let streamFinished = false;

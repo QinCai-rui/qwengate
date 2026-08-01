@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { modelRouter } from '../services/modelRouter.ts';
 import { buildFeatureConfig, createQwenStream, fetchQwenModels } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
-import type { ModelSpec } from '../types/openai.ts';
 import { THINK_TAG_NAMES, TOOL_CALL_KEYWORDS } from '../utils/tagNames.ts';
 import { pendingCorrections } from './chatHelpersCore.ts';
 import { compressToolResult } from './compressToolResult.ts';
@@ -149,6 +148,13 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
       }
 
       const truncated = compressToolResult(contentStr || '');
+      // Inline tool result so the model sees it directly in the prompt.
+      // Without this, results live ONLY in context.txt and the model loops
+      // calling the same tool when the file is missing/stale (issue #44).
+      // The context.txt copy is kept as a fallback for long conversations.
+      const inlineName = escXml(toolName || 'unknown');
+      const inlineResult = escXml(truncated);
+      segments.push(`<tool-result tool="${inlineName}">\n${inlineResult}\n</tool-result>`);
       toolResultObjects.push({
         type: 'function',
         tool: toolName || 'unknown',
