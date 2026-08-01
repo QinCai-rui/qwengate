@@ -210,11 +210,12 @@ export async function handlePostStreamCompletion(
     }
 
     // ── Upstream error: emit it AFTER the partial content ────────────
-    const upstreamError = parseQwenErrorPayload(buffer) || (streamState.upstreamError ? { message: streamState.upstreamError, status: 502 as const } : null);
+    const upstreamError =
+      parseQwenErrorPayload(buffer) || (streamState.upstreamError ? { message: streamState.upstreamError, status: 502 as const } : null);
     if (upstreamError) {
       try {
         require('fs').writeFileSync('/tmp/qwen-error-buffer.json', buffer.slice(0, 10000));
-      } catch  {}
+      } catch {}
       const cleanErrorMessage = cleanTextOfXmlArtifacts(upstreamError.message).cleanedText || upstreamError.message;
       // Append the error as a final content chunk — the partial answer
       // stays visible, and the user sees why the stream stopped.
