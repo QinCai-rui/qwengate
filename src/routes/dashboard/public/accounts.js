@@ -218,7 +218,7 @@ function handleRemove(email) {
 /* ══════════════════════════════════════════════════
    Multi-Tab Browser Sessions (inline panel)
    ══════════════════════════════════════════════════ */
-var browserSessions = [];   // [{email, password, ws, canvasWrap, tab, statusText, loadingEl, dotEl}]
+var browserSessions = []; // [{email, password, ws, canvasWrap, tab, statusText, loadingEl, dotEl}]
 var activeSessionIdx = -1;
 
 /* ── Login button handler ── */
@@ -247,7 +247,11 @@ function handleManualLogin(email) {
         headers: authHeaders(),
       });
       var pwData;
-      try { pwData = await pwRes.json(); } catch { pwData = null; }
+      try {
+        pwData = await pwRes.json();
+      } catch {
+        pwData = null;
+      }
       if (!pwRes.ok || !pwData || !pwData.password) {
         throw new Error(pwData && pwData.error && pwData.error.message ? pwData.error.message : 'Could not retrieve password');
       }
@@ -339,7 +343,9 @@ function openBrowserTab(email, password) {
     headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
     body: JSON.stringify({ email: email, password: password }),
   })
-    .then(function (res) { return res.json(); })
+    .then(function (res) {
+      return res.json();
+    })
     .then(function (data) {
       if (data.error) throw new Error(data.error);
 
@@ -356,7 +362,11 @@ function openBrowserTab(email, password) {
 
       ws.onmessage = function (evt) {
         var msg;
-        try { msg = JSON.parse(evt.data); } catch { return; }
+        try {
+          msg = JSON.parse(evt.data);
+        } catch {
+          return;
+        }
 
         if (msg.type === 'frame') {
           loading.classList.add('hidden');
@@ -447,7 +457,9 @@ function closeBrowserTab(idx) {
 
   /* Close WebSocket */
   if (s.ws) {
-    try { s.ws.send(JSON.stringify({ type: 'close' })); } catch {}
+    try {
+      s.ws.send(JSON.stringify({ type: 'close' }));
+    } catch {}
     s.ws.close();
     s.ws = null;
   }
@@ -544,37 +556,52 @@ function setupCanvasInput(canvas, ws) {
     ws.send(JSON.stringify({ type: 'input', event: { type: 'mouseup', x: coords.x, y: coords.y, button: e.button } }));
   });
 
-  canvas.addEventListener('wheel', function (e) {
-    e.preventDefault();
-    var coords = getCanvasCoords(e);
-    var dir = e.deltaY > 0 ? 1 : (e.deltaY < 0 ? -1 : 0);
-    ws.send(JSON.stringify({ type: 'input', event: { type: 'scroll', x: coords.x, y: coords.y, deltaY: dir } }));
-  }, { passive: false });
+  canvas.addEventListener(
+    'wheel',
+    function (e) {
+      e.preventDefault();
+      var coords = getCanvasCoords(e);
+      var dir = e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0;
+      ws.send(JSON.stringify({ type: 'input', event: { type: 'scroll', x: coords.x, y: coords.y, deltaY: dir } }));
+    },
+    { passive: false },
+  );
 
-  canvas.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  canvas.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+  });
 
   canvas.setAttribute('tabindex', '0');
   canvas.style.outline = 'none';
 
   canvas.addEventListener('keydown', function (e) {
     e.preventDefault();
-    ws.send(JSON.stringify({
-      type: 'input', event: { type: 'keydown', key: e.key, code: e.code, text: e.key.length === 1 ? e.key : '' },
-    }));
+    ws.send(
+      JSON.stringify({
+        type: 'input',
+        event: { type: 'keydown', key: e.key, code: e.code, text: e.key.length === 1 ? e.key : '' },
+      }),
+    );
   });
 
   canvas.addEventListener('keyup', function (e) {
     e.preventDefault();
-    ws.send(JSON.stringify({
-      type: 'input', event: { type: 'keyup', key: e.key, code: e.code },
-    }));
+    ws.send(
+      JSON.stringify({
+        type: 'input',
+        event: { type: 'keyup', key: e.key, code: e.code },
+      }),
+    );
   });
 
   canvas.addEventListener('keypress', function (e) {
     e.preventDefault();
-    ws.send(JSON.stringify({
-      type: 'input', event: { type: 'keypress', key: e.key, code: e.code, text: e.key },
-    }));
+    ws.send(
+      JSON.stringify({
+        type: 'input',
+        event: { type: 'keypress', key: e.key, code: e.code, text: e.key },
+      }),
+    );
   });
 }
 

@@ -4,11 +4,11 @@
  * streams viewport frames over WebSocket, relays input events back.
  */
 
-import { spawn, execFileSync, type ChildProcess } from 'child_process';
+import { type ChildProcess, execFileSync, spawn } from 'child_process';
 import { existsSync, rmSync } from 'fs';
 import WebSocket from 'ws';
-import { logStore } from './logStore.ts';
 import { getProfileDir } from './browserProfiles.ts';
+import { logStore } from './logStore.ts';
 
 export interface ScreencastSession {
   email: string;
@@ -90,24 +90,28 @@ export async function startScreencast(
 
   logStore.log('info', 'screencast', `Starting Chrome for ${email} on debug port ${debugPort} (bin: ${chromeBin})`);
 
-  const chromeProcess = spawn(chromeBin, [
-    `--remote-debugging-port=${debugPort}`,
-    `--user-data-dir=${profileDir}`,
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-gpu',
-    '--headless=new',
-    '--disable-dev-shm-usage',
-    '--no-first-run',
-    '--disable-background-networking',
-    '--disable-sync',
-    '--disable-software-rasterizer',
-    '--window-size=1280,800',
-    'about:blank',
-  ], {
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, DISPLAY: process.env.DISPLAY || ':0' },
-  });
+  const chromeProcess = spawn(
+    chromeBin,
+    [
+      `--remote-debugging-port=${debugPort}`,
+      `--user-data-dir=${profileDir}`,
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-gpu',
+      '--headless=new',
+      '--disable-dev-shm-usage',
+      '--no-first-run',
+      '--disable-background-networking',
+      '--disable-sync',
+      '--disable-software-rasterizer',
+      '--window-size=1280,800',
+      'about:blank',
+    ],
+    {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, DISPLAY: process.env.DISPLAY || ':0' },
+    },
+  );
 
   chromeProcess.stderr?.on('data', (data: Buffer) => {
     const msg = data.toString();
@@ -203,9 +207,7 @@ async function connectCDP(session: ScreencastSession, wsUrl: string): Promise<vo
       try {
         // Get targets to find the page
         const targets = await send('Target.getTargets');
-        const page = targets.targetInfos?.find(
-          (t: any) => t.type === 'page' && t.url.includes('chat.qwen.ai'),
-        );
+        const page = targets.targetInfos?.find((t: any) => t.type === 'page' && t.url.includes('chat.qwen.ai'));
         if (!page) {
           const anyPage = targets.targetInfos?.find((t: any) => t.type === 'page');
           if (anyPage) {
@@ -412,30 +414,117 @@ async function cdpSend(session: ScreencastSession, method: string, params?: any)
 function getVirtualKeyCode(key: string, code: string): number {
   // Map common keys to their virtual key codes (Windows ABI)
   const map: Record<string, number> = {
-    Backspace: 8, Tab: 9, Enter: 13, Shift: 16, Control: 17, Alt: 18,
-    CapsLock: 20, Escape: 27, ' ': 32, PageUp: 33, PageDown: 34,
-    End: 35, Home: 36, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40,
-    Insert: 45, Delete: 46,
-    '0': 48, '1': 49, '2': 50, '3': 51, '4': 52, '5': 53,
-    '6': 54, '7': 55, '8': 56, '9': 57,
-    a: 65, b: 66, c: 67, d: 68, e: 69, f: 70, g: 71, h: 72, i: 73,
-    j: 74, k: 75, l: 76, m: 77, n: 78, o: 79, p: 80, q: 81, r: 82,
-    s: 83, t: 84, u: 85, v: 86, w: 87, x: 88, y: 89, z: 90,
-    Meta: 91, F1: 112, F2: 113, F3: 114, F4: 115, F5: 116, F6: 117,
-    F7: 118, F8: 119, F9: 120, F10: 121, F11: 122, F12: 123,
-    NumLock: 144, ScrollLock: 145, ';': 186, '=': 187, ',': 188,
-    '-': 189, '.': 190, '/': 191, '`': 192, '[': 219, '\\': 220,
-    ']': 221, "'": 222,
+    Backspace: 8,
+    Tab: 9,
+    Enter: 13,
+    Shift: 16,
+    Control: 17,
+    Alt: 18,
+    CapsLock: 20,
+    Escape: 27,
+    ' ': 32,
+    PageUp: 33,
+    PageDown: 34,
+    End: 35,
+    Home: 36,
+    ArrowLeft: 37,
+    ArrowUp: 38,
+    ArrowRight: 39,
+    ArrowDown: 40,
+    Insert: 45,
+    Delete: 46,
+    '0': 48,
+    '1': 49,
+    '2': 50,
+    '3': 51,
+    '4': 52,
+    '5': 53,
+    '6': 54,
+    '7': 55,
+    '8': 56,
+    '9': 57,
+    a: 65,
+    b: 66,
+    c: 67,
+    d: 68,
+    e: 69,
+    f: 70,
+    g: 71,
+    h: 72,
+    i: 73,
+    j: 74,
+    k: 75,
+    l: 76,
+    m: 77,
+    n: 78,
+    o: 79,
+    p: 80,
+    q: 81,
+    r: 82,
+    s: 83,
+    t: 84,
+    u: 85,
+    v: 86,
+    w: 87,
+    x: 88,
+    y: 89,
+    z: 90,
+    Meta: 91,
+    F1: 112,
+    F2: 113,
+    F3: 114,
+    F4: 115,
+    F5: 116,
+    F6: 117,
+    F7: 118,
+    F8: 119,
+    F9: 120,
+    F10: 121,
+    F11: 122,
+    F12: 123,
+    NumLock: 144,
+    ScrollLock: 145,
+    ';': 186,
+    '=': 187,
+    ',': 188,
+    '-': 189,
+    '.': 190,
+    '/': 191,
+    '`': 192,
+    '[': 219,
+    '\\': 220,
+    ']': 221,
+    "'": 222,
   };
   if (map[key] != null) return map[key];
   // Fallback: try code string
   const codeMap: Record<string, number> = {
-    Digit0: 48, Digit1: 49, Digit2: 50, Digit3: 51, Digit4: 52,
-    Digit5: 53, Digit6: 54, Digit7: 55, Digit8: 56, Digit9: 57,
-    Numpad0: 96, Numpad1: 97, Numpad2: 98, Numpad3: 99, Numpad4: 100,
-    Numpad5: 101, Numpad6: 102, Numpad7: 103, Numpad8: 104, Numpad9: 105,
-    NumpadAdd: 107, NumpadSubtract: 109, NumpadMultiply: 106, NumpadDivide: 111,
-    NumpadDecimal: 110, NumpadEnter: 13,
+    Digit0: 48,
+    Digit1: 49,
+    Digit2: 50,
+    Digit3: 51,
+    Digit4: 52,
+    Digit5: 53,
+    Digit6: 54,
+    Digit7: 55,
+    Digit8: 56,
+    Digit9: 57,
+    Numpad0: 96,
+    Numpad1: 97,
+    Numpad2: 98,
+    Numpad3: 99,
+    Numpad4: 100,
+    Numpad5: 101,
+    Numpad6: 102,
+    Numpad7: 103,
+    Numpad8: 104,
+    Numpad9: 105,
+    NumpadAdd: 107,
+    NumpadSubtract: 109,
+    NumpadMultiply: 106,
+    NumpadDivide: 111,
+    NumpadDecimal: 110,
+    NumpadEnter: 13,
   };
   return codeMap[code] || 0;
 }
@@ -461,12 +550,18 @@ export function handleInputEvent(
   switch (event.type) {
     case 'click':
       send('Input.dispatchMouseEvent', {
-        type: 'mousePressed', x: event.x, y: event.y,
-        button: event.button === 2 ? 'right' : 'left', clickCount: 1,
+        type: 'mousePressed',
+        x: event.x,
+        y: event.y,
+        button: event.button === 2 ? 'right' : 'left',
+        clickCount: 1,
       });
       send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased', x: event.x, y: event.y,
-        button: event.button === 2 ? 'right' : 'left', clickCount: 1,
+        type: 'mouseReleased',
+        x: event.x,
+        y: event.y,
+        button: event.button === 2 ? 'right' : 'left',
+        clickCount: 1,
       });
       break;
     case 'mousemove':
@@ -474,14 +569,20 @@ export function handleInputEvent(
       break;
     case 'mousedown':
       send('Input.dispatchMouseEvent', {
-        type: 'mousePressed', x: event.x, y: event.y,
-        button: event.button === 2 ? 'right' : 'left', clickCount: 1,
+        type: 'mousePressed',
+        x: event.x,
+        y: event.y,
+        button: event.button === 2 ? 'right' : 'left',
+        clickCount: 1,
       });
       break;
     case 'mouseup':
       send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased', x: event.x, y: event.y,
-        button: event.button === 2 ? 'right' : 'left', clickCount: 1,
+        type: 'mouseReleased',
+        x: event.x,
+        y: event.y,
+        button: event.button === 2 ? 'right' : 'left',
+        clickCount: 1,
       });
       break;
     case 'keydown': {
@@ -517,8 +618,11 @@ export function handleInputEvent(
       break;
     case 'scroll':
       send('Input.dispatchMouseEvent', {
-        type: 'mouseWheel', x: event.x, y: event.y,
-        deltaX: 0, deltaY: (event as any).deltaY > 0 ? 100 : -100,
+        type: 'mouseWheel',
+        x: event.x,
+        y: event.y,
+        deltaX: 0,
+        deltaY: (event as any).deltaY > 0 ? 100 : -100,
       });
       break;
   }
@@ -540,7 +644,9 @@ function cleanupSession(email: string): void {
   if (session.loginCheckInterval) clearInterval(session.loginCheckInterval);
 
   if (session.cdpWs) {
-    try { session.cdpWs.close(); } catch {}
+    try {
+      session.cdpWs.close();
+    } catch {}
   }
 
   if (session.chromeProcess && !session.chromeProcess.killed) {
