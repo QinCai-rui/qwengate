@@ -32,6 +32,23 @@ export const QUOTA_FEATURES = [
   'deep_research_deep_research_advanced',
 ];
 
+/**
+ * Model IDs to query explicitly — the SPA's fixed feature list misses the
+ * current flagship models (qwen3.7-plus, qwen3.8-max-preview, etc.).
+ * Passing them as features returns their quota entries (times_left=-1 = ∞).
+ */
+export const QUOTA_MODEL_IDS = [
+  'qwen3.7-plus',
+  'qwen3.8-max-preview',
+  'qwen3.7-max',
+  'qwen3.6-plus',
+  'qwen3.5-plus',
+  'qwen3.5-flash',
+  'qwen3-max',
+  'qwen2.5-max',
+  'qwen2.5-plus',
+];
+
 export interface QuotaResult {
   model: Record<string, EquityQuota>;
   features: Record<string, EquityQuota>;
@@ -56,7 +73,7 @@ export async function fetchAccountQuota(email: string): Promise<QuotaResult | nu
         origin: QWEN_API_BASE,
         referer: `${QWEN_API_BASE}/`,
       },
-      body: JSON.stringify({ features: QUOTA_FEATURES }),
+      body: JSON.stringify({ features: [...QUOTA_FEATURES, ...QUOTA_MODEL_IDS] }),
       accountEmail: email,
     });
     if (!response.ok) {
