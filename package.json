@@ -20,7 +20,7 @@
     "start:edge": "bun src/index.tsx --browser=edge",
     "cluster": "bun src/cluster.ts",
     "setup": "node scripts/setup.js",
-    "test": "bun test",
+    "test": "biome check src/ && bun test",
     "test:coverage": "bun test --coverage",
     "format": "biome check --write src/",
     "format:check": "biome check src/",
