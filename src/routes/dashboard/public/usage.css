@@ -74,6 +74,26 @@ table#modelTable tr:last-child td {
   color: var(--danger);
   margin-left: 2px;
 }
+.wall-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  width: 100%;
+}
+.wall-badge {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  white-space: nowrap;
+  cursor: help;
+}
 .empty-state {
   padding: 28px;
   text-align: center;
