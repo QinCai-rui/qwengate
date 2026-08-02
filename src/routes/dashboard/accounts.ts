@@ -51,7 +51,6 @@ ${sidebarHtml('accounts')}
                 <th>In Flight</th>
                 <th>Total Reqs</th>
                 <th>Throttle</th>
-                <th>Quota <button id="refreshQuotaBtn" class="account-btn small" title="Refresh all quotas" onclick="refreshQuota()">↻</button></th>
                 <th>Token TTL</th>
                 <th>Disabled</th>
                 <th>Actions</th>

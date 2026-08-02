@@ -17,6 +17,7 @@ import { monitorHtml } from './monitor.ts';
 import { networkHtml } from './network.ts';
 import { overviewHtml } from './overview.ts';
 import { settingsHtml } from './settings.ts';
+import { usageHtml } from './usage.ts';
 
 const serveHtml = (html: string) => (c: any) => {
   // Dashboard HTML pages always serve — they're localhost admin UI.
@@ -295,6 +296,7 @@ function requireApiKey(c: any, next: () => Promise<void>) {
 export function registerDashboardRoutes(app: Hono): void {
   app.get('/dashboard', serveHtml(overviewHtml));
   app.get('/dashboard/accounts', serveHtml(accountsHtml));
+  app.get('/dashboard/usage', serveHtml(usageHtml));
   app.get('/dashboard/network', serveHtml(networkHtml));
   app.get('/dashboard/settings', serveHtml(settingsHtml));
   app.get('/dashboard/monitor', serveHtml(monitorHtml));

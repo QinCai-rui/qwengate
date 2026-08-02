@@ -69,57 +69,6 @@ function makeThrottleBadge(acct) {
   return '<span class="badge badge-neutral">OK</span>';
 }
 
-/* Quota column: show daily remaining for the main models + features. */
-function makeQuotaBadge(acct) {
-  var q = acct.quota;
-  if (!q || typeof q !== 'object' || Object.keys(q).length === 0) {
-    return '<span class="badge badge-neutral" title="Click Refresh Quota">—</span>';
-  }
-  var parts = [];
-  var keys = [
-    'qwen3.8-max-preview',
-    'qwen3.7-max',
-    'qwen3.7-plus',
-    'qwen3.6-plus',
-    'qwen3.5-plus',
-    'qwen3.5-flash',
-    'qwen3-max',
-    'qwen2.5-max',
-    'thinking',
-    't2i',
-    't2v',
-    'search',
-    'code',
-  ];
-  for (var i = 0; i < keys.length; i++) {
-    var k = keys[i];
-    var v = q[k];
-    if (!v || typeof v !== 'object') continue;
-    var left = v.times_left;
-    var unit = v.time_unit || '';
-    var label = left === -1 ? '∞' : String(left);
-    var short = k.length > 14 ? k.slice(0, 12) + '…' : k;
-    var cls = left === -1 ? 'badge-neutral' : left <= 1 ? 'badge-warning' : 'badge-success';
-    parts.push(
-      '<span class="badge ' +
-        cls +
-        '" title="' +
-        escHtml(k) +
-        ': ' +
-        left +
-        ' left per ' +
-        unit +
-        '">' +
-        escHtml(short) +
-        ' ' +
-        label +
-        '</span>',
-    );
-  }
-  if (parts.length === 0) return '<span class="badge badge-neutral">—</span>';
-  return parts.join(' ');
-}
-
 function renderAccountsTable(accts) {
   if (!Array.isArray(accts) || accts.length === 0) {
     document.getElementById('acctBody').innerHTML = '';
@@ -155,9 +104,6 @@ function renderAccountsTable(accts) {
       makeThrottleBadge(a) +
       '</td>' +
       '<td style="font-family:var(--mono);font-size:0.75rem">' +
-      makeQuotaBadge(a) +
-      '</td>' +
-      '<td style="font-family:var(--mono);font-size:0.75rem">' +
       fmtTTL(a.tokenExpiresInMs) +
       '</td>' +
       '<td>' +
@@ -190,27 +136,6 @@ function renderAccountsTable(accts) {
 async function loadAccounts() {
   var data = await apiFetch('/accounts');
   renderAccountsTable(data);
-}
-
-/* ── Refresh Quota (POST /api/accounts/quota/refresh) ── */
-async function refreshQuota() {
-  var btn = document.getElementById('refreshQuotaBtn');
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = '…';
-  }
-  try {
-    await fetch('/api/accounts/quota/refresh', {
-      method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-      body: '{}',
-    });
-    await loadAccounts();
-  } catch {}
-  if (btn) {
-    btn.disabled = false;
-    btn.textContent = '↻';
-  }
 }
 
 /* ── Add Account ── */

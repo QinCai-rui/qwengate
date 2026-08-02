@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
-import type { AccountEntry, EquityQuota } from '../types/auth.ts';
+import type { AccountEntry } from '../types/auth.ts';
 import { projectPath } from '../utils/paths.ts';
 import { config } from './configService.ts';
 import { loginFresh } from './loginService.ts';
@@ -509,13 +509,6 @@ export function setAccountDisabled(email: string, disabled: boolean): void {
   saveAccountsToFile(accounts);
 }
 
-/** Store fetched quota on an account entry (in-memory only). */
-export function setAccountQuota(email: string, quota: Record<string, EquityQuota> | null): void {
-  const acct = getAccountByEmail(email);
-  if (!acct) return;
-  acct.quota = quota;
-  acct.quotaFetchedAt = Date.now();
-}
 export function throttleAccount(email: string, durationMs?: number): void {
   const acct = getAccountByEmail(email);
   if (!acct) return;
@@ -543,8 +536,6 @@ export function getAccountStats(): Array<{
   lastUsedAgoMs: number;
   inFlight: number;
   totalRequests: number;
-  quota: Record<string, EquityQuota> | null;
-  quotaFetchedAt: number | null;
 }> {
   const now = Date.now();
   return accounts.map((a) => ({
@@ -558,8 +549,6 @@ export function getAccountStats(): Array<{
     lastUsedAgoMs: a.lastUsed ? now - a.lastUsed : -1,
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
-    quota: a.quota || null,
-    quotaFetchedAt: a.quotaFetchedAt || null,
   }));
 }
 export function getAccountCount(): number {
