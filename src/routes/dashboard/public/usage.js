@@ -71,6 +71,39 @@ function renderAccountRows(accounts) {
           return '<span class="' + cls + '">' + escHtml(m) + ' <b>' + fmtNum(e.requests) + '</b>' + warn + '</span>';
         })
         .join('');
+
+      // Wall-hit snapshots: "hit daily limit at X reqs (model-a: n, model-b: m)"
+      var wallBadges = (a.walls || [])
+        .slice()
+        .sort(function (x, y) {
+          return x.at - y.at;
+        })
+        .map(function (w) {
+          var breakdown = Object.keys(w.perModel || {})
+            .sort(function (x, y) {
+              return w.perModel[y] - w.perModel[x];
+            })
+            .map(function (m) {
+              return escHtml(m) + ': ' + fmtNum(w.perModel[m]);
+            })
+            .join(', ');
+          return (
+            '<span class="wall-badge" title="' +
+            'RateLimited on ' +
+            escHtml(w.model) +
+            ' — wait ' +
+            w.waitHours +
+            'h. Daily budget at hit: ' +
+            breakdown +
+            '">' +
+            '🧱 wall @ ' +
+            fmtNum(w.total) +
+            ' reqs' +
+            '</span>'
+          );
+        })
+        .join(' ');
+
       return (
         '<tr>' +
         '<td><span class="acct-email">' +
@@ -87,6 +120,7 @@ function renderAccountRows(accounts) {
         '</td>' +
         '<td><div class="model-split">' +
         (chips || '<span class="acct-sub">no requests</span>') +
+        (wallBadges ? '<div class="wall-row">' + wallBadges + '</div>' : '') +
         '</div></td>' +
         '</tr>'
       );
@@ -100,10 +134,15 @@ function renderModelRows(accounts) {
   Object.keys(accounts || {}).forEach(function (email) {
     Object.keys(accounts[email].models || {}).forEach(function (m) {
       var e = accounts[email].models[m];
-      var t = totals[m] || (totals[m] = { requests: 0, rateLimited: 0, lastWaitHours: null });
+      var t = totals[m] || (totals[m] = { requests: 0, rateLimited: 0, lastWaitHours: null, budget: null });
       t.requests += e.requests || 0;
       t.rateLimited += e.rateLimited || 0;
       if (e.lastWaitHours != null) t.lastWaitHours = e.lastWaitHours;
+    });
+    // Measured daily budget = max total at any wall hit for this account
+    (accounts[email].walls || []).forEach(function (w) {
+      var t = totals[w.model] || (totals[w.model] = { requests: 0, rateLimited: 0, lastWaitHours: null, budget: null });
+      if (t.budget === null || w.total > t.budget) t.budget = w.total;
     });
   });
   var models = Object.keys(totals).sort(function (a, b) {
@@ -129,6 +168,9 @@ function renderModelRows(accounts) {
         '</td>' +
         '<td>' +
         fmtWait(t.lastWaitHours) +
+        '</td>' +
+        '<td class="num">' +
+        (t.budget !== null ? '<b>' + fmtNum(t.budget) + '</b> reqs' : '—') +
         '</td>' +
         '</tr>'
       );
