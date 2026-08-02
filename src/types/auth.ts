@@ -10,13 +10,6 @@ export interface AuthState {
   refreshToken: string | null;
 }
 
-/** Daily/rolling quota for one model or feature (from /users/user/entitlement_quota) */
-export interface EquityQuota {
-  times_left: number; // -1 = unlimited
-  time_unit: string; // 'day' | 'hour' | ...
-  time_amount: number;
-}
-
 export interface AccountEntry {
   email: string;
   password: string;
@@ -35,8 +28,4 @@ export interface AccountEntry {
   startupStatus?: 'pending' | 'initializing' | 'connecting' | 'ready';
   /** If true, account is excluded from request routing */
   disabled?: boolean;
-  /** Per-model + per-feature daily quota from entitlement_quota endpoint */
-  quota?: Record<string, EquityQuota> | null;
-  /** Timestamp of last quota fetch */
-  quotaFetchedAt?: number;
 }

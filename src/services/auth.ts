@@ -48,7 +48,6 @@ export {
   reloadAccounts,
   removeAccount,
   setAccountDisabled,
-  setAccountQuota,
   throttleAccount,
 } from './accountManager.ts';
 export { ensureAccountFresh, needsRefresh, tryRefreshToken } from './tokenRefresh.ts';

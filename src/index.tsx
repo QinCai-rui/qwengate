@@ -16,6 +16,7 @@ import { closeScreencast, handleInputEvent, startScreencast } from './services/c
 import { config, updateClaudeCodeSettings } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
 import { configureAccount, fetchQwenModels } from './services/qwen.ts';
+import { getUsage, getUsageSummary, loadUsageStore } from './services/usageTracker.ts';
 import { safeCompare } from './utils/auth.ts';
 import { isBun } from './utils/env.ts';
 import { projectPath } from './utils/paths.ts';
@@ -150,6 +151,15 @@ app.use('/api/accounts*', async (c, next) => {
   return bearerAuth({ token: apiKey })(c, next);
 });
 app.route('/api/accounts', accountsRouter);
+
+// Usage stats API — per-account × per-model daily counters (protected)
+app.use('/api/usage*', async (c, next) => {
+  const apiKey = config.get('API_KEY');
+  if (!apiKey) return await next();
+  return bearerAuth({ token: apiKey })(c, next);
+});
+app.get('/api/usage', (c) => c.json(getUsageSummary()));
+app.get('/api/usage/raw', (c) => c.json(getUsage()));
 
 // Config API
 if (config.get('API_KEY')) {
@@ -425,6 +435,9 @@ if (import.meta.main) {
     startAutoCleanup();
 
     logStore.log('info', 'boot', 'Dashboard live — starting background initialization...');
+
+    // Load persisted usage history (per-account × per-model daily counters)
+    loadUsageStore();
 
     // ── Phase 2: Auth + post-boot tasks ──
     (async () => {

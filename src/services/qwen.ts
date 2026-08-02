@@ -7,6 +7,7 @@ import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
 import { completeEntry, errorEntry, recordStreamChunk } from './networkDebug.ts';
 import { logQwenRequest } from './qwenLogger.ts';
+import { recordRateLimited, recordUsage } from './usageTracker.ts';
 
 export { configureAccount, deleteAllChats, fetchQwenModels } from './qwenModels.ts';
 
@@ -263,6 +264,12 @@ export async function createQwenStream(
   let lastDebugEntryId: string | null = null;
   const streamAbortController = new AbortController();
 
+  // Per-request usage logging — which account hit which model today
+  function logUsage(acctEmail: string | undefined | null, modelName: string): void {
+    if (!acctEmail) return;
+    recordUsage(acctEmail, modelName);
+  }
+
   async function handleErrorResponse(response: Response, debugEntryId: string): Promise<never> {
     const errText = await response.text().catch(() => '');
     const contentType = response.headers.get('content-type') || '';
@@ -280,7 +287,10 @@ export async function createQwenStream(
           const details = errorJson.data?.details || errorJson.message || 'Qwen returned an error';
           const wait = errorJson.data?.num !== undefined ? ` Wait about ${errorJson.data.num} hour(s) before trying again.` : '';
           if (code === 'RateLimited' && currentAccountEmail) {
-            const throttleMs = (errorJson.data?.num || 1) * 3600_000;
+            const waitHours = errorJson.data?.num || 1;
+            const throttleMs = waitHours * 3600_000;
+            // Record the wall hit — this is the only quota signal Qwen exposes for flagship models
+            recordRateLimited(currentAccountEmail, model, waitHours);
             // Use the full duration from Qwen (e.g. 7 hours) — do NOT cap at 2h.
             // Capping caused accounts to become "available" while Qwen still rejected them.
             throttleAccount(currentAccountEmail, throttleMs);
@@ -397,6 +407,7 @@ export async function createQwenStream(
       'qwen',
       `[Qwen] Fetch response status=${response.status} ok=${response.ok} account=${currentAccountEmail || '?'}`,
     );
+    logUsage(currentAccountEmail, model);
     return { response, headers: {}, qwenLogFile: makeRequestQwenLogFile };
   };
 
