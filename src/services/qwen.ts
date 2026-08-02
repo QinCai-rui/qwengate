@@ -5,7 +5,7 @@ import { decrementInFlight, getTokenWithAccount, pickAccount, throttleAccount } 
 import { browserlessFetch } from './browserlessFetch.ts';
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
-import { completeEntry, errorEntry, recordStreamChunk } from './networkDebug.ts';
+import { completeEntry, createNetworkEntry, errorEntry, recordResponse, recordStreamChunk } from './networkDebug.ts';
 import { logQwenRequest } from './qwenLogger.ts';
 import { recordRateLimited, recordUsage } from './usageTracker.ts';
 
@@ -376,6 +376,21 @@ export async function createQwenStream(
       `[Qwen] Fetch POST ${url.substring(0, 100)} account=${currentAccountEmail || '?'} token_len=${cookieStr.length} payload_len=${bodyStr.length}`,
     );
 
+    // Network debug entry — created per attempt so retries/rotations are visible
+    const debugEntry = createNetworkEntry({
+      url,
+      method: 'POST',
+      headers: {
+        accept: 'application/json, text/plain, */*',
+        'content-type': 'application/json',
+        cookie: `token=${tokenPreview}`,
+      },
+      body: payload,
+      category: 'chat',
+      accountEmail: currentAccountEmail ?? undefined,
+    });
+    lastDebugEntryId = debugEntry.id;
+
     const response = await browserlessFetch(url, {
       method: 'POST',
       headers: {
@@ -407,6 +422,7 @@ export async function createQwenStream(
       'qwen',
       `[Qwen] Fetch response status=${response.status} ok=${response.ok} account=${currentAccountEmail || '?'}`,
     );
+    recordResponse(lastDebugEntryId, response);
     logUsage(currentAccountEmail, model);
     return { response, headers: {}, qwenLogFile: makeRequestQwenLogFile };
   };

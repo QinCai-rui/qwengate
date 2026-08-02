@@ -24,7 +24,7 @@ const serveHtml = (html: string) => (c: any) => {
   // API_KEY protection applies only to data endpoints (handled by requireApiKey/bearerAuth).
   // The front-end JS injects Authorization: Bearer <key> via window.API_KEY for data fetches.
   const darkMode = config.get('DARK_MODE') === 'true';
-  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\nwindow.API_KEY = ${JSON.stringify(config.get('API_KEY'))};\nwindow.DARK_MODE = ${JSON.stringify(darkMode)};\n</script>\n`;
+  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\nwindow.API_KEY = ${JSON.stringify(config.get('API_KEY'))};\nwindow.DARK_MODE = ${JSON.stringify(darkMode)};\n</script>\n<link rel="icon" type="image/svg+xml" href="/dashboard/static/logo.svg">\n`;
   // Apply dark-mode class on <html> server-side to prevent flash on page navigation
   let output = html.replace(/(<script\b)/, scriptInjection + '$1');
   if (darkMode) {
