@@ -14,7 +14,10 @@ function setText(id, val) {
   if (el) el.textContent = val;
 }
 function authHeaders() {
-  return window.API_KEY ? { Authorization: 'Bearer ' + window.API_KEY } : {};
+  // Auth flows through the HttpOnly session cookie set at /dashboard/login
+  // (issue #45). No Bearer header needed — and the raw key is never exposed
+  // to page JS anymore. Kept as a function so existing callers keep working.
+  return {};
 }
 function fmtTime(ts) {
   if (!ts) return '—';
@@ -137,12 +140,21 @@ async function toggleDarkMode() {
   try {
     await fetch('/api/config', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + window.API_KEY },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ DARK_MODE: String(next) }),
     });
   } catch (e) {
     console.error('Failed to save dark mode preference:', e);
   }
+}
+
+async function logoutDashboard() {
+  try {
+    await fetch('/dashboard/logout', { method: 'POST' });
+  } catch (e) {
+    // Ignore — redirect anyway
+  }
+  window.location.href = '/dashboard/login';
 }
 
 /* Apply dark mode on load */

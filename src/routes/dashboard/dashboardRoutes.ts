@@ -1,29 +1,35 @@
 import { existsSync, readFileSync } from 'fs';
 import { Hono } from 'hono';
-import { bearerAuth } from 'hono/bearer-auth';
 import { resolve } from 'path';
 import { getAccountCount, getAccountStats, getAllAccountEmails, getAvailableCount, initAuth } from '../../services/auth.ts';
-import { config, isValidKey } from '../../services/configService.ts';
+import { config, isValidKey, type ConfigSchema } from '../../services/configService.ts';
 import { logStore } from '../../services/logStore.ts';
 import { monitorStore } from '../../services/monitorStore.ts';
 
 import { configureAccount, deleteAllChats } from '../../services/qwen.ts';
 import { sessionPool } from '../../services/sessionPool.ts';
-import { checkApiKeyAuth } from '../../utils/auth.ts';
+import { checkApiKeyAuth, clearSessionCookieHeader, hasValidDashboardSession, safeCompare, sessionCookieHeader } from '../../utils/auth.ts';
 import { projectPath } from '../../utils/paths.ts';
 import { APP_VERSION } from '../../utils/version.ts';
 import { accountsHtml } from './accounts.ts';
+import { loginHtml } from './login.ts';
 import { monitorHtml } from './monitor.ts';
 import { networkHtml } from './network.ts';
 import { overviewHtml } from './overview.ts';
 import { settingsHtml } from './settings.ts';
 
 const serveHtml = (html: string) => (c: any) => {
-  // Dashboard HTML pages always serve — they're localhost admin UI.
-  // API_KEY protection applies only to data endpoints (handled by requireApiKey/bearerAuth).
-  // The front-end JS injects Authorization: Bearer <key> via window.API_KEY for data fetches.
+  // Dashboard HTML pages are admin UI, gated behind a login session cookie
+  // (issue #45). A dashboard password is always configured (default
+  // admin/123456), so the gate is always active. Without a valid session,
+  // redirect to /dashboard/login.
+  if (!hasValidDashboardSession(c)) {
+    return c.redirect('/dashboard/login');
+  }
   const darkMode = config.get('DARK_MODE') === 'true';
-  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\nwindow.API_KEY = ${JSON.stringify(config.get('API_KEY'))};\nwindow.DARK_MODE = ${JSON.stringify(darkMode)};\n</script>\n<link rel="icon" type="image/svg+xml" href="/dashboard/static/logo.svg">\n`;
+  // NOTE: no credentials are ever injected into the page. Auth flows
+  // through the HttpOnly cookie set at /dashboard/login.
+  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\nwindow.DARK_MODE = ${JSON.stringify(darkMode)};\n</script>\n<link rel="icon" type="image/svg+xml" href="/dashboard/static/logo.svg">\n`;
   // Apply dark-mode class on <html> server-side to prevent flash on page navigation
   let output = html.replace(/(<script\b)/, scriptInjection + '$1');
   if (darkMode) {
@@ -287,12 +293,53 @@ function logJsonHandler(c: any) {
 }
 
 function requireApiKey(c: any, next: () => Promise<void>) {
+  // A valid dashboard session cookie also authorizes data endpoints — the
+  // browser flow (login → cookie) then works for every fetch without the
+  // front-end ever holding the raw key.
   const denied = checkApiKeyAuth(c);
-  if (denied) return denied;
-  return next();
+  if (!denied) return next();
+  if (hasValidDashboardSession(c)) return next();
+  return denied;
+}
+
+const SECRET_CONFIG_KEYS = ['API_KEY', 'DASHBOARD_PASSWORD'];
+
+function stripSecrets(all: ConfigSchema): Record<string, string> {
+  return Object.fromEntries(Object.entries(all).filter(([k]) => !SECRET_CONFIG_KEYS.includes(k)));
 }
 
 export function registerDashboardRoutes(app: Hono): void {
+  // ── Login / logout (issue #45) ──
+  // Login page is always reachable (it IS the gate). Everything else under
+  // /dashboard requires a valid session cookie.
+  app.get('/dashboard/login', (c) => {
+    if (hasValidDashboardSession(c)) {
+      return c.redirect('/dashboard');
+    }
+    return c.html(loginHtml);
+  });
+  app.post('/dashboard/login', async (c) => {
+    let body: any = {};
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: 'invalid request body' }, 400);
+    }
+    const submittedUser = typeof body.username === 'string' ? body.username : '';
+    const submittedPass = typeof body.password === 'string' ? body.password : '';
+    const expectedUser = config.get('DASHBOARD_USER') || 'admin';
+    const expectedPass = config.get('DASHBOARD_PASSWORD') || '123456';
+    if (!safeCompare(submittedUser.trim(), expectedUser) || !safeCompare(submittedPass, expectedPass)) {
+      return c.json({ error: 'Invalid username or password' }, 401);
+    }
+    c.header('Set-Cookie', sessionCookieHeader());
+    return c.json({ ok: true });
+  });
+  app.post('/dashboard/logout', (c) => {
+    c.header('Set-Cookie', clearSessionCookieHeader());
+    return c.json({ ok: true });
+  });
+
   app.get('/dashboard', serveHtml(overviewHtml));
   app.get('/dashboard/accounts', serveHtml(accountsHtml));
   app.get('/dashboard/usage', (c) => c.redirect('/dashboard/monitor'));
@@ -321,20 +368,12 @@ export function registerDashboardRoutes(app: Hono): void {
 
   app.post(
     '/admin/accounts/reload',
-    async (c, next) => {
-      const apiKey = config.get('API_KEY');
-      if (!apiKey) return await next();
-      return bearerAuth({ token: apiKey })(c, next);
-    },
+    async (c, next) => requireApiKey(c, next),
     accountsReloadHandler,
   );
   app.post(
     '/dashboard/accounts/delete-all-chats',
-    async (c, next) => {
-      const apiKey = config.get('API_KEY');
-      if (!apiKey) return await next();
-      return bearerAuth({ token: apiKey })(c, next);
-    },
+    async (c, next) => requireApiKey(c, next),
     deleteAllChatsHandler,
   );
 
@@ -359,6 +398,48 @@ export function registerDashboardRoutes(app: Hono): void {
     },
   );
 
+  // ── Bulk account import (issue #46) ──
+  // Accepts pipe format:  "email|password\nemail|password"
+  // or JSON format:       { "accounts": [{"email","password"}, ...] }
+  // or array format:      [{ "email","password" }, ...]
+  app.post(
+    '/api/accounts/import',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const body = await c.req.json();
+        let entries: Array<{ email: string; password: string }> = [];
+
+        if (Array.isArray(body)) {
+          entries = body;
+        } else if (body && body.format === 'pipe' && typeof body.data === 'string') {
+          entries = body.data
+            .split(/\r?\n/)
+            .map((line: string) => line.trim())
+            .filter(Boolean)
+            .map((line: string) => {
+              const sep = line.indexOf('|');
+              if (sep < 0) return { email: line, password: '' };
+              return { email: line.slice(0, sep).trim(), password: line.slice(sep + 1).trim() };
+            });
+        } else if (body && Array.isArray(body.accounts)) {
+          entries = body.accounts;
+        } else {
+          return c.json({ error: 'Invalid body: expected {format:"pipe",data} or {accounts:[...]}' }, 400);
+        }
+
+        if (entries.length === 0) return c.json({ error: 'No accounts provided' }, 400);
+        if (entries.length > 500) return c.json({ error: 'Batch too large (max 500)' }, 400);
+
+        const { bulkAddAccounts } = await import('../../services/accountManager.ts');
+        const result = await bulkAddAccounts(entries);
+        return c.json(result);
+      } catch (err: any) {
+        return c.json({ error: err.message || 'import failed' }, 500);
+      }
+    },
+  );
+
   app.get('/log/json', async (c, next) => requireApiKey(c, next), logJsonHandler);
   app.get('/log/stream', async (c, next) => requireApiKey(c, next), logStreamHandler);
   app.get(
@@ -374,8 +455,13 @@ export function registerDashboardRoutes(app: Hono): void {
     async (c, next) => requireApiKey(c, next),
     (c) => {
       const all = config.getAll();
-      const safe = Object.fromEntries(Object.entries(all).filter(([k]) => !['API_KEY'].includes(k)));
-      return c.json({ config: safe });
+      const safe = stripSecrets(all);
+      // Never echo secrets back. Expose only whether they are set so the UI
+      // can render "leave blank to keep" instead of an always-empty field
+      // (which read as "it didn't save" — issue #51).
+      const apiKey = all.API_KEY;
+      const dashPass = all.DASHBOARD_PASSWORD;
+      return c.json({ config: safe, apiKeySet: !!apiKey, dashboardPasswordSet: !!dashPass });
     },
   );
 
@@ -387,15 +473,27 @@ export function registerDashboardRoutes(app: Hono): void {
         const body = await c.req.json();
         let changed = false;
         for (const key of Object.keys(body)) {
-          if (typeof body[key] === 'string' && isValidKey(key)) {
+          if (key === 'API_KEY' || key === 'DASHBOARD_PASSWORD') {
+            // Secrets: ''/undefined means "keep current", a non-empty string
+            // means "set new", explicit null means "clear". Never echoed back.
+            if (body[key] === null) {
+              if (config.get(key as keyof ConfigSchema)) {
+                config.set(key as keyof ConfigSchema, '');
+                changed = true;
+              }
+            } else if (typeof body[key] === 'string' && body[key].trim() !== '') {
+              config.set(key as keyof ConfigSchema, body[key].trim());
+              changed = true;
+            }
+          } else if (typeof body[key] === 'string' && isValidKey(key)) {
             config.set(key, body[key]);
             changed = true;
           }
         }
         if (changed) config.save();
         const all = config.getAll();
-        const safe = Object.fromEntries(Object.entries(all).filter(([k]) => !['API_KEY'].includes(k)));
-        return c.json({ config: safe });
+        const safe = stripSecrets(all);
+        return c.json({ config: safe, apiKeySet: !!all.API_KEY, dashboardPasswordSet: !!all.DASHBOARD_PASSWORD });
       } catch {
         return c.json({ error: 'invalid request body' }, 400);
       }
