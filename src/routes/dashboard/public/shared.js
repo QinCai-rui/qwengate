@@ -159,7 +159,7 @@ async function logoutDashboard() {
 
 /* ── Restart server ── */
 function restartServer() {
-  if (!confirm('Restart the QwenGate server? This takes a few seconds and will reconnect in-flight requests.')) {
+  if (!confirm('Restart QwenGate? Accounts and sessions will re-initialize. The dashboard stays open (a full process restart only happens if PORT/HOST were changed).')) {
     return;
   }
   var btn = document.querySelector('.restart-btn');

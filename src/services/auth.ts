@@ -205,6 +205,15 @@ export function setStartupStatus(email: string, status: 'initializing' | 'pendin
   if (account) account.startupStatus = status;
 }
 
+/**
+ * Reset the init-once guard so a soft restart (in-process re-auth, no HTTP
+ * server drop) can run initAuth() again. Also clears in-memory accounts so
+ * the fresh init repopulates them from disk.
+ */
+export function resetAuth(): void {
+  initDone = false;
+}
+
 export async function loadCookiesFromProfile(email: string): Promise<AuthState | null> {
   let context: any = null;
   try {

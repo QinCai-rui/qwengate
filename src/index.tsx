@@ -11,7 +11,7 @@ import { chatCompletions } from './routes/chat.ts';
 import { configRouter } from './routes/config.ts';
 import { registerDashboardRoutes } from './routes/dashboard/dashboardRoutes.ts';
 import { debugNetworkApp } from './routes/debugNetwork.ts';
-import { getAccountCount, getAccountStats, getAccounts, getAvailableCount, initAuth, setStartupStatus } from './services/auth.ts';
+import { getAccountCount, getAccountStats, getAccounts, getAvailableCount, initAuth, resetAuth, setStartupStatus } from './services/auth.ts';
 import { closeScreencast, handleInputEvent, startScreencast } from './services/cdpScreencast.ts';
 import { config, updateClaudeCodeSettings } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
@@ -49,6 +49,8 @@ export const app = new Hono();
 let inFlightRequests = 0;
 let isShuttingDown = false;
 let serverStop: (() => void | Promise<void>) | null = null;
+let currentPort = 0;
+let currentHost = 'localhost';
 const SHUTDOWN_TIMEOUT_MS = 30_000;
 
 app.use('*', async (c, next) => {
@@ -128,33 +130,62 @@ app.get('/health', (c) => {
 });
 
 // Restart endpoint — auth-gated (Bearer API key OR valid dashboard session).
-// Responds 200 FIRST, then spawns a detached fresh instance of itself with
-// the same env/config, and exits. The new process takes over the port.
+//
+// Two modes:
+//  - SOFT (default): re-initializes auth/accounts/sessions in-process. The
+//    HTTP server and dashboard NEVER drop — zero downtime, page stays alive.
+//  - HARD (only when PORT/HOST changed): spawns a detached replacement with
+//    the same env/config and exits, because the new bind address can't be
+//    applied to a live listener.
 app.post('/api/restart', async (c) => {
   const denied = checkApiKeyAuth(c);
   if (denied && !hasValidDashboardSession(c)) return denied;
-  logStore.log('info', 'server', 'Restart requested — spawning replacement and exiting');
-  // Respond immediately so the client sees success even as we shut down.
-  const body = { ok: true, message: 'Restarting…' };
-  setTimeout(async () => {
+
+  const cfgPort = config.getPort();
+  const cfgHost = (config.get('HOST') || 'localhost').replace(/^0\.0\.0\.0$/, 'localhost');
+  const needsHardRestart = cfgPort !== currentPort || cfgHost !== currentHost;
+
+  if (needsHardRestart) {
+    logStore.log('info', 'server', `Restart requested — bind changed (${currentHost}:${currentPort} → ${cfgHost}:${cfgPort}), spawning replacement`);
+    const body = { ok: true, message: 'Restarting…', mode: 'hard' };
+    setTimeout(async () => {
+      try {
+        const { spawn } = await import('child_process');
+        const entry = import.meta.path;
+        const projectRoot = projectPath('.');
+        const child = spawn(process.execPath, [entry], {
+          cwd: projectRoot,
+          detached: true,
+          stdio: 'ignore',
+          env: process.env,
+        });
+        child.unref();
+        logStore.log('info', 'server', `Replacement spawned (pid ${child.pid})`);
+      } catch (err: any) {
+        logStore.log('error', 'server', `Failed to spawn replacement: ${err.message}`);
+      }
+      await gracefulShutdown('RESTART');
+    }, 150);
+    return c.json(body);
+  }
+
+  // ── Soft restart: re-init in place, dashboard stays up ──
+  logStore.log('info', 'server', 'Soft restart requested — re-initializing auth/accounts in place');
+  (async () => {
     try {
-      const { spawn } = await import('child_process');
-      const entry = import.meta.path;
-      const projectRoot = projectPath('.');
-      const child = spawn(process.execPath, [entry], {
-        cwd: projectRoot,
-        detached: true,
-        stdio: 'ignore',
-        env: process.env,
-      });
-      child.unref();
-      logStore.log('info', 'server', `Replacement spawned (pid ${child.pid})`);
+      // Re-read config from disk (picks up manual edits, applies live keys).
+      config.reset();
+      // Re-init accounts + re-auth (fresh token refresh cycle).
+      resetAuth();
+      await initAuth();
+      // Reset usage store so dashboard counters re-sync from disk.
+      loadUsageStore();
+      logStore.log('info', 'server', 'Soft restart complete — all accounts re-initialized');
     } catch (err: any) {
-      logStore.log('error', 'server', `Failed to spawn replacement: ${err.message}`);
+      logStore.log('error', 'server', `Soft restart failed: ${err.message}`);
     }
-    await gracefulShutdown('RESTART');
-  }, 150);
-  return c.json(body);
+  })();
+  return c.json({ ok: true, message: 'Restarting…', mode: 'soft' });
 });
 // Ping — lightweight static response.
 // Build a FRESH Response per request: a Response body is a one-shot
@@ -303,6 +334,9 @@ if (import.meta.main) {
   const port = config.getPort();
   const hostArg = process.argv.indexOf('--host');
   const host = hostArg !== -1 && process.argv[hostArg + 1] ? process.argv[hostArg + 1] : config.get('HOST') || 'localhost';
+  currentPort = port;
+  // Normalize 0.0.0.0 → localhost so the soft/hard decision compares like-for-like.
+  currentHost = host.replace(/^0\.0\.0\.0$/, 'localhost');
 
   // Show banner immediately on startup
   process.stdout.write(`\x1b[31m
