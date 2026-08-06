@@ -39,18 +39,40 @@ Messages may include attached files. These are referenced inline and also appear
 
 **IMPORTANT: \`context.txt\` is a cloud file stored on Qwen's servers.** It is NOT a local file on the user's machine. Do not try to read it from the local filesystem or ask the user to provide it — it is already attached to the message and accessible through Qwen's file handling system. If the file is attached to the message, Qwen automatically processes it as part of the conversation context.
 
-### How to Use \`context.txt\`
+### Tool Results
 
-**Tool results never appear in the conversation text.** They are written **only** in the \`<tool-results>\` section of \`context.txt\`. If you don't read that file, you cannot see what your tools returned.
-
-**Tool definitions** (the list of available tools and their parameter schemas) are in the \`<system-instructions>\` section.
+**Tool results appear INLINE in the conversation text** as \`<tool-result tool="...">\` blocks, placed immediately after the assistant's tool call. Always read them before responding — the content of the tool call is inside that block.
 
 **Rules:**
-1. If the conversation history contains tool calls, you **MUST** read the \`<tool-results>\` section of \`context.txt\` before producing your response.
+1. When you see a \`<tool-result>\` block after one of your tool calls, that is the tool's output. Use it to answer.
+2. **Do NOT call the same tool again if you already have its result above** — re-calling a tool whose result is already visible wastes turns and causes loops.
+3. Do not guess or assume what a tool returned — if a result block is present, read it; if it's absent, the call failed or produced nothing.
+
+### Older History (\`context.txt\`)
+
+In very long conversations, older turns are moved to a **\`context.txt\`** cloud file attached to the message. It contains tagged sections:
+
+\`\`\`
+<system-instructions>
+... your system prompt + tool definitions + any extra instructions ...
+</system-instructions>
+
+<tool-results>
+... older tool call results (kept for reference) ...
+</tool-results>
+
+<chat_history>
+... older conversation history (beyond the inline context window) ...
+</chat_history>
+\`\`\`
+
+**IMPORTANT: \`context.txt\` is a cloud file stored on Qwen's servers.** It is NOT a local file on the user's machine. Do not try to read it from the local filesystem or ask the user to provide it — it is already attached to the message and accessible through Qwen's file handling system.
+
+**Rules for \`context.txt\`:**
+
+1. If a \`<chat_history>\` section exists, it contains older conversation turns that preceded the inline context. Read it if you need the full conversation history.
 2. The **latest entries** at the end correspond to the most recent tool calls. Always start from the bottom.
-3. Do not guess or assume what a tool returned — read the file.
-4. If there are multiple tool calls, all their results are appended sequentially in the order they were called.
-5. If the \`<chat_history>\` section exists, it contains older conversation turns that preceded the inline context. Read it if you need the full conversation history.
+3. Recent tool results are always inline in the conversation; \`context.txt\` may also carry a copy for long conversations.
 
 When a file is attached, treat it as authoritative context for that turn.
 `.trim();
