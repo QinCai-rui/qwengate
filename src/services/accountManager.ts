@@ -13,6 +13,7 @@ import { config } from './configService.ts';
 import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
 import { configureAccount } from './qwenModels.ts';
+import { getTodayRequests } from './usageTracker.ts';
 
 /** In-memory account registry. Mutations must stay synchronous. */
 export const accounts: AccountEntry[] = [];
@@ -444,24 +445,36 @@ export async function pickAccount(excludeEmail?: string): Promise<AccountEntry |
     }
     const pool = available.filter((a) => a.inFlight === 0);
     const candidates = pool.length > 0 ? pool : available;
-    // Single-pass O(N) min-find instead of O(N log N) sort
+
+    // Routing priority (equal usage across accounts):
+    //   1. lowest TODAY usage (per-account daily request counter) — this is
+    //      the primary balance signal, so all accounts hit their daily quota
+    //      at roughly the same time instead of one burning out first
+    //   2. lowest inFlight (least busy right now)
+    //   3. oldest lastUsed (round-robin-ish tiebreak)
+    // Single-pass O(N) min-find instead of O(N log N) sort.
     let bestIdx = 0;
+    let bestToday = getTodayRequests(candidates[0].email);
     for (let i = 1; i < candidates.length; i++) {
       const a = candidates[i];
       const b = candidates[bestIdx];
+      const aToday = getTodayRequests(a.email);
+      const bToday = getTodayRequests(candidates[bestIdx].email);
       if (
-        a.inFlight < b.inFlight ||
-        (a.inFlight === b.inFlight && a.totalRequests < b.totalRequests) ||
-        (a.inFlight === b.inFlight && a.totalRequests === b.totalRequests && (a.lastUsed || 0) < (b.lastUsed || 0))
+        aToday < bestToday ||
+        (aToday === bestToday && a.inFlight < b.inFlight) ||
+        (aToday === bestToday && a.inFlight === b.inFlight && a.totalRequests < b.totalRequests) ||
+        (aToday === bestToday && a.inFlight === b.inFlight && a.totalRequests === b.totalRequests && (a.lastUsed || 0) < (b.lastUsed || 0))
       ) {
         bestIdx = i;
+        bestToday = aToday;
       }
     }
     const picked = candidates[bestIdx];
     logStore.log(
       'debug',
       'auth',
-      `[Account] Picked ${picked.email} — inFlight=${picked.inFlight} totalReqs=${picked.totalRequests} lastUsed=${picked.lastUsed ? Date.now() - picked.lastUsed + 'ms ago' : 'never'}${excludeEmail ? ` (excluded: ${excludeEmail})` : ''}`,
+      `[Account] Picked ${picked.email} — today=${getTodayRequests(picked.email)} inFlight=${picked.inFlight} totalReqs=${picked.totalRequests} lastUsed=${picked.lastUsed ? Date.now() - picked.lastUsed + 'ms ago' : 'never'}${excludeEmail ? ` (excluded: ${excludeEmail})` : ''}`,
     );
     picked.lastUsed = Date.now();
     // Reset stuck inFlight: if counter > 0 and last increment was > 60s ago, it leaked

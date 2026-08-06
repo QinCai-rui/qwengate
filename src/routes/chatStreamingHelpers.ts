@@ -181,6 +181,20 @@ export async function processStreamData(data: any, state: StreamProcessingState,
     state.upstreamError = `Qwen upstream error: ${errMsg}`;
     return 'break_stream';
   }
+  // Qwen content-filter / validation envelope: {"success": false, "data": {...}}.
+  // Fires when the filter deletes the message mid-answer — stash the error so
+  // the post-stream handler flushes partial content first, then surfaces it.
+  if (data.success === false) {
+    const code = data.data?.code || data.code || 'UpstreamError';
+    const details = data.data?.details || data.message || JSON.stringify(data).substring(0, 200);
+    logStore.addError(logId, `Qwen upstream error: ${code}: ${details}`);
+    logStore.updateEntry(logId, (entry) => {
+      entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
+      entry.finalResponse.finishReason = 'error';
+    });
+    state.upstreamError = `Qwen upstream error: ${code}: ${details}`;
+    return 'break_stream';
+  }
   const deltaStatus = data.choices?.[0]?.delta?.status;
   if (deltaStatus === 'error') {
     logStore.addError(logId, `Qwen stream delta returned error status`);

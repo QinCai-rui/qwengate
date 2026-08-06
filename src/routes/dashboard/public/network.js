@@ -59,6 +59,9 @@ function truncateUrl(url, maxLen) {
 
 /* ── State ── */
 var allEntries = [];
+/* Expanded entry ids — preserved across the 2s poller re-render so an open
+   detail panel stays open instead of collapsing when the list refreshes. */
+var expandedIds = {};
 
 /* ── Filter ── */
 function onFilterChange() {
@@ -148,10 +151,16 @@ function renderNetworkEntries(entries) {
 
     var card = document.createElement('div');
     card.className = 'net-entry';
+    card.dataset.id = e.id || '';
+
+    /* Re-apply expanded state if this entry was open before the re-render */
+    var isOpen = e.id && expandedIds[e.id] ? ' open' : '';
 
     /* ── Entry Header ── */
     card.innerHTML =
-      '<div class="net-entry-header" onclick="toggleEntry(this)">' +
+      '<div class="net-entry-header' +
+      isOpen +
+      '" onclick="toggleEntry(this)">' +
       '<span class="badge ' +
       methodBadgeClass(method) +
       '">' +
@@ -181,7 +190,9 @@ function renderNetworkEntries(entries) {
       ts +
       '</span>' +
       '</div>' +
-      '<div class="net-entry-body">' +
+      '<div class="net-entry-body' +
+      isOpen +
+      '">' +
       renderEntryDetail(e) +
       '</div>';
 
@@ -291,6 +302,12 @@ function toggleEntry(header) {
   header.classList.toggle('open');
   var body = header.nextElementSibling;
   if (body) body.classList.toggle('open');
+  /* Persist open state across poller re-renders */
+  var card = header.parentElement;
+  if (card && card.dataset.id) {
+    if (header.classList.contains('open')) expandedIds[card.dataset.id] = true;
+    else delete expandedIds[card.dataset.id];
+  }
 }
 
 /* ── Init ── */

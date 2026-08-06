@@ -32,6 +32,49 @@ export const QWEN_CHATS_URL = `${QWEN_API_BASE}/api/v2/chats/`;
 export const QWEN_MODELS_URL = `${QWEN_API_BASE}/api/models`;
 export const QWEN_BX_V = '2.5.36';
 
+/**
+ * Hard wall: Qwen rejects any chat/completions JSON body over ~128,000 bytes
+ * with FAIL_SYS_USER_VALIDATE (bot detection). Measured empirically on
+ * qwen3.7-plus via boundary sweeps:
+ *   - no tools: 126,310 chars (≈127,995 B) passed, 126,315 chars rejected
+ *   - 1 tool (local_mcp): 125,400 passed, 125,500 rejected
+ * In both cases the total serialized body at rejection was ~128,000 bytes.
+ * The wall is on TOTAL body bytes, not content length — tool schemas in
+ * feature_config.local_mcp consume part of the budget.
+ */
+export const QWEN_PAYLOAD_BYTE_WALL = 128_000;
+
+/**
+ * Safety margin kept below the wall. Older history is pushed into context.txt
+ * once inline content + envelope overhead would exceed (wall − margin).
+ */
+export const QWEN_INLINE_MARGIN_BYTES = 10_000;
+
+/**
+ * Compute how many bytes of inline user-message content fit before the payload
+ * hits the Qwen wall. Measures the actual serialized envelope (message fields,
+ * feature_config incl. local_mcp tool schemas) with content emptied, subtracts
+ * it from the wall, then applies the safety margin.
+ */
+export function computeMaxInlineBytes(message: QwenMessage, model: string): number {
+  const encoder = new TextEncoder();
+  const timestamp = Math.floor(Date.now() / 1000);
+  const envelope = JSON.stringify({
+    stream: true,
+    version: '2.1',
+    incremental_output: true,
+    chat_id: null,
+    chat_mode: 'normal',
+    model: model.replace('-no-thinking', ''),
+    parent_id: null,
+    messages: [{ ...message, content: '' }],
+    timestamp: timestamp + 1,
+  });
+  const overhead = encoder.encode(envelope).length;
+  // Floor at 10k so pathological tool sets can never zero out the budget.
+  return Math.max(10_000, QWEN_PAYLOAD_BYTE_WALL - overhead - QWEN_INLINE_MARGIN_BYTES);
+}
+
 export class RetryableQwenStreamError extends Error {
   readonly retryAfterMs: number;
   constructor(message: string, retryAfterMs: number) {

@@ -9,6 +9,7 @@ export const monitorHtml = `<!DOCTYPE html>
   <link rel="stylesheet" href="/dashboard/static/shared.css">
   <link rel="stylesheet" href="/dashboard/static/overview.css">
   <link rel="stylesheet" href="/dashboard/static/monitor.css">
+  <link rel="stylesheet" href="/dashboard/static/usage.css">
 
 </head>
 <body>
@@ -19,7 +20,7 @@ export const monitorHtml = `<!DOCTYPE html>
     <div class="page-header">
       <h1>
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-        Monitor
+        Monitor &amp; Usage
       </h1>
       <div class="page-header-right">
         <span class="badge badge-accent" id="entryCountBadge">— entries</span>
@@ -32,50 +33,61 @@ export const monitorHtml = `<!DOCTYPE html>
       <div class="kpi-card"><span class="kpi-label">Success</span><span class="kpi-value" id="kpiSuccess">—</span><span class="kpi-sub" id="kpiSuccessSub"></span></div>
       <div class="kpi-card"><span class="kpi-label">Errors</span><span class="kpi-value" id="kpiErrors">—</span><span class="kpi-sub" id="kpiErrorsSub"></span></div>
       <div class="kpi-card"><span class="kpi-label">Avg Latency</span><span class="kpi-value" id="kpiAvgLat">—</span><span class="kpi-sub" id="kpiAvgLatSub"></span></div>
-      <div class="kpi-card"><span class="kpi-label">P95 Latency</span><span class="kpi-value" id="kpiP95Lat">—</span><span class="kpi-sub" id="kpiP95LatSub"></span></div>
-      <div class="kpi-card"><span class="kpi-label">Median</span><span class="kpi-value" id="kpiMedianLat">—</span><span class="kpi-sub" id="kpiMedianLatSub"></span></div>
+      <div class="kpi-card"><span class="kpi-label">Today</span><span class="kpi-value" id="kpiToday">—</span><span class="kpi-sub" id="kpiTodaySub"></span></div>
+      <div class="kpi-card"><span class="kpi-label">Last 7 Days</span><span class="kpi-value" id="kpiWeek">—</span><span class="kpi-sub" id="kpiWeekSub"></span></div>
+      <div class="kpi-card"><span class="kpi-label">Rate-Limit Walls</span><span class="kpi-value" id="kpiWalls">—</span><span class="kpi-sub" id="kpiWallsSub"></span></div>
     </div>
 
-    <!-- Mode Comparison -->
+    <!-- Usage: per-account breakdown -->
     <div class="panel">
-      <div class="panel-header open" onclick="togglePanel(this)"><span class="panel-title">Mode Comparison</span><span class="panel-chevron">▼</span></div>
+      <div class="panel-header open" onclick="togglePanel(this)"><span class="panel-title">Per-Account Usage</span><span class="panel-chevron">▼</span></div>
       <div class="panel-body open">
         <div class="panel-content">
-          <div class="mode-comparison" id="modeComparison">
-            <div class="mode-card">
-              <h3><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg> Streaming</h3>
-              <div class="mode-stats">
-                <div class="mode-stat"><div class="mode-stat-value" id="modeStrReqs">—</div><div class="mode-stat-label">Requests</div></div>
-                <div class="mode-stat"><div class="mode-stat-value" id="modeStrErrors">—</div><div class="mode-stat-label">Errors</div></div>
-                <div class="mode-stat"><div class="mode-stat-value" id="modeStrLat">—</div><div class="mode-stat-label">Avg Latency</div></div>
-              </div>
-              <div class="mode-bar-row">
-                <span class="mode-bar-label">Success</span>
-                <div class="mode-bar-track"><div class="mode-bar-fill success" id="modeStrBar" style="width:0%"></div></div>
-                <span class="mode-bar-num" id="modeStrPct">0%</span>
-              </div>
-            </div>
-            <div class="mode-card">
-              <h3><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/></svg> Non-Streaming</h3>
-              <div class="mode-stats">
-                <div class="mode-stat"><div class="mode-stat-value" id="modeNsReqs">—</div><div class="mode-stat-label">Requests</div></div>
-                <div class="mode-stat"><div class="mode-stat-value" id="modeNsErrors">—</div><div class="mode-stat-label">Errors</div></div>
-                <div class="mode-stat"><div class="mode-stat-value" id="modeNsLat">—</div><div class="mode-stat-label">Avg Latency</div></div>
-              </div>
-              <div class="mode-bar-row">
-                <span class="mode-bar-label">Success</span>
-                <div class="mode-bar-track"><div class="mode-bar-fill success" id="modeNsBar" style="width:0%"></div></div>
-                <span class="mode-bar-num" id="modeNsPct">0%</span>
-              </div>
-            </div>
+          <div class="tbl-wrap">
+            <table id="usageTable">
+              <thead>
+                <tr>
+                  <th>Account</th>
+                  <th class="num">Today</th>
+                  <th class="num">Yesterday</th>
+                  <th class="num">7 Days</th>
+                  <th>Per-Model</th>
+                </tr>
+              </thead>
+              <tbody id="usageBody"></tbody>
+            </table>
+          </div>
+          <div class="empty-state" id="usageEmpty" style="display:none">No usage recorded yet — send a few requests and this fills up.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Usage: model totals -->
+    <div class="panel">
+      <div class="panel-header open" onclick="togglePanel(this)"><span class="panel-title">Model Totals (7 days)</span><span class="panel-chevron">▼</span></div>
+      <div class="panel-body open">
+        <div class="panel-content">
+          <div class="tbl-wrap">
+            <table id="modelTable">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th class="num">Requests</th>
+                  <th class="num">Wall Hits</th>
+                  <th>Last Wait</th>
+                  <th class="num">Est. Daily Budget</th>
+                </tr>
+              </thead>
+              <tbody id="modelBody"></tbody>
+            </table>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Per-Account Monitoring Table -->
+    <!-- Health: per-account metrics -->
     <div class="panel">
-      <div class="panel-header open" onclick="togglePanel(this)"><span class="panel-title">Per-Account Metrics</span><span class="panel-chevron">▼</span></div>
+      <div class="panel-header open" onclick="togglePanel(this)"><span class="panel-title">Account Health</span><span class="panel-chevron">▼</span></div>
       <div class="panel-body open">
         <div class="panel-content">
           <div class="monitor-info-row">
@@ -126,6 +138,7 @@ export const monitorHtml = `<!DOCTYPE html>
 </div>
 
   <script src="/dashboard/static/shared.js"></script>
+  <script src="/dashboard/static/usage.js"></script>
   <script src="/dashboard/static/monitor.js"></script>
 </body>
 </html>`;

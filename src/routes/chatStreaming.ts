@@ -81,7 +81,11 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       const loopResult = await runStreamLoop(c, reader, streamState, streamCtx, ampState, bufferRef);
 
       if (loopResult.error) {
-        // Upstream went silent — silently terminate stream, log server-side only
+        // Upstream went silent — terminate stream, log server-side only.
+        // NOTE: with the streamLoop change, real aborts stash upstreamError
+        // and flow through handlePostStreamCompletion (which flushes partial
+        // content). This branch only handles a literal loopResult.error return,
+        // which is now never produced for aborts — kept for safety.
         logStore.log('debug', 'stream', `[Chat] Stream timeout for ${logId}: ${loopResult.error}`);
         logStore.addError(logId, loopResult.error);
         await streamWriter.write('data: [DONE]\n\n');

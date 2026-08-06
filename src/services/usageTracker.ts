@@ -142,6 +142,20 @@ export function getUsage(): Record<string, DayStats> {
   return store;
 }
 
+/** Total requests an account has made TODAY (any model). 0 if no record yet. */
+export function getTodayRequests(email: string): number {
+  const day = store[todayKey()];
+  if (!day) return 0;
+  const acct = day[email];
+  if (!acct) return 0;
+  let total = 0;
+  for (const [model, entry] of Object.entries(acct)) {
+    if (model === '_walls' || Array.isArray(entry)) continue;
+    total += entry.requests;
+  }
+  return total;
+}
+
 /** Compact summary: per account — today requests, yesterday, 7-day total,
  * per-model split + wall-hit snapshots (quota measurements). */
 export function getUsageSummary(): {

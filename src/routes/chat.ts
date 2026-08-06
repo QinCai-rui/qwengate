@@ -4,7 +4,7 @@ import { pickAccount, throttleAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
-import { RetryableQwenStreamError } from '../services/qwen.ts';
+import { computeMaxInlineBytes, RetryableQwenStreamError } from '../services/qwen.ts';
 import type { QwenFileAttachment } from '../services/qwenFileUpload.ts';
 import { uploadImageAsFile, uploadLargeTextAsFile } from '../services/qwenFileUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
@@ -123,35 +123,59 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
   } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
 
   // ── Inline content truncation ─────────────────────────────────
-  // Keep the most recent ~50k characters inline; push older history
-  // into context.txt so the model can reference it when needed.
-  const MAX_INLINE_CHARS = 50000;
+  // Keep as much of the recent history inline as fits under Qwen's ~128KB
+  // payload wall (measured empirically — see QWEN_PAYLOAD_BYTE_WALL); push
+  // older history into context.txt. The budget is computed from the ACTUAL
+  // envelope size, so tool schemas in feature_config.local_mcp are accounted
+  // for — a fixed char limit would blow past the wall on tool-heavy clients.
+  const encoder = new TextEncoder();
+  const MAX_INLINE_BYTES = computeMaxInlineBytes(processedMessages[0], body.model as string);
   let inlineContent = processedMessages[0].content as string;
   let chatHistoryContent = '';
 
-  if (typeof inlineContent === 'string' && inlineContent.length > MAX_INLINE_CHARS) {
+  // Build the system + tool-results blocks (what would go into context.txt).
+  // If the WHOLE payload (user message + system + tool results) fits inline,
+  // merge them into the message and skip the file upload entirely — the upload
+  // cycle (STS → OSS → parse → poll) costs 5-8s of latency per request.
+  let systemBlock = '';
+  let toolResultsBlock = '';
+  if (systemContent) systemBlock = `<system-instructions>\n${systemContent}\n</system-instructions>`;
+  if (toolResultsContent) toolResultsBlock = `<tool-results>\n${toolResultsContent}\n</tool-results>`;
+
+  if (typeof inlineContent === 'string' && encoder.encode(inlineContent).length > MAX_INLINE_BYTES) {
     // Split on message boundaries: \n\n followed by <user> or <assist>
     const parts = inlineContent.split(/\n\n(?=<user>|<assist>)/);
 
-    // Walk backwards — keep as many recent segments as fit within limit
-    let keptLen = 0;
+    // Walk backwards — keep as many recent segments as fit within limit (byte-based)
+    let keptBytes = 0;
     let splitIdx = parts.length;
     for (let i = parts.length - 1; i >= 0; i--) {
-      const addLen = parts[i].length + (keptLen > 0 ? 2 : 0);
-      if (keptLen + addLen <= MAX_INLINE_CHARS) {
-        keptLen += addLen;
+      const addBytes = encoder.encode(parts[i]).length + (keptBytes > 0 ? 2 : 0);
+      if (keptBytes + addBytes <= MAX_INLINE_BYTES) {
+        keptBytes += addBytes;
         splitIdx = i;
       } else {
         break;
       }
     }
 
-    // ponytail: simple character-based split at message boundaries.
-    // If models need more precise token-aware splitting, add later.
     if (splitIdx > 0) {
       chatHistoryContent = parts.slice(0, splitIdx).join('\n\n');
       inlineContent = parts.slice(splitIdx).join('\n\n');
       processedMessages[0] = { ...processedMessages[0], content: inlineContent };
+    }
+  }
+
+  // If nothing overflowed AND system/tool content exists, try to inline it.
+  // Only skip the upload when the merged payload still fits under the wall.
+  if (!chatHistoryContent && (systemBlock || toolResultsBlock)) {
+    const mergedContent = [systemBlock, toolResultsBlock, inlineContent].filter(Boolean).join('\n\n');
+    if (encoder.encode(mergedContent).length <= MAX_INLINE_BYTES) {
+      processedMessages[0] = { ...processedMessages[0], content: mergedContent };
+      inlineContent = mergedContent;
+      // Clear so the upload branch below is skipped (no file needed)
+      systemBlock = '';
+      toolResultsBlock = '';
     }
   }
 
@@ -194,10 +218,11 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
 
     // Upload a single context file: system instructions + tool results + older chat history
     // Merging cuts upload overhead in half (one STS token, one OSS upload, one parse poll)
-    if (accountEmail && (systemContent || toolResultsContent || chatHistoryContent)) {
+    // Skipped entirely when the payload fit inline (systemBlock/toolResultsBlock cleared).
+    if (accountEmail && (systemBlock || toolResultsBlock || chatHistoryContent)) {
       const parts: string[] = [];
-      if (systemContent) parts.push(`<system-instructions>\n${systemContent}\n</system-instructions>`);
-      if (toolResultsContent) parts.push(`<tool-results>\n${toolResultsContent}\n</tool-results>`);
+      if (systemBlock) parts.push(systemBlock);
+      if (toolResultsBlock) parts.push(toolResultsBlock);
       if (chatHistoryContent) parts.push(`<chat_history>\n${chatHistoryContent}\n</chat_history>`);
       const combinedContent = parts.join('\n\n');
       try {

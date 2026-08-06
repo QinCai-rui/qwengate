@@ -56,7 +56,12 @@ export async function runStreamLoop(
     } catch (timeoutErr) {
       if (idleTimer) clearTimeout(idleTimer);
       if (!idleTimedOut) await reader.cancel();
-      return { buffer: bufferRef.text, nextParentId, error: (timeoutErr as Error).message };
+      // Stash the error so the caller (handleStreamingRequest → post-completion)
+      // flushes partial content FIRST, then surfaces it — a mid-stream abort
+      // (content filter kill, network drop) must not lose the answer already
+      // generated. Don't return `error` here; that path drops partial content.
+      streamState.upstreamError = (timeoutErr as Error).message;
+      return { buffer: bufferRef.text, nextParentId };
     }
     if (idleTimer) clearTimeout(idleTimer);
     if (readResult.done) break;

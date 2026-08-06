@@ -47,6 +47,9 @@ interface StreamProcessorState {
   completionTokens: number;
   promptTokens: number;
   nextParentId: string | null;
+  /** Set when upstream Qwen aborts with an error envelope (content filter,
+   *  validation, etc.) — processContentChunks preserves partial content. */
+  upstreamError?: string;
 }
 
 function buildPromptString(messages: Message[]): string {
@@ -162,11 +165,23 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
   if (chunk.error) {
     const errMsg = typeof chunk.error === 'string' ? chunk.error : chunk.error.message || JSON.stringify(chunk.error);
     logStore.addError(ctx.logId, `Qwen upstream SSE error: ${errMsg}`);
+    state.upstreamError = `Qwen upstream error: ${errMsg}`;
+    return;
+  }
+  // Qwen content-filter / validation envelope: {"success": false, "data": {...}}.
+  // Stash the error so processContentChunks preserves partial content instead
+  // of dropping the answer the model already produced before the filter fired.
+  if (chunk.success === false) {
+    const code = chunk.data?.code || chunk.code || 'UpstreamError';
+    const details = chunk.data?.details || chunk.message || JSON.stringify(chunk).substring(0, 200);
+    logStore.addError(ctx.logId, `Qwen upstream error: ${code}: ${details}`);
+    state.upstreamError = `Qwen upstream error: ${code}: ${details}`;
     return;
   }
   const deltaStatus = chunk.choices?.[0]?.delta?.status;
   if (deltaStatus === 'error') {
     logStore.addError(ctx.logId, 'Qwen stream delta returned error status');
+    state.upstreamError = 'Qwen stream delta returned error status';
     return;
   }
 
@@ -352,11 +367,21 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
 async function processContentChunks(state: StreamProcessorState, ctx: NonStreamingContext): Promise<Response> {
   const { c, logId } = ctx;
 
-  const upstreamError = parseQwenErrorPayload(state.buffer);
+  const upstreamError = parseQwenErrorPayload(state.buffer) || (state.upstreamError ? { message: state.upstreamError, status: 502 as const } : null);
   if (upstreamError) {
-    logStore.finalizeRequest(logId);
     const cleanMessage = cleanTextOfXmlArtifacts(upstreamError.message).cleanedText || upstreamError.message;
-    return c.json({ error: { message: cleanMessage } }, upstreamError.status);
+
+    // Preserve partial content: if the model already produced an answer before
+    // the upstream error (e.g. Qwen's content filter deleting the message
+    // mid-answer), return the partial content with the error appended — mirroring
+    // the streaming path. Only return a bare error when there's nothing to show.
+    const partialContent = cleanTextOfXmlArtifacts(state.lastFullContent).cleanedText;
+    if (partialContent) {
+      state.lastFullContent = `${partialContent}\n\n[Error] ${cleanMessage}`;
+    } else {
+      logStore.finalizeRequest(logId);
+      return c.json({ error: { message: cleanMessage } }, upstreamError.status);
+    }
   }
 
   flushAndDetectLoops(state, logId);

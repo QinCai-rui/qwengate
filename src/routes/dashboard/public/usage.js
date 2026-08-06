@@ -36,8 +36,6 @@ function renderKpis(accounts) {
   setText('kpiTodaySub', totalToday === 1 ? '1 request today' : totalToday + ' requests today');
   setText('kpiWeek', fmtNum(totalWeek));
   setText('kpiWeekSub', 'across all accounts');
-  setText('kpiAccounts', fmtNum(Object.keys(accounts || {}).length));
-  setText('kpiAccountsSub', 'accounts with activity');
   setText('kpiWalls', fmtNum(walls));
   var wallModels = Object.keys(walledModels);
   setText('kpiWallsSub', wallModels.length ? 'models: ' + wallModels.join(', ') : 'no walls hit');
@@ -45,12 +43,14 @@ function renderKpis(accounts) {
 
 function renderAccountRows(accounts) {
   var emails = Object.keys(accounts || {});
+  var usageBody = document.getElementById('usageBody');
+  var emptyEl = document.getElementById('usageEmpty');
   if (emails.length === 0) {
-    document.getElementById('emptyState').style.display = 'block';
-    document.getElementById('usageBody').innerHTML = '';
+    if (emptyEl) emptyEl.style.display = 'block';
+    if (usageBody) usageBody.innerHTML = '';
     return;
   }
-  document.getElementById('emptyState').style.display = 'none';
+  if (emptyEl) emptyEl.style.display = 'none';
   var rows = emails
     .sort(function (a, b) {
       return (accounts[b].today || 0) - (accounts[a].today || 0);
@@ -126,7 +126,7 @@ function renderAccountRows(accounts) {
       );
     })
     .join('');
-  document.getElementById('usageBody').innerHTML = rows;
+  if (usageBody) usageBody.innerHTML = rows;
 }
 
 function renderModelRows(accounts) {
@@ -176,7 +176,8 @@ function renderModelRows(accounts) {
       );
     })
     .join('');
-  document.getElementById('modelBody').innerHTML = rows || '<tr><td colspan="4" class="empty-state">No data yet.</td></tr>';
+  var modelBody = document.getElementById('modelBody');
+  if (modelBody) modelBody.innerHTML = rows || '<tr><td colspan="4" class="empty-state">No data yet.</td></tr>';
 }
 
 async function loadUsage() {
