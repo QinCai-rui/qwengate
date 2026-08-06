@@ -1,5 +1,7 @@
 var settingsData = {};
 var originalData = {};
+var apiKeySet = false;
+var dashPassSet = false;
 
 var SETTINGS_SECTIONS = [
   {
@@ -8,6 +10,8 @@ var SETTINGS_SECTIONS = [
     fields: [
       { key: 'PORT', label: 'PORT', type: 'number', restartRequired: true },
       { key: 'API_KEY', label: 'API_KEY', type: 'password' },
+      { key: 'DASHBOARD_USER', label: 'DASHBOARD_USER', type: 'text' },
+      { key: 'DASHBOARD_PASSWORD', label: 'DASHBOARD_PASSWORD', type: 'password' },
     ],
   },
   {
@@ -223,6 +227,26 @@ function renderSettingsField(field, val) {
   }
   var inputType = field.type || 'text';
   var stepAttr = field.step ? ' step="' + field.step + '"' : '';
+  var valueAttr = escHtml(val);
+  var placeholderAttr = '';
+  var helpHtml = '';
+  if (field.key === 'API_KEY' || field.key === 'DASHBOARD_PASSWORD') {
+    // Never prefill secrets. Blank field means "keep current"; a typed
+    // value means "set new". Hint only when one is already configured.
+    valueAttr = '';
+    var isSet = field.key === 'API_KEY' ? apiKeySet : dashPassSet;
+    if (isSet) {
+      // Just dots — a longer placeholder inside a password field renders as
+      // "masked value + text" which looks like the secret is prefilled.
+      placeholderAttr = ' placeholder="••••••••"';
+      helpHtml =
+        '<div class="settings-field-hint" style="font-size:0.75rem;color:var(--text-secondary);margin-top:4px">' +
+        (field.key === 'API_KEY'
+          ? 'API key is set. Leave blank to keep it, type a new value to replace it.'
+          : 'Password is set. Leave blank to keep it, type a new value to change it.') +
+        '</div>';
+    }
+  }
   return (
     '<div class="settings-field">' +
     '<label for="cfg-' +
@@ -238,10 +262,13 @@ function renderSettingsField(field, val) {
     '" data-key="' +
     field.key +
     '" value="' +
-    escHtml(val) +
+    valueAttr +
     '"' +
+    placeholderAttr +
     stepAttr +
-    ' oninput="onFieldChange(this)"></div>'
+    ' oninput="onFieldChange(this)">' +
+    helpHtml +
+    '</div>'
   );
 }
 
@@ -284,6 +311,8 @@ async function loadSettings() {
     var res = await fetch('/api/config');
     if (res.ok) {
       var data = await res.json();
+      apiKeySet = !!data.apiKeySet;
+      dashPassSet = !!data.dashboardPasswordSet;
       if (data && data.config) {
         settingsData = {};
         originalData = {};
@@ -320,20 +349,43 @@ async function saveSettings() {
   var msgEl = document.getElementById('settingsMessage');
   try {
     var headers = { 'Content-Type': 'application/json' };
+    // Never send secrets back unless the user typed a NEW value.
+    // Blank field → omit → server keeps the current value.
+    var body = {};
+    for (var k in settingsData) {
+      if (k === 'API_KEY' || k === 'DASHBOARD_PASSWORD') continue;
+      body[k] = settingsData[k];
+    }
+    var apiKeyInput = document.getElementById('cfg-API_KEY');
+    if (apiKeyInput && apiKeyInput.value && apiKeyInput.value.trim() !== '') {
+      body['API_KEY'] = apiKeyInput.value.trim();
+    }
+    var dashPassInput = document.getElementById('cfg-DASHBOARD_PASSWORD');
+    if (dashPassInput && dashPassInput.value && dashPassInput.value.trim() !== '') {
+      body['DASHBOARD_PASSWORD'] = dashPassInput.value.trim();
+    }
     var res = await fetch('/api/config', {
       method: 'PUT',
       headers: headers,
-      body: JSON.stringify(settingsData),
+      body: JSON.stringify(body),
     });
     var result = await res.json();
     if (!res.ok) {
       msgEl.innerHTML = '<div class="settings-message error">' + escHtml(result.error || 'Save failed (' + res.status + ')') + '</div>';
     } else {
       if (result.config) {
+        apiKeySet = !!result.apiKeySet;
+        dashPassSet = !!result.dashboardPasswordSet;
         var keys = Object.keys(result.config);
         for (var i = 0; i < keys.length; i++) {
           settingsData[keys[i]] = result.config[keys[i]];
         }
+        // Clear secret inputs after a successful save — they never hold the
+        // actual secrets, so leaving stale text would re-send them.
+        var apiKeyInput2 = document.getElementById('cfg-API_KEY');
+        if (apiKeyInput2) apiKeyInput2.value = '';
+        var dashPassInput2 = document.getElementById('cfg-DASHBOARD_PASSWORD');
+        if (dashPassInput2) dashPassInput2.value = '';
         renderSettingsForm();
       }
       msgEl.innerHTML = '<div class="settings-message success">Settings saved successfully.</div>';
