@@ -285,6 +285,77 @@ export async function addAccount(email: string, password: string): Promise<{ log
     return { loginSucceeded: false, loginError: msg };
   }
 }
+/**
+ * Bulk import accounts (issue #46).
+ * Validates + dedupes a batch, then adds each account sequentially.
+ * Returns per-record results: success/failure + reason. Non-blocking for the
+ * caller — login flows run per account; failures don't abort the batch.
+ */
+export interface BulkImportResult {
+  email: string;
+  success: boolean;
+  reason?: string;
+}
+
+export async function bulkAddAccounts(
+  entries: Array<{ email: string; password: string }>,
+  addFn?: (email: string, password: string) => Promise<{ loginSucceeded: boolean; loginError?: string }>,
+): Promise<{ results: BulkImportResult[]; added: number; failed: number; skipped: number }> {
+  const adder = addFn ?? addAccount;
+  const results: BulkImportResult[] = [];
+  let added = 0;
+  let failed = 0;
+  let skipped = 0;
+
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const email = (entry.email || '').toLowerCase().trim();
+    const password = entry.password || '';
+
+    // Validation
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      results.push({ email: email || '(empty)', success: false, reason: 'invalid email format' });
+      failed++;
+      continue;
+    }
+    if (!password) {
+      results.push({ email, success: false, reason: 'missing password' });
+      failed++;
+      continue;
+    }
+    // Dedup within batch
+    if (seen.has(email)) {
+      results.push({ email, success: false, reason: 'duplicate in batch' });
+      skipped++;
+      continue;
+    }
+    seen.add(email);
+    // Dedup against existing accounts
+    const existing = accounts.find((a) => a.email.toLowerCase().trim() === email);
+    if (existing) {
+      results.push({ email, success: false, reason: 'already exists' });
+      skipped++;
+      continue;
+    }
+
+    try {
+      const outcome = await adder(email, password);
+      if (outcome.loginSucceeded) {
+        results.push({ email, success: true });
+        added++;
+      } else {
+        results.push({ email, success: false, reason: outcome.loginError || 'login failed' });
+        failed++;
+      }
+    } catch (err: any) {
+      results.push({ email, success: false, reason: err.message || 'error' });
+      failed++;
+    }
+  }
+
+  return { results, added, failed, skipped };
+}
+
 export async function removeAccount(email: string): Promise<void> {
   const normalizedEmail = email.toLowerCase().trim();
   const index = accounts.findIndex((a) => a.email.toLowerCase().trim() === normalizedEmail);

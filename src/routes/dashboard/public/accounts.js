@@ -180,6 +180,84 @@ function handleAdd(email, password) {
   })();
 }
 
+/* ── Bulk Import (issue #46) ── */
+function handleBulkImport() {
+  var input = document.getElementById('bulkInput');
+  var btn = document.getElementById('bulkImportBtn');
+  var status = document.getElementById('bulkStatus');
+  var resultsEl = document.getElementById('bulkResults');
+  var text = (input && input.value ? input.value : '').trim();
+  if (!text) {
+    status.textContent = 'Paste accounts first (email|password per line).';
+    status.className = 'bulk-status error';
+    return;
+  }
+  var lines = text.split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean);
+  if (lines.length === 0) {
+    status.textContent = 'No valid lines found.';
+    status.className = 'bulk-status error';
+    return;
+  }
+  if (lines.length > 500) {
+    status.textContent = 'Batch too large (max 500).';
+    status.className = 'bulk-status error';
+    return;
+  }
+  var entries = lines.map(function (line) {
+    var sep = line.indexOf('|');
+    if (sep < 0) return { email: line, password: '' };
+    return { email: line.slice(0, sep).trim(), password: line.slice(sep + 1).trim() };
+  });
+  btn.disabled = true;
+  btn.textContent = 'Importing...';
+  status.textContent = 'Importing ' + entries.length + ' accounts — this runs logins per account, please wait...';
+  status.className = 'bulk-status';
+  resultsEl.style.display = 'none';
+  resultsEl.innerHTML = '';
+  (async function () {
+    try {
+      var res = await fetch('/api/accounts/import', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+        body: JSON.stringify({ format: 'pipe', data: lines.join('\n') }),
+      });
+      var result;
+      try {
+        result = await res.json();
+      } catch {
+        result = null;
+      }
+      if (!res.ok) {
+        throw new Error(result && result.error ? result.error : 'Import failed (' + res.status + ')');
+      }
+      status.textContent = 'Done — ' + result.added + ' added, ' + result.failed + ' failed, ' + result.skipped + ' skipped.';
+      status.className = 'bulk-status ' + (result.failed === 0 ? 'ok' : 'warn');
+      renderBulkResults(result.results || []);
+      loadAccounts();
+    } catch (e) {
+      status.textContent = e.message;
+      status.className = 'bulk-status error';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Import Accounts';
+    }
+  })();
+}
+
+function renderBulkResults(results) {
+  var el = document.getElementById('bulkResults');
+  if (!el) return;
+  var rows = results
+    .map(function (r) {
+      var icon = r.success ? '✅' : '❌';
+      var reason = r.reason ? ' <span class="bulk-reason">' + escHtml(r.reason) + '</span>' : '';
+      return '<div class="bulk-result-row ' + (r.success ? 'ok' : 'fail') + '">' + icon + ' ' + escHtml(r.email) + reason + '</div>';
+    })
+    .join('');
+  el.innerHTML = rows || '<div class="bulk-result-row">No results.</div>';
+  el.style.display = 'block';
+}
+
 /* ── Remove Account ── */
 function handleRemove(email) {
   document.getElementById('confirmEmail').textContent = email;
@@ -684,6 +762,18 @@ function init() {
     handleAdd(email, password);
     this.reset();
   });
+
+  /* Bulk import */
+  var bulkBtn = document.getElementById('bulkImportBtn');
+  if (bulkBtn) bulkBtn.addEventListener('click', handleBulkImport);
+  var bulkClear = document.getElementById('bulkClearBtn');
+  if (bulkClear) {
+    bulkClear.addEventListener('click', function () {
+      document.getElementById('bulkInput').value = '';
+      document.getElementById('bulkResults').style.display = 'none';
+      document.getElementById('bulkStatus').textContent = '';
+    });
+  }
 
   /* Table button delegation */
   document.getElementById('acctTable').addEventListener('click', function (e) {

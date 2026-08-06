@@ -574,3 +574,73 @@
     min-height: 280px;
   }
 }
+
+/* ── Bulk Import (issue #46) ── */
+.account-textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.account-textarea:focus {
+  border-color: var(--accent);
+}
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.account-btn.ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: var(--border);
+}
+.account-btn.ghost:hover {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+  background: var(--bg-elevated);
+}
+.bulk-status {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+}
+.bulk-status.ok { color: var(--success); }
+.bulk-status.warn { color: var(--warning); }
+.bulk-status.error { color: var(--danger); }
+.bulk-results {
+  margin-top: 12px;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  padding: 8px;
+}
+.bulk-result-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 0.78rem;
+  font-family: var(--mono);
+  color: var(--text-primary);
+  border-radius: 4px;
+}
+.bulk-result-row.ok { color: var(--success); }
+.bulk-result-row.fail { color: var(--danger); }
+.bulk-reason {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}

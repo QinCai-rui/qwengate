@@ -35,6 +35,23 @@ ${sidebarHtml('accounts')}
       </div>
     </div>
 
+    <!-- Bulk Import Panel (issue #46) -->
+    <div class="panel">
+      <div class="panel-header open">
+        <span class="panel-title">Bulk Import</span>
+        <span style="font-size:0.7rem;color:var(--text-secondary);font-weight:500">one per line — email|password</span>
+      </div>
+      <div class="panel-body open">
+        <textarea class="account-textarea" id="bulkInput" rows="6" placeholder="user1@example.com|password1&#10;user2@example.com|password2" spellcheck="false"></textarea>
+        <div class="bulk-actions">
+          <button class="account-btn" id="bulkImportBtn">Import Accounts</button>
+          <button class="account-btn ghost" id="bulkClearBtn">Clear</button>
+          <span class="bulk-status" id="bulkStatus"></span>
+        </div>
+        <div class="bulk-results" id="bulkResults" style="display:none"></div>
+      </div>
+    </div>
+
     <!-- Accounts Table -->
     <div class="panel">
       <div class="panel-header open">
