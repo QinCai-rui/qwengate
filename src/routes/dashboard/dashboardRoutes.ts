@@ -316,7 +316,20 @@ export function registerDashboardRoutes(app: Hono): void {
     if (hasValidDashboardSession(c)) {
       return c.redirect('/dashboard');
     }
-    return c.html(loginHtml);
+    const darkMode = config.get('DARK_MODE') === 'true';
+    const host = config.get('HOST') || '';
+    const port = config.get('PORT') || '26405';
+    let output = loginHtml
+      .replace('__HOST__', JSON.stringify(host))
+      .replace('__PORT__', JSON.stringify(port));
+    if (darkMode) {
+      output = output.replace('<html lang="en">', '<html lang="en" class="dark-mode">');
+    }
+    c.header(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:;",
+    );
+    return c.html(output);
   });
   app.post('/dashboard/login', async (c) => {
     let body: any = {};

@@ -1,3 +1,9 @@
+// Login page. Served by the /dashboard/login route, which injects:
+//   __DARK_MODE__   'true' | 'false'   → toggles html.dark-mode class
+//   __HOST__        configured HOST (or '')
+//   __PORT__        configured PORT (or '26405')
+// The page links the shared clay theme (shared.css) so light/dark mode
+// matches the rest of the dashboard exactly.
 export const loginHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -5,21 +11,13 @@ export const loginHtml = `<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>QwenGate — Login</title>
   <link rel="icon" type="image/svg+xml" href="/dashboard/static/logo.svg">
+  <link rel="stylesheet" href="/dashboard/static/shared.css">
   <style>
-    :root {
-      --bg: #0d1117;
-      --panel: #161b22;
-      --border: #30363d;
-      --text: #e6edf3;
-      --text-secondary: #8b949e;
-      --accent: #2f81f7;
-      --danger: #f85149;
-    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--bg);
-      color: var(--text);
+      font-family: var(--font);
+      background: var(--bg-primary);
+      color: var(--text-primary);
       min-height: 100vh;
       display: flex;
       align-items: center;
@@ -27,13 +25,13 @@ export const loginHtml = `<!DOCTYPE html>
       padding: 24px;
     }
     .login-card {
-      background: var(--panel);
+      background: var(--bg-card);
       border: 1px solid var(--border);
-      border-radius: 12px;
+      border-radius: var(--radius);
       padding: 40px 36px;
       width: 100%;
       max-width: 400px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      box-shadow: var(--clay-shadow);
     }
     .login-logo {
       display: flex;
@@ -42,7 +40,7 @@ export const loginHtml = `<!DOCTYPE html>
       margin-bottom: 8px;
     }
     .login-logo svg { color: var(--accent); }
-    .login-title { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; }
+    .login-title { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; font-family: var(--display); }
     .login-desc { color: var(--text-secondary); font-size: 0.875rem; margin-bottom: 28px; line-height: 1.5; }
     .login-field { margin-bottom: 20px; }
     .login-field label {
@@ -55,21 +53,22 @@ export const loginHtml = `<!DOCTYPE html>
     .login-field input {
       width: 100%;
       padding: 10px 12px;
-      background: var(--bg);
+      background: var(--bg-primary);
       border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--text);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
       font-size: 0.9375rem;
       outline: none;
-      transition: border-color 0.15s;
+      transition: border-color 0.15s, box-shadow 0.15s;
     }
-    .login-field input:focus { border-color: var(--accent); }
+    .login-field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .login-field input::placeholder { color: var(--text-secondary); opacity: 0.7; }
     .login-error {
       display: none;
-      background: rgba(248,81,73,0.12);
-      border: 1px solid rgba(248,81,73,0.4);
+      background: var(--danger-soft);
+      border: 1px solid var(--danger);
       color: var(--danger);
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       padding: 10px 12px;
       font-size: 0.8125rem;
       margin-bottom: 16px;
@@ -81,19 +80,27 @@ export const loginHtml = `<!DOCTYPE html>
       background: var(--accent);
       color: #fff;
       border: none;
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       font-size: 0.9375rem;
       font-weight: 600;
+      font-family: var(--font);
       cursor: pointer;
-      transition: background 0.15s;
+      transition: background 0.15s, box-shadow 0.15s;
     }
-    .login-btn:hover { background: #1f6feb; }
+    .login-btn:hover { background: var(--accent); filter: brightness(1.08); box-shadow: var(--clay-shadow-sm); }
     .login-btn:disabled { opacity: 0.6; cursor: not-allowed; }
     .login-hint {
       margin-top: 18px;
       text-align: center;
       color: var(--text-secondary);
       font-size: 0.75rem;
+      line-height: 1.5;
+    }
+    .login-hint code {
+      font-family: var(--mono);
+      background: var(--bg-elevated);
+      padding: 1px 6px;
+      border-radius: 4px;
     }
   </style>
 </head>
@@ -116,9 +123,16 @@ export const loginHtml = `<!DOCTYPE html>
       </div>
       <button type="submit" class="login-btn" id="loginBtn">Unlock Dashboard</button>
     </form>
-    <p class="login-hint">Default credentials: admin / 123456 — change them in config.json.</p>
+    <p class="login-hint">Default credentials: <code>admin</code> / <code>123456</code> — change them in config.json.</p>
+    <p class="login-hint" id="serverInfo"></p>
   </div>
   <script>
+    // Host/port injected from server config so the login page (served before
+    // auth) always knows where it lives.
+    var APP_HOST = __HOST__ || window.location.hostname;
+    var APP_PORT = __PORT__ || window.location.port || '26405';
+    document.getElementById('serverInfo').textContent = 'Server: ' + APP_HOST + ':' + APP_PORT;
+
     document.getElementById('loginForm').addEventListener('submit', async function (e) {
       e.preventDefault();
       var btn = document.getElementById('loginBtn');
