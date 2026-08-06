@@ -93,16 +93,9 @@ export interface LogEntry {
 const MAX_CHUNKS_PER_ENTRY = 100;
 const MAX_FIELD_LENGTH = 10240;
 export class RequestLogStore extends SystemLogger {
-  private _maxEntries: number | undefined;
   private get maxEntries(): number {
-    if (this._maxEntries === undefined) {
-      try {
-        this._maxEntries = config.getInt('MAX_LOGS', 50);
-      } catch {
-        this._maxEntries = 50;
-      }
-    }
-    return this._maxEntries;
+    // Read live so MAX_LOGS changes apply at runtime without a restart.
+    return config.getInt('MAX_LOGS', 50);
   }
   private entries: LogEntry[] = [];
   private entryMap: Map<string, LogEntry> = new Map();

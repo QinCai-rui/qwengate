@@ -143,6 +143,22 @@ body {
 }
 .logout-btn svg { flex-shrink: 0; }
 
+/* Restart button — accent-colored, distinct from Lock */
+.restart-btn {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.restart-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.restart-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* Dark Mode Toggle */
 .dm-row {
   display: flex;

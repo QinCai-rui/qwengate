@@ -157,6 +157,49 @@ async function logoutDashboard() {
   window.location.href = '/dashboard/login';
 }
 
+/* ── Restart server ── */
+function restartServer() {
+  if (!confirm('Restart the QwenGate server? This takes a few seconds and will reconnect in-flight requests.')) {
+    return;
+  }
+  var btn = document.querySelector('.restart-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.querySelector('span').textContent = 'Restarting…';
+  }
+  fetch('/api/restart', { method: 'POST', headers: authHeaders() })
+    .then(function (res) {
+      if (!res.ok) throw new Error('Restart request failed (' + res.status + ')');
+      return res.json();
+    })
+    .then(function () {
+      // Poll /health until the new process answers, then reload.
+      var attempts = 0;
+      var timer = setInterval(function () {
+        attempts++;
+        fetch('/health', { cache: 'no-store' })
+          .then(function (r) { return r.ok; })
+          .catch(function () { return false; })
+          .then(function (up) {
+            if (up) {
+              clearInterval(timer);
+              window.location.reload();
+            } else if (attempts > 30) {
+              clearInterval(timer);
+              alert('Server took too long to come back. Check the terminal/logs.');
+            }
+          });
+      }, 1000);
+    })
+    .catch(function (err) {
+      alert(err.message);
+      if (btn) {
+        btn.disabled = false;
+        btn.querySelector('span').textContent = 'Restart';
+      }
+    });
+}
+
 /* Apply dark mode on load */
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', function () {

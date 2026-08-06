@@ -17,7 +17,7 @@ import { config, updateClaudeCodeSettings } from './services/configService.ts';
 import { logStore } from './services/logStore.ts';
 import { configureAccount, fetchQwenModels } from './services/qwen.ts';
 import { getUsage, getUsageSummary, loadUsageStore } from './services/usageTracker.ts';
-import { safeCompare } from './utils/auth.ts';
+import { checkApiKeyAuth, hasValidDashboardSession, safeCompare } from './utils/auth.ts';
 import { isBun } from './utils/env.ts';
 import { projectPath } from './utils/paths.ts';
 
@@ -125,6 +125,36 @@ app.get('/health', (c) => {
       throttled: throttledCount,
     },
   });
+});
+
+// Restart endpoint — auth-gated (Bearer API key OR valid dashboard session).
+// Responds 200 FIRST, then spawns a detached fresh instance of itself with
+// the same env/config, and exits. The new process takes over the port.
+app.post('/api/restart', async (c) => {
+  const denied = checkApiKeyAuth(c);
+  if (denied && !hasValidDashboardSession(c)) return denied;
+  logStore.log('info', 'server', 'Restart requested — spawning replacement and exiting');
+  // Respond immediately so the client sees success even as we shut down.
+  const body = { ok: true, message: 'Restarting…' };
+  setTimeout(async () => {
+    try {
+      const { spawn } = await import('child_process');
+      const entry = import.meta.path;
+      const projectRoot = projectPath('.');
+      const child = spawn(process.execPath, [entry], {
+        cwd: projectRoot,
+        detached: true,
+        stdio: 'ignore',
+        env: process.env,
+      });
+      child.unref();
+      logStore.log('info', 'server', `Replacement spawned (pid ${child.pid})`);
+    } catch (err: any) {
+      logStore.log('error', 'server', `Failed to spawn replacement: ${err.message}`);
+    }
+    await gracefulShutdown('RESTART');
+  }, 150);
+  return c.json(body);
 });
 // Ping — lightweight static response.
 // Build a FRESH Response per request: a Response body is a one-shot
