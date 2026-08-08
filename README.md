@@ -347,7 +347,7 @@ Uses Bun's built-in test runner. Covers content filtering, tool-call parsing, st
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=youssefvdel%2Fqwen-gate&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=youssefvdel%2Fqwengate&type=date&legend=top-left">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=youssefvdel/qwen-gate&type=date&theme=dark&legend=top-left" />
    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=youssefvdel/qwen-gate&type=date&legend=top-left" />
