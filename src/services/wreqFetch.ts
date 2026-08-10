@@ -18,7 +18,7 @@ let workerStartPromise: Promise<string> | null = null;
 let workerPort: number | null = null;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const WORKER_PATH = resolve(__dirname, '../worker/wreq-worker.mjs');
+const WORKER_PATH = resolve(__dirname, '../worker/wreq-worker.mts');
 
 async function ensureWorker(): Promise<string> {
   if (workerBaseUrl) return workerBaseUrl;

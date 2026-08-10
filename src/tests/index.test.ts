@@ -299,6 +299,7 @@ test('Chat completions with image uploads attaches files (t2t chat_type, vision 
     email: 'test@qwen-gate.dev',
     password: 'test',
     state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
+    providerStates: { qwen: { token: 'mock-token', expiresAt: Date.now() + 3600000 } },
     lastUsed: 0,
     throttledUntil: 0,
     refreshInFlight: null,
