@@ -14,7 +14,10 @@ function setText(id, val) {
   if (el) el.textContent = val;
 }
 function authHeaders() {
-  return window.API_KEY ? { Authorization: 'Bearer ' + window.API_KEY } : {};
+  // Auth flows through the HttpOnly session cookie set at /dashboard/login
+  // (issue #45). No Bearer header needed — and the raw key is never exposed
+  // to page JS anymore. Kept as a function so existing callers keep working.
+  return {};
 }
 function fmtTime(ts) {
   if (!ts) return '—';
@@ -137,12 +140,72 @@ async function toggleDarkMode() {
   try {
     await fetch('/api/config', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + window.API_KEY },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ DARK_MODE: String(next) }),
     });
   } catch (e) {
     console.error('Failed to save dark mode preference:', e);
   }
+}
+
+async function logoutDashboard() {
+  try {
+    await fetch('/dashboard/logout', { method: 'POST' });
+  } catch (e) {
+    // Ignore — redirect anyway
+  }
+  window.location.href = '/dashboard/login';
+}
+
+/* ── Restart server ── */
+function restartServer() {
+  if (
+    !confirm(
+      'Restart QwenGate? Accounts and sessions will re-initialize. The dashboard stays open (a full process restart only happens if PORT/HOST were changed).',
+    )
+  ) {
+    return;
+  }
+  var btn = document.querySelector('.restart-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.querySelector('span').textContent = 'Restarting…';
+  }
+  fetch('/api/restart', { method: 'POST', headers: authHeaders() })
+    .then(function (res) {
+      if (!res.ok) throw new Error('Restart request failed (' + res.status + ')');
+      return res.json();
+    })
+    .then(function () {
+      // Poll /health until the new process answers, then reload.
+      var attempts = 0;
+      var timer = setInterval(function () {
+        attempts++;
+        fetch('/health', { cache: 'no-store' })
+          .then(function (r) {
+            return r.ok;
+          })
+          .catch(function () {
+            return false;
+          })
+          .then(function (up) {
+            if (up) {
+              clearInterval(timer);
+              window.location.reload();
+            } else if (attempts > 30) {
+              clearInterval(timer);
+              alert('Server took too long to come back. Check the terminal/logs.');
+            }
+          });
+      }, 1000);
+    })
+    .catch(function (err) {
+      alert(err.message);
+      if (btn) {
+        btn.disabled = false;
+        btn.querySelector('span').textContent = 'Restart';
+      }
+    });
 }
 
 /* Apply dark mode on load */

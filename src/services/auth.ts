@@ -5,10 +5,10 @@
  * Login is in loginService.ts. Login helpers are in loginHelpers.ts.
  */
 
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { Cookie } from 'playwright';
-import type { AuthState } from '../types/auth.ts';
+import type { AccountEntry, AuthState } from '../types/auth.ts';
 import {
   accounts,
   decodeJwt,
@@ -17,13 +17,16 @@ import {
   getAccountByEmail,
   loadAccountsFromFile,
   migrateFromOldPaths,
+  pickAccountForProvider,
   rebuildEmailIndex,
+  resetWatcherState,
   setupAccountWatcher as setupAccountWatcherImpl,
 } from './accountManager.ts';
 import { config } from './configService.ts';
 import { loginFresh } from './loginService.ts';
 import { logStore } from './logStore.ts';
-import { getActivePage } from './playwright.ts';
+import { getActivePage, getBrowser } from './playwright.ts';
+import { ensureAccountFresh, needsRefresh } from './tokenRefresh.ts';
 
 export {
   addAccount,
@@ -44,10 +47,13 @@ export {
   isAccountThrottled,
   isAvailable,
   pickAccount,
+  pickAccountForProvider,
   rebuildEmailIndex,
   reloadAccounts,
   removeAccount,
   setAccountDisabled,
+  setAccountProviders,
+  setProviderStateLastError,
   throttleAccount,
 } from './accountManager.ts';
 export { ensureAccountFresh, needsRefresh, tryRefreshToken } from './tokenRefresh.ts';
@@ -58,7 +64,7 @@ export function getAuthTokenMaxAgeMs(): number {
 export function getAuthRefreshBeforeMs(): number {
   return config.getInt('AUTH_REFRESH_BEFORE_MS', 300000);
 }
-const TOKEN_DIR = join(process.cwd(), '.qwen', 'tokens');
+const TOKEN_DIR = join(process.cwd(), '.auth', 'tokens');
 
 export async function checkPlaywrightSession(): Promise<boolean> {
   try {
@@ -81,10 +87,15 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
   const persisted = loadAccountsFromFile();
   const discovered = discoverSavedAccounts();
 
-  // Merge persisted accounts (which may include throttledUntil and profileCookies) with discovered accounts
-  const merged: Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean; profileCookies?: string }> = [
-    ...discovered,
-  ];
+  // Merge persisted accounts (which may include throttledUntil, providers, disabledProviders, and profileCookies) with discovered accounts
+  const merged: Array<{
+    email: string;
+    password: string;
+    providers?: string[];
+    throttledUntil?: number;
+    disabledProviders?: string[];
+    profileCookies?: string;
+  }> = [...discovered];
   for (const p of persisted) {
     const existing = merged.find((a) => a.email.toLowerCase().trim() === p.email.toLowerCase().trim());
     if (existing) {
@@ -95,8 +106,11 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       if (p.throttledUntil) {
         existing.throttledUntil = p.throttledUntil;
       }
-      if (p.disabled !== undefined) {
-        existing.disabled = p.disabled;
+      if (p.providers) {
+        existing.providers = p.providers;
+      }
+      if (p.disabledProviders) {
+        existing.disabledProviders = p.disabledProviders;
       }
     } else if (p.password) {
       merged.push(p);
@@ -120,16 +134,25 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
     accounts.push({
       email: a.email,
       password: a.password,
-      state: null,
+      providerStates: {
+        qwen: {
+          token: null,
+          expiresAt: null,
+          refreshToken: null,
+          lastLoginAttempt: null,
+          cookies: a.profileCookies,
+          startupStatus: 'initializing',
+        },
+      },
+      providers: (a as any).providers || ['qwen'],
+      disabledProviders: (a as any).disabledProviders || [],
       lastUsed: 0,
       throttledUntil: persistedUntil > Date.now() ? persistedUntil : 0,
       refreshInFlight: null,
       loginAttempt: 0,
       inFlight: 0,
       totalRequests: 0,
-      profileCookies: a.profileCookies,
       disabled: (a as any).disabled ?? false,
-      startupStatus: 'initializing',
     });
   }
   rebuildEmailIndex();
@@ -145,7 +168,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
         batch.map(async (acct) => {
           const profileState = await loadCookiesFromProfile(acct.email);
           if (profileState) {
-            acct.state = profileState;
+            acct.providerStates.qwen = { ...profileState, lastLoginAttempt: null };
             return { acct, source: 'profile' as const };
           }
           return { acct, source: null as string | null };
@@ -156,28 +179,67 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       }
     }
 
-    // Phase 2: Login accounts that don't have tokens yet — max 3 concurrent
-    const needLogin = accounts.filter((a) => !a.state?.token && a.password);
-    if (needLogin.length > 0) {
-      logStore.log('info', 'auth', `Logging in ${needLogin.length} accounts (max ${MAX_CONCURRENT_PROFILE_LOADS} concurrent)...`);
-      for (let i = 0; i < needLogin.length; i += MAX_CONCURRENT_PROFILE_LOADS) {
-        const batch = needLogin.slice(i, i + MAX_CONCURRENT_PROFILE_LOADS);
-        await Promise.allSettled(
-          batch.map(async (acct) => {
-            const newState = await loginFresh(acct.email, acct.password);
-            if (newState) {
-              acct.state = newState;
-              await saveCookies(acct.email, newState.token, newState.refreshToken, newState.expiresAt);
-            }
-          }),
-        );
+    // Phase 1.5: Load existing sessions from browser profile (no re-login)
+    // For DeepSeek/GLM, check the persistent profile for valid tokens before auto-login
+    // GLM first (fast, no browser) — DeepSeek after (slow, opens browser)
+    for (const acct of accounts) {
+      const providers = acct.providers || ['qwen'];
+
+      // GLM: try to load from saved tokens file (fast, no browser needed)
+      if (providers.includes('glm') && !acct.providerStates.glm?.token) {
+        try {
+          const savedGlm = loadGlmTokens(acct.email);
+          if (savedGlm) {
+            acct.providerStates.glm = {
+              token: savedGlm.token,
+              expiresAt: savedGlm.expiresAt,
+              refreshToken: null,
+              lastLoginAttempt: null,
+              cookies: savedGlm.cookies || undefined,
+            };
+            logStore.log('info', 'auth', `\u2713 GLM token loaded from saved state for ${acct.email}`);
+          }
+        } catch (err: any) {
+          logStore.log('warn', 'auth', `GLM token load failed for ${acct.email}: ${err.message}`);
+        }
       }
     }
+
+    for (const acct of accounts) {
+      const providers = acct.providers || ['qwen'];
+
+      // DeepSeek: try to load from profile
+      if (providers.includes('deepseek') && !acct.providerStates.deepseek?.token) {
+        try {
+          const { loadSessionFromProfile } = await import('./browserProfiles.ts');
+          const session = await loadSessionFromProfile(acct.email, 'deepseek');
+          if (session) {
+            acct.providerStates.deepseek = {
+              token: session.token,
+              expiresAt: session.expiresAt,
+              refreshToken: null,
+              lastLoginAttempt: null,
+              cookies: session.cookieStr || undefined,
+            };
+            logStore.log('info', 'auth', `\u2713 DeepSeek session loaded from profile for ${acct.email}`);
+          }
+        } catch (err: any) {
+          logStore.log('warn', 'auth', `DeepSeek profile load failed for ${acct.email}: ${err.message}`);
+        }
+      }
+    }
+
+    // Persist any provider states loaded from profiles
+    const { saveAccountsToFile } = await import('./accountManager.ts');
+    saveAccountsToFile(accounts);
+
+    // Phase 2: No auto-login at startup. All tokens loaded from profiles above.
+    // Auto-login (Qwen/DeepSeek) only happens when user clicks Login button in dashboard.
 
     // Phase 3: Run post-login callbacks in parallel
     if (onAccountReady) {
       const readyPromises = accounts
-        .filter((a) => a.state?.token)
+        .filter((a) => a.providerStates.qwen?.token)
         .map(async (acct) => {
           try {
             await onAccountReady(acct.email);
@@ -188,7 +250,7 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       await Promise.allSettled(readyPromises);
     }
 
-    const successCount = accounts.filter((a) => a.state !== null && a.state.token).length;
+    const successCount = accounts.filter((a) => a.providerStates.qwen != null && a.providerStates.qwen.token).length;
     logStore.log('info', 'auth', successCount + '/' + accounts.length + ' accounts authenticated');
 
     setupAccountWatcherImpl();
@@ -202,7 +264,10 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
 
 export function setStartupStatus(email: string, status: 'initializing' | 'pending' | 'connecting' | 'ready'): void {
   const account = getAccountByEmail(email);
-  if (account) account.startupStatus = status;
+  if (account) {
+    account.providerStates.qwen ??= { token: null, expiresAt: null, refreshToken: null, lastLoginAttempt: null };
+    account.providerStates.qwen.startupStatus = status;
+  }
 }
 
 export async function loadCookiesFromProfile(email: string): Promise<AuthState | null> {
@@ -224,7 +289,7 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
         }
         if (result === 'success') {
           logStore.log('info', 'auth', `✓ Profile created for ${email} via browser login`);
-          if (acct?.state) return acct.state;
+          if (acct?.providerStates.qwen) return acct.providerStates.qwen as unknown as AuthState;
         } else {
           logStore.log('warn', 'auth', `Profile creation failed for ${email}: ${result}`);
         }
@@ -274,9 +339,9 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
 
         if (result === 'success') {
           const updated = accounts.find((a) => a.email.toLowerCase().trim() === email.toLowerCase().trim());
-          if (updated?.state) {
+          if (updated?.providerStates.qwen) {
             logStore.log('info', 'auth', `✓ Authorized ${email} via browser profile`);
-            return updated.state;
+            return updated.providerStates.qwen as unknown as AuthState;
           }
           logStore.log('warn', 'auth', `Profile auth succeeded but no state for ${email}, letting caller retry`);
           return null;
@@ -295,7 +360,8 @@ export async function loadCookiesFromProfile(email: string): Promise<AuthState |
           .map((c: Cookie) => `${c.name}=${c.value}`)
           .join('; ');
         if (cookieStr && acct) {
-          acct.profileCookies = cookieStr;
+          acct.providerStates.qwen ??= { token: null, expiresAt: null, refreshToken: null, lastLoginAttempt: null };
+          acct.providerStates.qwen.cookies = cookieStr;
           const { saveAccountsToFile } = await import('./accountManager.ts');
           saveAccountsToFile(accounts);
           logStore.log('info', 'auth', `Saved ${cookies.length} cookies as profile for ${email.split('@')[0]}`);
@@ -367,10 +433,11 @@ export async function saveCookies(email: string, token: string, refreshToken?: s
 
     const acct = accounts.find((a) => a.email.toLowerCase().trim() === normalizedEmail);
     if (acct && token) {
-      acct.state = {
+      acct.providerStates.qwen = {
         token,
         expiresAt: jwtExpiresAt,
-        refreshToken: refreshToken || acct.state?.refreshToken || null,
+        refreshToken: refreshToken || acct.providerStates.qwen?.refreshToken || null,
+        lastLoginAttempt: null,
       };
       if (acct.throttledUntil > Date.now()) {
         acct.throttledUntil = 0;
@@ -389,4 +456,61 @@ export function setupAccountWatcher(): void {
 
 export function enableHotReload(): void {
   enableHotReloadImpl();
+}
+
+// ─── GLM Token Persistence ────────────────────────────────────────────────────
+// Save/load GLM tokens + cookies to a simple JSON file so they survive restarts.
+
+interface SavedGlmToken {
+  token: string;
+  expiresAt: number;
+  cookies: string;
+  savedAt: number;
+}
+
+function getGlmTokensPath(): string {
+  return join(process.cwd(), '.auth', 'glm-tokens.json');
+}
+
+export function saveGlmTokens(email: string, token: string, cookies: string, expiresAt: number): void {
+  const filePath = getGlmTokensPath();
+  try {
+    const dir = join(process.cwd(), '.auth');
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+    let data: Record<string, SavedGlmToken> = {};
+    if (existsSync(filePath)) {
+      data = JSON.parse(readFileSync(filePath, 'utf-8'));
+    }
+
+    data[email.toLowerCase().trim()] = {
+      token,
+      expiresAt,
+      cookies,
+      savedAt: Date.now(),
+    };
+
+    writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    logStore.log('info', 'auth', `GLM tokens saved for ${email}`);
+  } catch (err: any) {
+    logStore.log('warn', 'auth', `Failed to save GLM tokens for ${email}: ${err.message}`);
+  }
+}
+
+function loadGlmTokens(email: string): SavedGlmToken | null {
+  const filePath = getGlmTokensPath();
+  try {
+    if (!existsSync(filePath)) return null;
+    const data: Record<string, SavedGlmToken> = JSON.parse(readFileSync(filePath, 'utf-8'));
+    const saved = data[email.toLowerCase().trim()];
+    if (!saved) return null;
+    // Check if expired
+    if (saved.expiresAt && saved.expiresAt < Date.now()) {
+      logStore.log('warn', 'auth', `Saved GLM token expired for ${email}`);
+      return null;
+    }
+    return saved;
+  } catch {
+    return null;
+  }
 }

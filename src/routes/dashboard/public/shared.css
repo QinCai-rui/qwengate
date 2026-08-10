@@ -117,6 +117,50 @@ body {
   font-family: var(--mono);
 }
 
+/* Logout / Lock button */
+.logout-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+.logout-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-color: var(--danger);
+}
+.logout-btn svg {
+  flex-shrink: 0;
+}
+
+/* Restart button — accent-colored, distinct from Lock */
+.restart-btn {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.restart-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.restart-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* Dark Mode Toggle */
 .dm-row {
   display: flex;

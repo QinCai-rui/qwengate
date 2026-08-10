@@ -2,11 +2,14 @@
  * File: loginHelpers.ts
  * Login implementation helpers extracted from auth.ts.
  * Contains the three login strategies: browser context, fetch, and temp context.
+ * Also provides shared manual browser login for provider accounts.
  */
 
 import crypto from 'crypto';
-import type { AuthState } from '../types/auth.ts';
+import type { Page } from 'playwright';
+import type { AuthState, ProviderAuthState } from '../types/auth.ts';
 import { checkPlaywrightSession, getAuthTokenMaxAgeMs } from './auth.ts';
+import { extractProviderToken } from './browserProfiles.ts';
 import { logStore } from './logStore.ts';
 import { AccountContext, createAccountContext, getActivePage, getBrowser, Mutex, removeAccountContext } from './playwright.ts';
 import { createFetchTimeout, QWEN_BX_V } from './qwen.ts';
@@ -348,5 +351,185 @@ export async function loginViaTempContext(
       }
     }
     release();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared manual browser login for third-party providers (DeepSeek, GLM, etc.)
+// ---------------------------------------------------------------------------
+
+export interface ManualLoginOptions {
+  loginUrl: string;
+  /** Used for log messages and token extraction strategy */
+  provider: 'qwen' | 'deepseek' | 'glm' | (string & {});
+  /**
+   * URL path segments that indicate still on the auth page.
+   * Login is considered complete when the URL no longer contains any of these.
+   */
+  authPagePaths: string[];
+  /**
+   * Optional pre-fill actions (e.g., clicking "Continue with Email" for GLM).
+   * Called after navigation to loginUrl, before the password fill attempt.
+   */
+  beforeFill?: (page: Page, email: string, password: string) => Promise<void>;
+}
+
+/**
+ * Open a headed browser, let the user log in manually, capture cookies.
+ * Returns ProviderAuthState on success, null on timeout or error.
+ */
+export async function manualBrowserLogin(email: string, password: string, opts: ManualLoginOptions): Promise<ProviderAuthState | null> {
+  let context: any = null;
+  try {
+    const { setupBrowserContext } = await import('./browserProfiles.ts');
+
+    // Use persistent browser profile with humanize: true — same as Qwen's openBrowserProfile
+    // Cookies survive in the profile directory across restarts, so users don't need to
+    // re-login every time opengate restarts. humanize: true adds random mouse movements,
+    // viewport jitter, and other anti-bot signals that ephemeral chromium.launch() doesn't.
+    context = await setupBrowserContext(email, false);
+
+    // Check for existing valid session cookies before opening browser
+    const existingCookies = await context.cookies();
+    const hasSession = existingCookies.some(
+      (c: any) => c.value && (c.name.includes('session') || c.name.includes('token') || c.name.includes('auth')),
+    );
+    const allValid = existingCookies.every((c: any) => !c.expires || c.expires * 1000 > Date.now());
+    if (hasSession && allValid) {
+      logStore.log('info', `${opts.provider}-login`, `Existing valid session found for ${email} — using profile cookies`);
+      // Extract provider-specific token (for DeepSeek/GLM) or cookie string (for Qwen)
+      const existingPage = context.pages()[0] || (await context.newPage().catch(() => null));
+      const tokenResult = await extractProviderToken(context, existingPage, opts.provider as 'qwen' | 'deepseek' | 'glm' | undefined);
+      if (tokenResult) {
+        return {
+          token: tokenResult.token,
+          expiresAt: tokenResult.expiresAt,
+          refreshToken: null,
+          lastLoginAttempt: null,
+          captchaVerifyParam: tokenResult.captchaVerifyParam,
+          cookies: tokenResult.cookieStr || undefined,
+        };
+      }
+      // Fallback: use cookies
+      const tokenStr = existingCookies.map((c: any) => `${c.name}=${c.value}`).join('; ');
+      return {
+        token: tokenStr,
+        expiresAt:
+          existingCookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
+          Date.now() + 7 * 24 * 60 * 60 * 1000,
+        refreshToken: null,
+        lastLoginAttempt: null,
+      };
+    }
+
+    // Create a fresh page — don't reuse the initial about:blank page from the persistent
+    // context, which can be in a bad state (half-loaded, blank, or corrupted session restore).
+    // Original code used browser.newContext() + context.newPage() for the same reason.
+    const pages = context.pages();
+    const page = await context.newPage();
+    // Close any leftover initial pages to avoid blank tab clutter
+    for (const p of pages) await p.close().catch(() => {});
+
+    // Wait for JS rendering (SPAs like GLM need time after 'load')
+    await page.goto(opts.loginUrl, { waitUntil: 'load', timeout: 30000 });
+    await page.waitForTimeout(3000);
+
+    // Optional pre-fill setup (e.g., click "Continue with Email")
+    if (opts.beforeFill) {
+      await opts.beforeFill(page, email, password);
+    }
+
+    // Human-like form filling — matches Qwen's fillLoginForm() timing
+    try {
+      const emailInput = page.locator('input[type="email"], input[name="email"], input[placeholder*="email" i]');
+      if (await emailInput.isVisible({ timeout: 8000 }).catch(() => false)) {
+        await emailInput.first().click();
+        await page.waitForTimeout(100 + Math.random() * 200);
+        await emailInput.first().pressSequentially(email, { delay: 30 + Math.random() * 50 });
+      }
+
+      const passwordInput = page.locator('input[type="password"]');
+      if (await passwordInput.isVisible({ timeout: 5000 }).catch(() => false)) {
+        await page.waitForTimeout(100 + Math.random() * 150);
+        await passwordInput.first().click();
+        await page.waitForTimeout(100 + Math.random() * 150);
+        await passwordInput.first().pressSequentially(password, { delay: 25 + Math.random() * 40 });
+        await page.waitForTimeout(200 + Math.random() * 300);
+      }
+
+      // Try clicking submit button
+      try {
+        const submitBtn = page
+          .locator(
+            'button[type="submit"], button:has-text("Sign in"), button:has-text("Login"), button:has-text("Log in"), button:has-text("Continue")',
+          )
+          .first();
+        await submitBtn.click({ timeout: 3000 });
+      } catch {
+        logStore.log('warn', `${opts.provider}-login`, 'submit button click failed — user may need to click manually');
+      }
+    } catch {
+      logStore.log('warn', `${opts.provider}-login`, 'form fill failed — user can fill credentials manually');
+    }
+
+    logStore.log('info', `${opts.provider}-login`, `Browser opened for ${email} at ${opts.loginUrl} — complete login manually`);
+
+    // Wait up to 5 minutes for manual login
+    const startTime = Date.now();
+    const timeout = 5 * 60 * 1000;
+    let loggedIn = false;
+
+    while (Date.now() - startTime < timeout) {
+      await page.waitForTimeout(3000);
+      try {
+        const currentUrl = page.url();
+        // Login is complete when URL no longer contains any auth page path
+        if (!opts.authPagePaths.some((p) => currentUrl.includes(p))) {
+          loggedIn = true;
+          break;
+        }
+      } catch {
+        break; // Page was closed
+      }
+    }
+
+    if (!loggedIn) {
+      logStore.log('warn', `${opts.provider}-login`, `Manual login timed out for ${email}`);
+      if (context) await context.close().catch(() => {});
+      return null;
+    }
+
+    // Capture cookies — they are now persisted in the browser profile automatically,
+    // so next restart will find them and skip re-login
+    // Extract provider-specific token first
+    const tokenResult = await extractProviderToken(context, page, opts.provider as 'qwen' | 'deepseek' | 'glm' | undefined);
+    if (tokenResult) {
+      if (context) await context.close().catch(() => {});
+      return {
+        token: tokenResult.token,
+        expiresAt: tokenResult.expiresAt,
+        refreshToken: null,
+        lastLoginAttempt: Date.now(),
+        captchaVerifyParam: tokenResult.captchaVerifyParam,
+        cookies: tokenResult.cookieStr || undefined,
+      };
+    }
+    // Fallback: use cookies if provider-specific extraction failed
+    const finalCookies = await context.cookies();
+    const tokenStr = finalCookies.map((c: any) => `${c.name}=${c.value}`).join('; ');
+    if (context) await context.close().catch(() => {});
+
+    return {
+      token: tokenStr,
+      expiresAt:
+        finalCookies.reduce((latest: number, c: any) => Math.max(latest, c.expires ? c.expires * 1000 : 0), 0) ||
+        Date.now() + 7 * 24 * 60 * 60 * 1000,
+      refreshToken: null,
+      lastLoginAttempt: Date.now(),
+    };
+  } catch (err: any) {
+    logStore.log('error', `${opts.provider}-login`, `${opts.provider} manual login error for ${email}: ${err.message}`);
+    if (context) await context.close().catch(() => {});
+    return null;
   }
 }

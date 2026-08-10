@@ -28,8 +28,13 @@ function latencyClass(ms) {
 }
 
 /* ── Main render ── */
+
+/* Monitor time-range filter: null=all, 24=24h, 168=7d, 720=30d */
+var monitorHours = null;
+
 async function refreshMonitor() {
-  var data = await apiFetch('/metrics/monitor');
+  var url = '/metrics/monitor' + (monitorHours ? '?hours=' + monitorHours : '');
+  var data = await apiFetch(url);
   if (!data) return;
 
   // ── KPI Row ──
@@ -232,7 +237,39 @@ function renderErrorSummary(errors) {
 function init() {
   refreshMonitor();
   createPoller(refreshMonitor, 4000);
+  wireMonitorControls();
 }
+
+/* ── Time-range + clear controls ── */
+// Browser scripts: shared.ts defines apiFetch/createPoller on window.
+
+function wireMonitorControls() {
+  var bar = document.getElementById('monitorControls');
+  if (!bar) return;
+  bar.addEventListener('click', function (ev: Event) {
+    var target = ev.target as HTMLElement | null;
+    var btn = target && target.closest ? target.closest('button[data-hours],button[data-clear]') : null;
+    if (!btn) return;
+    if (btn.hasAttribute('data-clear')) {
+      if (!confirm('Reset monitor? All request/error history will be deleted.')) return;
+      (window as any).apiFetch('/api/monitor/clear', { method: 'POST' }).then(function (r: any) {
+        if (r && r.ok) {
+          monitorHours = null;
+          refreshMonitor();
+        }
+      });
+      return;
+    }
+    var h = btn.getAttribute('data-hours');
+    monitorHours = h ? Number(h) : null;
+    var btns = bar.querySelectorAll('button[data-hours]');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].classList.toggle('active', btns[i].getAttribute('data-hours') === (h || ''));
+    }
+    refreshMonitor();
+  });
+}
+
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
 } else {

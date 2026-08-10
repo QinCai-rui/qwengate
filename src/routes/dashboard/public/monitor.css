@@ -264,3 +264,39 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Monitor time-range + reset buttons ── */
+#monitorControls {
+  display: flex;
+  align-items: center;
+}
+.range-btn {
+  background: var(--bg-elevated, #1c1c30);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm, 8px);
+  padding: 4px 12px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+.range-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+.range-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.range-btn.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.range-btn.danger:hover {
+  background: var(--danger);
+  color: #fff;
+}

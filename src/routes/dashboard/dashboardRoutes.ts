@@ -12,19 +12,18 @@ import { sessionPool } from '../../services/sessionPool.ts';
 import { checkApiKeyAuth } from '../../utils/auth.ts';
 import { projectPath } from '../../utils/paths.ts';
 import { APP_VERSION } from '../../utils/version.ts';
-import { accountsHtml } from './accounts.ts';
+import { getProviderKeys, getProviderPageHtml, providersListHtml } from './providers.ts';
 import { monitorHtml } from './monitor.ts';
 import { networkHtml } from './network.ts';
 import { overviewHtml } from './overview.ts';
 import { settingsHtml } from './settings.ts';
-import { usageHtml } from './usage.ts';
 
 const serveHtml = (html: string) => (c: any) => {
   // Dashboard HTML pages always serve — they're localhost admin UI.
   // API_KEY protection applies only to data endpoints (handled by requireApiKey/bearerAuth).
   // The front-end JS injects Authorization: Bearer <key> via window.API_KEY for data fetches.
   const darkMode = config.get('DARK_MODE') === 'true';
-  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\nwindow.API_KEY = ${JSON.stringify(config.get('API_KEY'))};\nwindow.DARK_MODE = ${JSON.stringify(darkMode)};\n</script>\n<link rel="icon" type="image/svg+xml" href="/dashboard/static/logo.svg">\n`;
+  const scriptInjection = `<script>\nwindow.APP_VERSION = ${JSON.stringify(APP_VERSION)};\nwindow.API_KEY = ${JSON.stringify(config.get('API_KEY'))};\nwindow.DARK_MODE = ${JSON.stringify(darkMode)};\n</script>\n`;
   // Apply dark-mode class on <html> server-side to prevent flash on page navigation
   let output = html.replace(/(<script\b)/, scriptInjection + '$1');
   if (darkMode) {
@@ -32,21 +31,26 @@ const serveHtml = (html: string) => (c: any) => {
   }
   c.header(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:;",
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:;",
   );
   return c.html(output);
 };
 
 function dashboardStaticHandler(c: any) {
   const file = c.req.param('file');
-  if (!/^[a-z0-9_-]+\.(css|js|svg)$/i.test(file)) return c.json({ error: 'Invalid file' }, 400);
+  if (!/^[a-z0-9_-]+\.(css|js|svg|png|jpe?g|webp)$/i.test(file)) return c.json({ error: 'Invalid file' }, 400);
   const DASHBOARD_STATIC = projectPath('src', 'routes', 'dashboard', 'public');
   const filePath = resolve(DASHBOARD_STATIC, file);
   if (!filePath.startsWith(DASHBOARD_STATIC) || !existsSync(filePath)) return c.json({ error: 'Not found' }, 404);
-  const mime: Record<string, string> = { css: 'text/css', js: 'application/javascript', svg: 'image/svg+xml' };
   const ext = file.split('.').pop() || '';
-  const contentType = mime[ext] || 'application/octet-stream';
-  return c.text(readFileSync(filePath, 'utf-8'), 200, { 'Content-Type': contentType });
+  const textTypes = ['css', 'js', 'svg'];
+  if (textTypes.includes(ext)) {
+    const mime: Record<string, string> = { css: 'text/css', js: 'application/javascript', svg: 'image/svg+xml' };
+    return c.text(readFileSync(filePath, 'utf-8'), 200, { 'Content-Type': mime[ext] || 'text/plain' });
+  }
+  // Binary image files
+  const imgMime: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' };
+  return c.body(readFileSync(filePath), 200, { 'Content-Type': imgMime[ext] || 'application/octet-stream' });
 }
 
 function healthHandler(c: any) {
@@ -293,15 +297,136 @@ function requireApiKey(c: any, next: () => Promise<void>) {
   return next();
 }
 
+// ── GLM model fetch ──
+async function fetchGlmModels(): Promise<Array<{ id: string; name: string; description: string }>> {
+  try {
+    const { getProviderToken } = await import('../../services/accountManager.ts');
+    const token = getProviderToken('glm');
+    if (!token) return [];
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Accept-Language': 'en-US',
+      'X-FE-Version': 'prod-fe-1.1.69',
+      'x-region': 'overseas',
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+    };
+
+    // GLM returns { data: [{ id, name, info: { meta: { description } } }, ...] }
+    const res = await fetch('https://chat.z.ai/api/models', { headers });
+    if (!res.ok) return [];
+    const body = await res.json();
+    const models = body?.data;
+    if (!Array.isArray(models)) return [];
+
+    return models
+      .map((m: any) => ({
+        id: m.id || m.name || String(m),
+        name: m.name || m.id || String(m),
+        description: m.info?.meta?.description || m.description || '',
+      }))
+      .filter((m: { id: string }) => m.id);
+  } catch {
+    return [];
+  }
+}
+
+// ── DeepSeek model fetch ──
+async function fetchDeepseekModels(): Promise<Array<{ id: string; name: string; description: string }>> {
+  try {
+    const { getProviderToken } = await import('../../services/accountManager.ts');
+    const token = getProviderToken('deepseek');
+    if (!token) return [];
+
+    const res = await fetch('https://chat.deepseek.com/api/v0/models', {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+    if (!res.ok) {
+      const res2 = await fetch('https://api.deepseek.com/models', {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      });
+      if (!res2.ok) return [];
+      const data = await res2.json();
+      return (data?.data || []).map((m: any) => ({
+        id: m.id || String(m),
+        name: m.id || String(m),
+        description: m.description || m.object || '',
+      }));
+    }
+    const data = await res.json();
+    const models = data.models || data.data || data;
+    if (Array.isArray(models)) {
+      return models.map((m: any) => ({
+        id: m.id || String(m),
+        name: m.id || m.name || String(m),
+        description: m.description || '',
+      }));
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
 export function registerDashboardRoutes(app: Hono): void {
   app.get('/dashboard', serveHtml(overviewHtml));
-  app.get('/dashboard/accounts', serveHtml(accountsHtml));
-  app.get('/dashboard/usage', serveHtml(usageHtml));
+  app.get('/dashboard/accounts', (c) => c.redirect('/dashboard/providers'));
   app.get('/dashboard/network', serveHtml(networkHtml));
   app.get('/dashboard/settings', serveHtml(settingsHtml));
   app.get('/dashboard/monitor', serveHtml(monitorHtml));
 
+  // Provider management pages
+  app.get('/dashboard/providers', serveHtml(providersListHtml));
+  const providerKeys = getProviderKeys();
+  for (const key of providerKeys) {
+    const html = getProviderPageHtml(key);
+    if (html) {
+      app.get(`/dashboard/providers/${key}`, serveHtml(html));
+    }
+  }
+
   app.get('/dashboard/static/:file', dashboardStaticHandler);
+
+  // ── Models API ──
+  app.get(
+    '/api/models/:provider',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      const provider = c.req.param('provider').toLowerCase();
+      try {
+        if (provider === 'qwen') {
+          const { fetchQwenModels } = await import('../../services/qwenModels.ts');
+          const models = await fetchQwenModels();
+          return c.json(models.map((m: any) => ({ id: m.id, name: m.id, description: m.description || '' })));
+        } else if (provider === 'deepseek') {
+          const models = await fetchDeepseekModels();
+          return c.json(
+            models.length > 0
+              ? models
+              : [
+                  { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', description: 'Default model — fast and efficient' },
+                  { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', description: 'Expert model with enhanced reasoning' },
+                ],
+          );
+        } else if (provider === 'glm') {
+          const models = await fetchGlmModels();
+          return c.json(
+            models.length > 0
+              ? models
+              : [
+                  { id: 'glm-4.7', name: 'GLM-4.7', description: 'Latest general-purpose model' },
+                  { id: 'glm-4v', name: 'GLM-4V', description: 'Vision-capable multimodal model' },
+                ],
+          );
+        } else {
+          return c.json({ error: 'Unknown provider' }, 400);
+        }
+      } catch (err: any) {
+        return c.json({ error: err.message }, 500);
+      }
+    },
+  );
 
   app.get('/', (c) => c.redirect('/dashboard'));
   app.get('/health', healthHandler);
@@ -351,11 +476,170 @@ export function registerDashboardRoutes(app: Hono): void {
     async (c) => {
       try {
         const body = await c.req.json();
-        const { setAccountDisabled } = await import('../../services/accountManager.ts');
-        setAccountDisabled(c.req.param('email'), body.disabled === true);
+        const mod = await import('../../services/accountManager.ts');
+        if (body.disabled !== undefined) {
+          mod.setAccountDisabled(c.req.param('email'), body.disabled === true);
+        }
+        if (body.disabledProviders !== undefined) {
+          // Clear account-level disabled, then sync provider disabled list
+          mod.setAccountDisabled(c.req.param('email'), false);
+          for (const p of body.disabledProviders) {
+            mod.setProviderDisabled(c.req.param('email'), p, true);
+          }
+          // Clear any providers that were removed from the list
+          const acct = mod.getAccountByEmail(c.req.param('email'));
+          if (acct?.disabledProviders) {
+            for (const existing of [...acct.disabledProviders]) {
+              if (!body.disabledProviders.includes(existing)) {
+                mod.setProviderDisabled(c.req.param('email'), existing, false);
+              }
+            }
+          }
+        }
         return c.json({ ok: true });
       } catch (err: any) {
         return c.json({ error: err.message }, 404);
+      }
+    },
+  );
+
+  app.get(
+    '/api/accounts/:email/login/deepseek',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const email = c.req.param('email');
+        const { getAccountByEmail, setProviderState } = await import('../../services/accountManager.ts');
+        const acct = getAccountByEmail(email);
+        if (!acct) return c.json({ error: 'Account not found' }, 404);
+
+        // Launch headless:false — user must complete captcha manually
+        const { loginDeepSeekManual } = await import('../../services/deepseekLogin.ts');
+
+        loginDeepSeekManual(email, acct.password).then((result) => {
+          if (result) {
+            setProviderState(email, 'deepseek', result);
+          }
+        });
+
+        return c.json({ ok: true, message: `Browser opened for ${email}. Complete login in the browser window.` });
+      } catch (err: any) {
+        return c.json({ error: err.message }, 500);
+      }
+    },
+  );
+
+  app.get(
+    '/api/accounts/:email/login/glm',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const email = c.req.param('email');
+        const { getAccountByEmail, setProviderState } = await import('../../services/accountManager.ts');
+        const acct = getAccountByEmail(email);
+        if (!acct) return c.json({ error: 'Account not found' }, 404);
+
+        // Launch headless:false — user must complete captcha manually
+        const { loginGlmManual } = await import('../../services/glmLogin.ts');
+
+        // Run async — return immediately, let the user poll for completion
+        loginGlmManual(email, acct.password).then((result) => {
+          if (result) {
+            setProviderState(email, 'glm', result);
+            // Persist GLM tokens to disk so they survive restarts
+            if (result.token) {
+              import('../../services/auth.ts').then(({ saveGlmTokens }) => {
+                const r = result as any;
+                saveGlmTokens(email, r.token, r.cookies || '', r.expiresAt || Date.now() + 365 * 24 * 60 * 60 * 1000);
+              });
+            }
+          }
+        });
+
+        return c.json({ ok: true, message: `Browser opened for ${email}. Complete login in the browser window.` });
+      } catch (err: any) {
+        return c.json({ error: err.message }, 500);
+      }
+    },
+  );
+
+  app.get(
+    '/api/accounts/:email/auto-login/deepseek',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const email = c.req.param('email');
+        const { getAccountByEmail, setProviderState, setProviderStateLastError } = await import('../../services/accountManager.ts');
+        const acct = getAccountByEmail(email);
+        if (!acct) return c.json({ error: 'Account not found' }, 404);
+
+        const { loginDeepseekAuto } = await import('../../services/deepseekLogin.ts');
+
+        const result = await loginDeepseekAuto(email, acct.password);
+        if (result.status === 'success' && result.result) {
+          setProviderStateLastError(email, 'deepseek', null);
+          setProviderState(email, 'deepseek', result.result);
+          return c.json({ ok: true, status: 'success' });
+        } else if (result.status === 'captcha') {
+          setProviderStateLastError(email, 'deepseek', 'captcha: bot detection on auto-login');
+          return c.json({ ok: true, status: 'captcha', message: 'CAPTCHA or bot detection — click Login for manual browser' });
+        } else {
+          setProviderStateLastError(email, 'deepseek', 'auto-login failed');
+          return c.json({ ok: true, status: 'error', message: 'Auto-login failed — click Login for manual browser' });
+        }
+      } catch (err: any) {
+        return c.json({ error: err.message }, 500);
+      }
+    },
+  );
+
+  app.get(
+    '/api/accounts/:email/auto-login/glm',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const email = c.req.param('email');
+        const { getAccountByEmail, setProviderState, setProviderStateLastError } = await import('../../services/accountManager.ts');
+        const acct = getAccountByEmail(email);
+        if (!acct) return c.json({ error: 'Account not found' }, 404);
+
+        const { loginGlmAuto } = await import('../../services/glmLogin.ts');
+
+        const result = await loginGlmAuto(email, acct.password);
+        if (result.status === 'success' && result.result) {
+          setProviderStateLastError(email, 'glm', null);
+          setProviderState(email, 'glm', result.result);
+          // Persist GLM tokens to disk so they survive restarts
+          if (result.result.token) {
+            const { saveGlmTokens } = await import('../../services/auth.ts');
+            saveGlmTokens(email, result.result.token, result.result.cookies || '', result.result.expiresAt || Date.now() + 365 * 24 * 60 * 60 * 1000);
+          }
+          return c.json({ ok: true, status: 'success' });
+        } else if (result.status === 'captcha') {
+          setProviderStateLastError(email, 'glm', 'captcha: bot detection on auto-login');
+          return c.json({ ok: true, status: 'captcha', message: 'CAPTCHA or bot detection — click Login for manual browser' });
+        } else {
+          setProviderStateLastError(email, 'glm', 'auto-login failed');
+          return c.json({ ok: true, status: 'error', message: 'Auto-login failed — click Login for manual browser' });
+        }
+      } catch (err: any) {
+        return c.json({ error: err.message }, 500);
+      }
+    },
+  );
+
+  app.delete(
+    '/api/accounts/:email/provider/:provider',
+    async (c, next) => requireApiKey(c, next),
+    async (c) => {
+      try {
+        const email = c.req.param('email');
+        const provider = c.req.param('provider');
+        const { removeProviderFromAccount } = await import('../../services/accountManager.ts');
+        const result = await removeProviderFromAccount(email, provider);
+        return c.json({ ok: true, accountDeleted: result.accountDeleted });
+      } catch (err: any) {
+        return c.json({ error: err.message }, err.message.includes('not found') ? 404 : 500);
       }
     },
   );
