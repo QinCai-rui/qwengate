@@ -51,7 +51,12 @@ function dashboardStaticHandler(c: any) {
   const ext = filePath.split('.').pop() || '';
   const textTypes = ['css', 'js', 'ts', 'svg'];
   if (textTypes.includes(ext)) {
-    const mime: Record<string, string> = { css: 'text/css', js: 'application/javascript', ts: 'application/javascript', svg: 'image/svg+xml' };
+    const mime: Record<string, string> = {
+      css: 'text/css',
+      js: 'application/javascript',
+      ts: 'application/javascript',
+      svg: 'image/svg+xml',
+    };
     return c.text(readFileSync(filePath, 'utf-8'), 200, { 'Content-Type': mime[ext] || 'text/plain' });
   }
   // Binary image files
