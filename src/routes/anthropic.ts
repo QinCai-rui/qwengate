@@ -63,7 +63,7 @@ interface AnthropicMessage {
   content: string | AnthropicContentBlock[];
 }
 
-function anthropicMessagesToOpenAI(messages: AnthropicMessage[], system?: string): any[] {
+export function anthropicMessagesToOpenAI(messages: AnthropicMessage[], system?: string): any[] {
   const out: any[] = [];
   if (system) {
     out.push({ role: 'system', content: system });
@@ -88,7 +88,19 @@ function anthropicMessagesToOpenAI(messages: AnthropicMessage[], system?: string
             }
           } else if (block.type === 'tool_result') {
             hasToolResult = true;
-            const tc = typeof block.content === 'string' ? block.content : '';
+            // Claude Code sends tool_result.content as EITHER a string OR an
+            // array of content blocks ([{type:'text',text:...}]). Array content
+            // was previously dropped to '' → Qwen saw an empty tool result and
+            // re-emitted the same tool call forever (agent loop). Flatten blocks.
+            let tc = '';
+            if (typeof block.content === 'string') {
+              tc = block.content;
+            } else if (Array.isArray(block.content)) {
+              tc = block.content
+                .map((b: any) => (typeof b === 'string' ? b : (b?.text ?? b?.content ?? '')))
+                .filter(Boolean)
+                .join('\n');
+            }
             out.push({ role: 'tool', tool_call_id: block.tool_use_id, content: tc });
           } else {
             console.warn(`[Anthropic] Unknown content block: ${block.type}`);
@@ -168,6 +180,69 @@ function normalizeToolName(name: string): string {
   return CASE_MAP[name] || name;
 }
 
+// ── Schema-driven tool-call arg normalizer ────────────────────────
+
+/**
+ * Claude Code sends tool schemas with snake_case property names
+ * (file_path, old_string, new_string). The old hardcoded snake→camel map
+ * emitted filePath/oldString to Claude Code, which validates args against its
+ * OWN schema → "required parameter file_path is missing. An unexpected
+ * parameter filePath was provided" → infinite client retry loop.
+ *
+ * Instead, normalize Qwen's args to the EXACT property names the client schema
+ * declares (case/underscore-insensitive match), and require only what the
+ * schema lists as required. Falls back to old behavior for unknown tools.
+ */
+export function buildToolCallNormalizer(tools: any[] | undefined): {
+  normalizeArgs(toolName: string, args: any): any;
+  missingRequired(toolName: string, args: any): string[];
+} {
+  const propsByTool = new Map<string, Set<string>>();
+  const requiredByTool = new Map<string, string[]>();
+  const normKey = (s: string): string => s.replace(/[_-]/g, '').toLowerCase();
+
+  for (const t of tools || []) {
+    const fn = t?.function || t || {};
+    const name = fn.name;
+    if (!name) continue;
+    const params = fn.parameters || fn.input_schema || {};
+    const props = new Set<string>(Object.keys(params.properties || {}));
+    propsByTool.set(name, props);
+    const required = Array.isArray(params.required) ? params.required : [...props];
+    requiredByTool.set(name, required);
+  }
+
+  function findProp(toolName: string, key: string): string | undefined {
+    const props = propsByTool.get(toolName);
+    if (!props) return undefined;
+    if (props.has(key)) return key;
+    const nk = normKey(key);
+    for (const p of props) {
+      if (normKey(p) === nk) return p;
+    }
+    return undefined;
+  }
+
+  return {
+    normalizeArgs(toolName: string, args: any): any {
+      const mapped: any = {};
+      for (const [k, v] of Object.entries(args || {})) {
+        const canonical = findProp(normalizeToolName(toolName), k) || findProp(toolName, k) || k;
+        mapped[canonical] = v;
+      }
+      return mapped;
+    },
+    missingRequired(toolName: string, args: any): string[] {
+      const normalizedName = normalizeToolName(toolName);
+      const required = requiredByTool.get(normalizedName) || requiredByTool.get(toolName);
+      if (!required || required.length === 0) {
+        return args && typeof args === 'object' && Object.keys(args).length > 0 ? [] : ['*'];
+      }
+      return required.filter((p) => args[p] === undefined || args[p] === null || args[p] === '');
+    },
+  };
+}
+
 // ponytail: simple formatter for Anthropic content blocks in log display
 function formatContent(content: any): string {
   if (typeof content === 'string') return content;
@@ -187,7 +262,7 @@ function formatContent(content: any): string {
     .join('\n');
 }
 
-function convertOpenAIResponseToAnthropic(openAIResp: any, requestModel: string): any {
+function convertOpenAIResponseToAnthropic(openAIResp: any, requestModel: string, tools?: any[]): any {
   const choice = openAIResp.choices?.[0];
   const message = choice?.message || {};
   const content: any[] = [];
@@ -195,32 +270,14 @@ function convertOpenAIResponseToAnthropic(openAIResp: any, requestModel: string)
     content.push({ type: 'text', text: message.content });
   }
 
-  // ponytail: static Claude Code required param map — adapt if tools vary
-  const REQUIRED_PARAMS: Record<string, string[]> = {
-    Bash: ['command'],
-    Read: ['filePath'],
-    Edit: ['filePath', 'oldString', 'newString'],
-    Write: ['filePath', 'content'],
-  };
-
-  function mapParamName(paramName: string): string {
-    const SNAKE_TO_CAMEL: Record<string, string> = {
-      file_path: 'filePath',
-      old_string: 'oldString',
-      new_string: 'newString',
-    };
-    return SNAKE_TO_CAMEL[paramName] || paramName;
-  }
+  // Schema-driven normalization: emit args using the client's exact property
+  // names (file_path, not filePath) so Claude Code's own validation passes.
+  const { normalizeArgs, missingRequired } = buildToolCallNormalizer(tools);
 
   function isValidToolCall(name: string, args: any): boolean {
-    const required = REQUIRED_PARAMS[name];
-    if (required) {
-      const missing = required.filter((p) => args[p] === undefined || args[p] === null || args[p] === '');
-      if (missing.length > 0) return false;
-    } else if (!args || typeof args !== 'object' || Object.keys(args).length === 0) {
-      return false;
-    }
-    return true;
+    const missing = missingRequired(name, args);
+    if (missing.length === 1 && missing[0] === '*') return false;
+    return missing.length === 0;
   }
 
   if (message.tool_calls) {
@@ -232,11 +289,8 @@ function convertOpenAIResponseToAnthropic(openAIResp: any, requestModel: string)
         /* ignore */
       }
       if (!args || typeof args !== 'object') continue;
-      // Map snake_case to camelCase
-      const mapped: any = {};
-      for (const [k, v] of Object.entries(args)) {
-        mapped[mapParamName(k)] = v;
-      }
+      // Map Qwen args to the tool schema's canonical property names
+      const mapped = normalizeArgs(tc.function.name, args);
       const normalizedName = normalizeToolName(tc.function.name);
       if (!isValidToolCall(normalizedName, mapped)) {
         logStore.log(
@@ -558,6 +612,7 @@ async function handleAnthropicStream(
   nextParentId: string | null,
   sessionHeaders: any,
   promptTokenEstimate: number = 0,
+  tools?: any[],
 ): Promise<Response> {
   c.header('Content-Type', 'text/event-stream');
   c.header('Cache-Control', 'no-cache');
@@ -583,10 +638,15 @@ async function handleAnthropicStream(
       streamReader = stream.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      // Client's original tool schemas (Anthropic shape) — used by the
+      // schema-driven arg normalizer so emitted args match Claude Code's exact
+      // property names (file_path, not filePath).
+      const bodyTools: any[] = tools || [];
       let emittedMessageStart = false;
       let emittedThinkingBlock = false;
       let emittedTextBlock = false;
       let lastFullContent = '';
+      let lastEmittedTextLen = 0;
       let targetResponseId: string | null = null;
       let currentThoughtIndex = 0;
       let reasoningBuffer = '';
@@ -760,19 +820,52 @@ async function handleAnthropicStream(
           // Strip XML tool call artifacts from emitted text (Claude Code may
           // fall back to parsing tool calls from text content, and XML artifacts
           // can produce spurious tool calls or confuse the client).
-          const cleanedText = cleanTextOfXmlArtifacts(deltaResult.vStr).cleanedText || '';
+          // XML tool-call blocks (<function=NAME>...</function>) can span
+          // multiple SSE chunks, so per-chunk cleaning can't strip a partial
+          // block — raw XML would leak to the client as text. Hold text from
+          // the last UNCLOSED <function= opener onward and emit only the
+          // stable prefix; the held tail is flushed after tool parsing at
+          // stream end (or dropped if it was a tool call).
+          lastFullContent += deltaResult.vStr;
+
+          // Find the last unclosed <function= opener (streaming boundary).
+          let holdFrom = -1;
+          {
+            const openRe = /<function=|<[A-Za-z0-9_-]*★[A-Za-z0-9_-]*=/g;
+            const closeRe = /<\/function>|<\/[A-Za-z0-9_-]*★[A-Za-z0-9_-]*>/g;
+            let m: RegExpExecArray | null;
+            let lastOpen = -1;
+            let openCount = 0;
+            let closeCount = 0;
+            while ((m = openRe.exec(lastFullContent)) !== null) {
+              lastOpen = m.index;
+              openCount++;
+            }
+            while ((m = closeRe.exec(lastFullContent)) !== null) {
+              closeCount++;
+            }
+            if (openCount > closeCount) holdFrom = lastOpen;
+          }
+
+          const safeText =
+            holdFrom >= lastEmittedTextLen
+              ? lastFullContent.substring(lastEmittedTextLen, holdFrom)
+              : lastFullContent.substring(lastEmittedTextLen);
+          lastEmittedTextLen = holdFrom >= 0 ? holdFrom : lastFullContent.length;
+
+          const cleanedText = cleanTextOfXmlArtifacts(safeText).cleanedText || '';
 
           // Emit cleaned text delta to Claude Code
-          await streamWriter.write(
-            `event: content_block_delta\ndata: ${JSON.stringify({
-              type: 'content_block_delta',
-              index: textBlockIndex,
-              delta: { type: 'text_delta', text: cleanedText },
-            })}\n\n`,
-          );
+          if (cleanedText) {
+            await streamWriter.write(
+              `event: content_block_delta\ndata: ${JSON.stringify({
+                type: 'content_block_delta',
+                index: textBlockIndex,
+                delta: { type: 'text_delta', text: cleanedText },
+              })}\n\n`,
+            );
+          }
 
-          // Accumulate RAW text (with XML) for XML fallback tool call parsing
-          lastFullContent += deltaResult.vStr;
           logStore.addProcessedOutput(logId, cleanedText);
           logStore.addRawChunk(logId, deltaResult.vStr);
           hasEmittedContent = true;
@@ -791,6 +884,25 @@ async function handleAnthropicStream(
       logStore.log('debug', 'chat', `[Anthropic] XML parsed from text: ${xmlParsedCalls.length} tool calls`);
       for (const tc of xmlParsedCalls) {
         logStore.log('debug', 'chat', `[Anthropic] XML tool: name=${tc.name} id=${tc.id} args=${JSON.stringify(tc.arguments)}`);
+      }
+
+      // Flush any text HELD back during streaming (it followed an unclosed
+      // <function= opener that turned out to be a complete tool call — the
+      // block itself is dropped here, but any trailing text after the last
+      // tool block must still reach the client).
+      if (lastEmittedTextLen < lastFullContent.length && xmlToolCalls.length === 0) {
+        const heldTail = lastFullContent.substring(lastEmittedTextLen);
+        const cleanedTail = cleanTextOfXmlArtifacts(heldTail).cleanedText || '';
+        if (cleanedTail) {
+          logStore.log('debug', 'chat', `[Anthropic] Flushing held text tail (${cleanedTail.length} chars)`);
+          await streamWriter.write(
+            `event: content_block_delta\ndata: ${JSON.stringify({
+              type: 'content_block_delta',
+              index: textBlockIndex,
+              delta: { type: 'text_delta', text: cleanedTail },
+            })}\n\n`,
+          );
+        }
       }
 
       const allToolCalls = [...xmlParsedCalls];
@@ -813,29 +925,14 @@ async function handleAnthropicStream(
         logStore.log(
           'debug',
           'chat',
-          `[Anthropic] Raw tool call from Qwen: name=${tc.name} id=${tc.id} args=${JSON.stringify(tc.arguments)} source=${tc.id.startsWith('call_xml') ? 'xml' : 'local_mcp'}`,
+          `[Anthropic] Raw tool call from Qwen: name=${tc.name} id=${tc.id} args=${JSON.stringify(tc.arguments)} source=${tc.id?.startsWith('call_xml') ? 'xml' : 'local_mcp'}`,
         );
       }
 
-      // Validate and filter tool calls
-      // ponytail: static Claude Code required param map — upgrade if tools vary
-      const REQUIRED_PARAMS: Record<string, string[]> = {
-        Bash: ['command'],
-        Read: ['filePath'],
-        Edit: ['filePath', 'oldString', 'newString'],
-        Write: ['filePath', 'content'],
-      };
-
-      // ponytail: snake_case → camelCase mapping for Qwen param names
-      function mapParamName(toolName: string, paramName: string): string {
-        const SNAKE_TO_CAMEL: Record<string, string> = {
-          file_path: 'filePath',
-          old_string: 'oldString',
-          new_string: 'newString',
-          tool_call_id: 'toolCallId',
-        };
-        return SNAKE_TO_CAMEL[paramName] || paramName;
-      }
+      // Validate and filter tool calls — schema-driven: normalize Qwen's args
+      // to the EXACT property names the client's tool schemas declare
+      // (file_path vs filePath), so Claude Code's own validation passes.
+      const normalizer = buildToolCallNormalizer(bodyTools);
 
       function validateToolCall(tc: ParsedToolCall): { valid: boolean; fixedArgs: any } {
         let args: any = {};
@@ -846,26 +943,21 @@ async function handleAnthropicStream(
         }
         if (!args || typeof args !== 'object') return { valid: false, fixedArgs: {} };
 
-        // Map snake_case to camelCase
-        const mapped: any = {};
-        for (const [k, v] of Object.entries(args)) {
-          mapped[mapParamName(tc.name, k)] = v;
-        }
+        // Map args to the client schema's canonical property names
+        const mapped = normalizer.normalizeArgs(tc.name, args);
         args = mapped;
 
         const toolName = normalizeToolName(tc.name);
-        const required = REQUIRED_PARAMS[toolName];
-        if (required) {
-          const missing = required.filter((p) => args[p] === undefined || args[p] === null || args[p] === '');
-          if (missing.length > 0) {
-            logStore.log(
-              'debug',
-              'chat',
-              `[Anthropic] Skipped tool call: ${tc.name} missing required params: ${missing.join(', ')} (had: ${JSON.stringify(args)})`,
-            );
-            return { valid: false, fixedArgs: args };
-          }
-        } else if (Object.keys(args).length === 0) {
+        const missing = normalizer.missingRequired(toolName, args);
+        if (missing.length > 0 && !(missing.length === 1 && missing[0] === '*')) {
+          logStore.log(
+            'debug',
+            'chat',
+            `[Anthropic] Skipped tool call: ${tc.name} missing required params: ${missing.join(', ')} (had: ${JSON.stringify(args)})`,
+          );
+          return { valid: false, fixedArgs: args };
+        }
+        if (missing.length === 1 && missing[0] === '*') {
           logStore.log('debug', 'chat', `[Anthropic] Skipped tool call: ${tc.name} (no params)`);
           return { valid: false, fixedArgs: {} };
         }
@@ -1167,7 +1259,7 @@ export async function anthropicMessages(c: Context) {
           <any>openAIResponse.status,
         );
       }
-      const anthropicResp = convertOpenAIResponseToAnthropic(openAIResp, anthropicModel);
+      const anthropicResp = convertOpenAIResponseToAnthropic(openAIResp, anthropicModel, tools);
       logStore.log(
         'debug',
         'chat',
@@ -1190,6 +1282,7 @@ export async function anthropicMessages(c: Context) {
       nextParentId,
       sessionHeaders,
       promptTokenEstimate,
+      tools,
     );
     logStore.log('debug', 'chat', `[Anthropic] Streaming completed latency=${Date.now() - _requestStartTime}ms`);
     cancelWatchdog();
