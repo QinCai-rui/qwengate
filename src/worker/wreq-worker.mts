@@ -107,7 +107,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         // Build upstream headers to pass back
-        const passthroughHeaders = {};
+        const passthroughHeaders: Record<string, string> = {};
         const importantHeaders = [
           'content-type',
           'set-cookie',
@@ -139,7 +139,7 @@ const server = http.createServer(async (req, res) => {
           });
 
           try {
-            for await (const chunk of wreqResp.body) {
+            for await (const chunk of wreqResp.body ?? []) {
               res.write(chunk);
               if (spec._debugDumpPath) {
                 try {
@@ -185,5 +185,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   const addr = server.address();
-  console.log(JSON.stringify({ port: addr.port }));
+  const port = typeof addr === 'object' && addr !== null ? addr.port : PORT;
+  console.log(JSON.stringify({ port }));
 });

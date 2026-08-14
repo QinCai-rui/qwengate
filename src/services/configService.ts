@@ -8,6 +8,8 @@ export interface ConfigSchema {
   HOST: string;
   API_KEY: string;
   TOOL_CALLING: string;
+  /** How tool definitions reach Qwen: 'local_mcp' (native feature_config) or 'xml_prompt' (inline XML, for deployments where local_mcp returns 500) */
+  TOOL_CALLING_MODE: string;
   CLEAN_OUTPUT: string;
   STREAMING_MODE: string;
   MAX_TOOL_CALLS_PER_RESPONSE: string;
@@ -37,6 +39,7 @@ export const DEFAULT_CONFIG: ConfigSchema = {
   HOST: '',
   API_KEY: '',
   TOOL_CALLING: 'true',
+  TOOL_CALLING_MODE: 'local_mcp',
   CLEAN_OUTPUT: 'true',
   STREAMING_MODE: 'auto',
   MAX_TOOL_CALLS_PER_RESPONSE: '3',

@@ -205,8 +205,11 @@ test('Chat Completions returns explicit error for non-SSE upstream JSON errors',
     assert.strictEqual(res.status, 429);
 
     const body = await res.json();
-    assert.match(body.error.message, /Qwen upstream error: RateLimited/);
-    assert.match(body.error.message, /upper limit/);
+    // JSON error bodies are now routed through handleErrorResponse at request
+    // time (throttle + account switch) — the route's 429 catch-all produces
+    // the clean user-facing message.
+    assert.match(body.error.message, /daily usage limit|RateLimited/);
+    assert.match(body.error.message, /upper limit|daily usage limit/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -298,15 +301,13 @@ test('Chat completions with image uploads attaches files (t2t chat_type, vision 
   accounts.push({
     email: 'test@qwen-gate.dev',
     password: 'test',
-    state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
-    providerStates: { qwen: { token: 'mock-token', expiresAt: Date.now() + 3600000 } },
+    providerStates: { qwen: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null, lastLoginAttempt: null } },
     lastUsed: 0,
     throttledUntil: 0,
     refreshInFlight: null,
     loginAttempt: 0,
     inFlight: 0,
     totalRequests: 0,
-    startupStatus: 'ready',
   });
 
   let stsCalled = false;
@@ -495,14 +496,13 @@ test('Anthropic streaming strips XML artifacts from text deltas', async () => {
   accounts.push({
     email: 'xml-test@qwen-gate.dev',
     password: 'test',
-    state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
+    providerStates: { qwen: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null, lastLoginAttempt: null } },
     lastUsed: 0,
     throttledUntil: 0,
     refreshInFlight: null,
     loginAttempt: 0,
     inFlight: 0,
     totalRequests: 0,
-    startupStatus: 'ready',
   });
 
   (globalThis as any).fetch = async (input: any) => {
@@ -649,14 +649,13 @@ test('Anthropic /v1/messages streaming with local_mcp tool call emits correct to
   accounts.push({
     email: 'test@qwen-gate.dev',
     password: 'test',
-    state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
+    providerStates: { qwen: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null, lastLoginAttempt: null } },
     lastUsed: 0,
     throttledUntil: 0,
     refreshInFlight: null,
     loginAttempt: 0,
     inFlight: 0,
     totalRequests: 0,
-    startupStatus: 'ready',
   });
 
   (globalThis as any).fetch = async (input: any) => {

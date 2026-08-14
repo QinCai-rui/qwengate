@@ -35,7 +35,7 @@ describe('saveCookies and account state', () => {
     accounts.push({
       email: testEmail,
       password: 'test-pass',
-      state: null,
+      providerStates: {},
       lastUsed: 0,
       throttledUntil: 0,
       refreshInFlight: null,
@@ -52,12 +52,12 @@ describe('saveCookies and account state', () => {
   });
 
   test('saveCookies updates account state', async () => {
-    assert.equal(accounts.find((a) => a.email === testEmail)?.state, null);
+    assert.equal(accounts.find((a) => a.email === testEmail)?.providerStates.qwen, undefined);
     await saveCookies(testEmail, 'test-token-value', 'test-refresh', Date.now() + 3600000);
     const acct = accounts.find((a) => a.email === testEmail);
-    assert.notEqual(acct?.state, null);
-    assert.equal(acct?.state?.token, 'test-token-value');
-    assert.equal(acct?.state?.refreshToken, 'test-refresh');
+    assert.notEqual(acct?.providerStates.qwen, undefined);
+    assert.equal(acct?.providerStates.qwen?.token, 'test-token-value');
+    assert.equal(acct?.providerStates.qwen?.refreshToken, 'test-refresh');
   });
 });
 
@@ -67,7 +67,7 @@ describe('getAccountByEmail', () => {
       {
         email: 'MixedCase@Example.com',
         password: 'p1',
-        state: null,
+        providerStates: {},
         lastUsed: 0,
         throttledUntil: 0,
         refreshInFlight: null,
@@ -78,7 +78,7 @@ describe('getAccountByEmail', () => {
       {
         email: 'lowercase@example.com',
         password: 'p2',
-        state: null,
+        providerStates: {},
         lastUsed: 0,
         throttledUntil: 0,
         refreshInFlight: null,

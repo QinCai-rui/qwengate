@@ -15,8 +15,8 @@
  * code don't need to change their call sites.
  */
 
-import { logStore } from '../../../services/logStore.ts';
 import { resetVmContext } from '../../../services/feilinVmSolver.ts';
+import { logStore } from '../../../services/logStore.ts';
 
 const TOKEN_TTL_MS = 45_000;
 

@@ -367,7 +367,7 @@ export async function createQwenStream(
 
     // Browserless path: impers worker for TLS/HTTP2 impersonation, cookie from account manager
     const tokenInfo = currentAccountEmail ? await getTokenWithAccount(currentAccountEmail) : null;
-    const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+    const cookieStr = tokenInfo ? tokenInfo.cookie : '';
     const tokenPreview = cookieStr ? cookieStr.substring(0, 20) + '...' : 'none';
 
     logStore.log(
@@ -443,6 +443,18 @@ export async function createQwenStream(
   if (!result.response.body) {
     throw new Error(`Qwen returned empty response body (status ${result.response.status})`);
   }
+
+  // Qwen may answer an ERROR with HTTP 200 + a JSON body (anti-bot CAPTCHA
+  // FAIL_SYS_USER_VALIDATE, session invalidations, etc.) instead of an SSE
+  // stream. Previously this passed straight into the SSE reader which saw no
+  // "data:" lines and produced an EMPTY response → Claude Code churned with
+  // "no content" while the account was actually being captcha'd. Detect JSON
+  // bodies here and route them through handleErrorResponse (throttle+switch).
+  const respContentType = result.response.headers.get('content-type') || '';
+  if (respContentType.includes('application/json') && !respContentType.includes('text/event-stream')) {
+    await handleErrorResponse(result.response, lastDebugEntryId ?? '');
+  }
+
   const streamDebugEntryId = lastDebugEntryId;
   const textDecoder = new TextDecoder();
   const wreqClose = (result.response as any)._wreqClose as (() => void) | undefined;

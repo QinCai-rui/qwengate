@@ -21,14 +21,14 @@ accountsRouter.get('/', (c) => {
   const masked = accounts.map((a) => ({
     email: a.email,
     passwordMasked: a.password ? '••••••••' : '',
-    authenticated: a.state !== null && a.state.token !== '',
-    tokenExpiresAt: a.state?.expiresAt || null,
+    authenticated: a.providerStates.qwen?.token != null && a.providerStates.qwen.token !== '',
+    tokenExpiresAt: a.providerStates.qwen?.expiresAt || null,
     throttled: a.throttledUntil > Date.now(),
     throttledUntil: a.throttledUntil > Date.now() ? a.throttledUntil : null,
     throttledUnlockAt: a.throttledUntil > Date.now() ? new Date(a.throttledUntil).toISOString() : null,
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
-    startupStatus: a.startupStatus || null,
+    startupStatus: a.providerStates.qwen?.startupStatus || null,
   }));
   return c.json({ count: masked.length, accounts: masked });
 });
@@ -135,7 +135,7 @@ accountsRouter.get('/:email/login', async (c) => {
       const { loadCookiesFromProfile } = await import('../services/auth.ts');
       const profileState = await loadCookiesFromProfile(account.email);
       if (profileState) {
-        account.state = profileState;
+        account.providerStates.qwen = { ...profileState, lastLoginAttempt: null };
         return c.json({ success: true, email: account.email, authenticated: true });
       }
       return c.json({ success: true, email: account.email, authenticated: true });
@@ -164,7 +164,7 @@ accountsRouter.get('/:email/autofill', async (c) => {
         if (loginResult === 'success') {
           const { loadCookiesFromProfile } = await import('../services/auth.ts');
           const profileState = await loadCookiesFromProfile(account.email);
-          if (profileState) account.state = profileState;
+          if (profileState) account.providerStates.qwen = { ...profileState, lastLoginAttempt: null };
         }
       } catch (err: any) {
         logStore.log('error', 'auth', err.message || String(err));

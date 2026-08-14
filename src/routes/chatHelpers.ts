@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { config } from '../services/configService.ts';
 import { modelRouter } from '../services/modelRouter.ts';
 import { buildFeatureConfig, createQwenStream, fetchQwenModels } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
@@ -174,30 +175,77 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
   const featureConfig = buildFeatureConfig(true);
 
   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
-    const localMcp: Record<string, any> = {};
-    localMcp['★'] = {};
-    const toolNames: string[] = [];
-    for (const t of body.tools) {
-      const fn = t.function || {};
-      localMcp['★'][fn.name] = {
-        description: fn.description || '',
-        input_schema: fn.parameters || { type: 'object', properties: {} },
-      };
-      toolNames.push(`${fn.name}${fn.description ? ` (${fn.description})` : ''}`);
-    }
-    featureConfig.local_mcp = localMcp;
-    // ponytail: tool schema in system prompt as textual fallback for models
-    // that don't honor feature_config.local_mcp consistently
-    const toolDescriptions = body.tools
-      .map((t: any) => {
+    const toolCallingMode = config.get('TOOL_CALLING_MODE', 'local_mcp');
+    if (toolCallingMode === 'xml_prompt') {
+      // xml_prompt: inject tool DEFINITIONS using a DISTINCT tag
+      // (<tool name=..>) so they never collide with the <function=NAME>
+      // INVOCATION tag that xmlToolParser matches. The model is instructed to
+      // CALL tools with <function=NAME><parameter=K>V</parameter></function>,
+      // which the parser converts back to OpenAI tool_calls.
+      //
+      // Why distinct tags: past assistant tool_calls in multi-turn history are
+      // also serialized as <function=NAME>..</function> (see assistant branch
+      // above). If definitions ALSO used <function=NAME>, the prompt would
+      // contain three things sharing one tag — definitions, past calls, and the
+      // call-format instruction — and the model conflates them, hallucinating
+      // "Tool X does not exist". A separate <tool> tag removes the ambiguity.
+      const toolDefs = body.tools
+        .map((t: any) => {
+          const fn = t.function || {};
+          const props = fn.parameters?.properties || {};
+          const required = fn.parameters?.required || [];
+          const argLines: string[] = [];
+          for (const [k, v] of Object.entries(props) as [string, any][]) {
+            const req = required.includes(k) ? ' (required)' : '';
+            argLines.push(`    <arg name="${escXml(k)}" type="${escXml(v.type || 'string')}">${escXml(v.description || '')}${req}</arg>`);
+          }
+          return `  <tool name="${escXml(fn.name)}">\n    <desc>${escXml(fn.description || '')}</desc>\n${argLines.join('\n')}\n  </tool>`;
+        })
+        .join('\n');
+
+      const toolPrompt =
+        '\n\n## AVAILABLE TOOLS\n' +
+        'You can call these tools. Tool definitions (reference only — do NOT copy this format):\n' +
+        '<tools>\n' +
+        toolDefs +
+        '\n</tools>\n\n' +
+        'TO CALL A TOOL, emit EXACTLY this and nothing after the closing tag:\n' +
+        '<function=TOOL_NAME>\n<parameter=ARG_NAME>value</parameter>\n</function>\n\n' +
+        'Rules:\n' +
+        '- Use the tool name from the <tool name="..."> list as TOOL_NAME.\n' +
+        '- One <parameter=...> line per argument you pass.\n' +
+        '- After </function>, STOP immediately. Output no other text.\n' +
+        '- These tools ARE available in this environment. Call them — do not claim they are missing.';
+
+      // Prepend to prompt so model sees it inline, not as file attachment
+      prompt = toolPrompt + (prompt ? '\n' + prompt : '');
+    } else {
+      // local_mcp (default): native Qwen feature_config tool calling
+      const localMcp: Record<string, any> = {};
+      localMcp['★'] = {};
+      const toolNames: string[] = [];
+      for (const t of body.tools) {
         const fn = t.function || {};
-        const params = fn.parameters?.properties ? Object.keys(fn.parameters.properties).join(', ') : '';
-        return `- ${fn.name}${fn.description ? `: ${fn.description}` : ''}${params ? ` (params: ${params})` : ''}`;
-      })
-      .join('\n');
-    systemParts.push(
-      `You have access to the following tools:\n${toolDescriptions}\n\nTo call a tool, respond with the tool call in the appropriate format.`,
-    );
+        localMcp['★'][fn.name] = {
+          description: fn.description || '',
+          input_schema: fn.parameters || { type: 'object', properties: {} },
+        };
+        toolNames.push(`${fn.name}${fn.description ? ` (${fn.description})` : ''}`);
+      }
+      featureConfig.local_mcp = localMcp;
+      // ponytail: tool schema in system prompt as textual fallback for models
+      // that don't honor feature_config.local_mcp consistently
+      const toolDescriptions = body.tools
+        .map((t: any) => {
+          const fn = t.function || {};
+          const params = fn.parameters?.properties ? Object.keys(fn.parameters.properties).join(', ') : '';
+          return `- ${fn.name}${fn.description ? `: ${fn.description}` : ''}${params ? ` (params: ${params})` : ''}`;
+        })
+        .join('\n');
+      systemParts.push(
+        `You have access to the following tools:\n${toolDescriptions}\n\nTo call a tool, respond with the tool call in the appropriate format.`,
+      );
+    }
   }
 
   // Single message (Qwen API only accepts 1 message per chat)

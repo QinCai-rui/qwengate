@@ -12,10 +12,10 @@ import { sessionPool } from '../../services/sessionPool.ts';
 import { checkApiKeyAuth } from '../../utils/auth.ts';
 import { projectPath } from '../../utils/paths.ts';
 import { APP_VERSION } from '../../utils/version.ts';
-import { getProviderKeys, getProviderPageHtml, providersListHtml } from './providers.ts';
 import { monitorHtml } from './monitor.ts';
 import { networkHtml } from './network.ts';
 import { overviewHtml } from './overview.ts';
+import { getProviderKeys, getProviderPageHtml, providersListHtml } from './providers.ts';
 import { settingsHtml } from './settings.ts';
 
 const serveHtml = (html: string) => (c: any) => {
@@ -38,14 +38,20 @@ const serveHtml = (html: string) => (c: any) => {
 
 function dashboardStaticHandler(c: any) {
   const file = c.req.param('file');
-  if (!/^[a-z0-9_-]+\.(css|js|svg|png|jpe?g|webp)$/i.test(file)) return c.json({ error: 'Invalid file' }, 400);
+  if (!/^[a-z0-9_-]+\.(css|js|ts|svg|png|jpe?g|webp)$/i.test(file)) return c.json({ error: 'Invalid file' }, 400);
   const DASHBOARD_STATIC = projectPath('src', 'routes', 'dashboard', 'public');
-  const filePath = resolve(DASHBOARD_STATIC, file);
+  let filePath = resolve(DASHBOARD_STATIC, file);
+  // TS conversion (42c9114) renamed dashboard scripts .js → .ts but HTML
+  // still references .js — fall back to the .ts sibling so the dashboard
+  // keeps working (and browsers get JS with the .ts MIME).
+  if (!existsSync(filePath) && file.endsWith('.js')) {
+    filePath = resolve(DASHBOARD_STATIC, file.replace(/\.js$/, '.ts'));
+  }
   if (!filePath.startsWith(DASHBOARD_STATIC) || !existsSync(filePath)) return c.json({ error: 'Not found' }, 404);
-  const ext = file.split('.').pop() || '';
-  const textTypes = ['css', 'js', 'svg'];
+  const ext = filePath.split('.').pop() || '';
+  const textTypes = ['css', 'js', 'ts', 'svg'];
   if (textTypes.includes(ext)) {
-    const mime: Record<string, string> = { css: 'text/css', js: 'application/javascript', svg: 'image/svg+xml' };
+    const mime: Record<string, string> = { css: 'text/css', js: 'application/javascript', ts: 'application/javascript', svg: 'image/svg+xml' };
     return c.text(readFileSync(filePath, 'utf-8'), 200, { 'Content-Type': mime[ext] || 'text/plain' });
   }
   // Binary image files
@@ -612,7 +618,12 @@ export function registerDashboardRoutes(app: Hono): void {
           // Persist GLM tokens to disk so they survive restarts
           if (result.result.token) {
             const { saveGlmTokens } = await import('../../services/auth.ts');
-            saveGlmTokens(email, result.result.token, result.result.cookies || '', result.result.expiresAt || Date.now() + 365 * 24 * 60 * 60 * 1000);
+            saveGlmTokens(
+              email,
+              result.result.token,
+              result.result.cookies || '',
+              result.result.expiresAt || Date.now() + 365 * 24 * 60 * 60 * 1000,
+            );
           }
           return c.json({ ok: true, status: 'success' });
         } else if (result.status === 'captcha') {

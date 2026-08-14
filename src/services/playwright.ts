@@ -75,10 +75,10 @@ export async function getCookies(email?: string): Promise<string> {
   try {
     const { getAccountByEmail } = await import('./auth.ts');
     const acct = email ? getAccountByEmail(email) : undefined;
-    if (acct?.profileCookies) {
+    if (acct?.providerStates?.qwen?.cookies) {
       // Strip any existing token= from profileCookies — the caller (getBasicHeaders)
       // will prepend the fresh JWT. Duplicate token cookies confuse some servers.
-      const stripped = acct.profileCookies
+      const stripped = acct.providerStates.qwen.cookies
         .replace(/\btoken=[^;]+;?\s*/g, '')
         .replace(/;+$/, '')
         .trim();
@@ -110,8 +110,8 @@ export async function getBasicHeaders(email?: string): Promise<BasicHeaders> {
   const { getTokenWithAccount } = await import('./auth.ts');
   const tokenInfo = await getTokenWithAccount(email);
   if (tokenInfo) {
-    const tokenEntry = `token=${tokenInfo.token}`;
-    cookieStr = tokenEntry + (cookieStr ? '; ' + cookieStr : '');
+    // tokenInfo.cookie already merges JWT + WAF profile cookies (stale token= stripped)
+    cookieStr = tokenInfo.cookie;
   }
   return {
     cookie: cookieStr,
@@ -239,8 +239,8 @@ async function createContextInternal(email: string, cookies?: Record<string, str
   try {
     const { getAccountByEmail } = await import('./auth.ts');
     const acct = email ? getAccountByEmail(email) : undefined;
-    if (acct?.profileCookies) {
-      acct.profileCookies.split(';').forEach((pair) => {
+    if (acct?.providerStates?.qwen?.cookies) {
+      acct.providerStates.qwen.cookies.split(';').forEach((pair) => {
         const eq = pair.indexOf('=');
         if (eq > 0) {
           const name = pair.slice(0, eq).trim();

@@ -5,7 +5,7 @@
  * Login is in loginService.ts. Login helpers are in loginHelpers.ts.
  */
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { Cookie } from 'playwright';
 import type { AccountEntry, AuthState } from '../types/auth.ts';
@@ -433,6 +433,7 @@ export async function saveCookies(email: string, token: string, refreshToken?: s
 
     const acct = accounts.find((a) => a.email.toLowerCase().trim() === normalizedEmail);
     if (acct && token) {
+      acct.providerStates ??= {};
       acct.providerStates.qwen = {
         token,
         expiresAt: jwtExpiresAt,

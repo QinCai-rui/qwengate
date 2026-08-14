@@ -1062,7 +1062,7 @@ export async function getToken(): Promise<string | null> {
   }
   return null;
 }
-export async function getTokenWithAccount(email?: string): Promise<{ token: string; email: string } | null> {
+export async function getTokenWithAccount(email?: string): Promise<{ token: string; email: string; cookie: string } | null> {
   let acct: AccountEntry | null;
   let picked = false;
   if (email) {
@@ -1080,5 +1080,16 @@ export async function getTokenWithAccount(email?: string): Promise<{ token: stri
   }
   acct.lastUsed = Date.now();
   if (picked) decrementInFlight(acct.email);
-  return { token: acct.providerStates.qwen.token, email: acct.email };
+  // Build the full request cookie: fresh JWT first, then the baxia/WAF profile
+  // cookies (cna, ssxmod_itna, tfstk, isg, ...) with any stale token= stripped
+  // to avoid duplicates. Sending only token= (the old behavior) makes every API
+  // request WAF-cold -> captcha.
+  const profile = acct.providerStates.qwen.cookies
+    ? acct.providerStates.qwen.cookies
+        .replace(/\btoken=[^;]+;?\s*/g, '')
+        .replace(/;+$/, '')
+        .trim()
+    : '';
+  const cookie = profile ? `token=${acct.providerStates.qwen.token}; ${profile}` : `token=${acct.providerStates.qwen.token}`;
+  return { token: acct.providerStates.qwen.token, email: acct.email, cookie };
 }

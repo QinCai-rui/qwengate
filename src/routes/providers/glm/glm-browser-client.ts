@@ -8,13 +8,13 @@
  *   4. Full GLM API requests can be proxied through the browser
  */
 
-import { chromium, type Browser, type Page } from 'playwright-core';
-import { logStore } from '../../../services/logStore.ts';
-import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { createHmac } from 'node:crypto';
+import { existsSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { type Browser, chromium, type Page } from 'playwright-core';
 import { getGlmCookieString, setGlmCookieValue } from '../../../services/glmCookieManager.ts';
+import { logStore } from '../../../services/logStore.ts';
 
 const TAG = 'glm-browser';
 const GLM_BASE_URL = 'https://chat.z.ai';
@@ -341,11 +341,19 @@ export async function glmBrowserFetch(request: BrowserFetchRequest): Promise<Bro
 export async function shutdownGlmBrowser(): Promise<void> {
   cachedSignature = null;
   if (page) {
-    try { await page.close(); } catch { /* best effort */ }
+    try {
+      await page.close();
+    } catch {
+      /* best effort */
+    }
     page = null;
   }
   if (browser) {
-    try { await browser.close(); } catch { /* best effort */ }
+    try {
+      await browser.close();
+    } catch {
+      /* best effort */
+    }
     browser = null;
   }
   hasSignatureEngine = false;

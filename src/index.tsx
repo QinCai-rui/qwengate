@@ -455,7 +455,7 @@ if (import.meta.main) {
       // ── Phase 2b: Configure loaded accounts ──
       logStore.log('info', 'boot', '[2/5] Configuring accounts...');
       try {
-        const acctList = getAccounts().filter((a) => a.state?.token);
+        const acctList = getAccounts().filter((a) => a.providerStates.qwen?.token);
         for (const acct of acctList) {
           setStartupStatus(acct.email, 'pending');
           try {

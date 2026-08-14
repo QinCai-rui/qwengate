@@ -13,13 +13,13 @@
  * No Playwright, no browser processes, zero extra memory.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import crypto from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
-import crypto from 'node:crypto';
-import { logStore } from './logStore.ts';
 import { generateCaptchaData } from './captchaDataGen.ts';
+import { logStore } from './logStore.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

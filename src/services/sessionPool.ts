@@ -146,7 +146,7 @@ export class SessionPool {
 
     try {
       const tokenInfo = email ? await import('./auth.ts').then((m) => m.getTokenWithAccount(email!)) : null;
-      const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+      const cookieStr = tokenInfo ? tokenInfo.cookie : '';
       const response = await browserlessFetch(`${QWEN_API_BASE}/api/v2/chats/${chatId}`, {
         method: 'DELETE',
         headers: {
@@ -186,7 +186,7 @@ export class SessionPool {
 
     const sessionBody = JSON.stringify({
       title: 'New Chat',
-      models: [acct?.state?.token ? 'qwen3.7-plus' : 'qwen3.5-flash'],
+      models: [acct?.providerStates?.qwen?.token ? 'qwen3.7-plus' : 'qwen3.5-flash'],
       chat_mode: 'normal',
       chat_type: 't2t',
       timestamp: Date.now(),
@@ -194,7 +194,7 @@ export class SessionPool {
     });
 
     const tokenInfo = email ? await import('./auth.ts').then((m) => m.getTokenWithAccount(email!)) : null;
-    const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+    const cookieStr = tokenInfo ? tokenInfo.cookie : '';
 
     const response = await browserlessFetch(`${QWEN_API_BASE}/api/v2/chats/new`, {
       method: 'POST',
