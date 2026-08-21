@@ -196,6 +196,9 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
     processThinkingDelta(delta, state);
   } else if (delta.phase === 'answer') {
     processAnswerDelta(delta, state, ctx);
+  } else if (delta.content !== undefined && delta.content !== '' && !delta.phase) {
+    // OpenAI-compatible / generic content without phase (e.g. mock streams, some models)
+    processAnswerDelta(delta, state, ctx);
   } else if (delta.phase === 'local_tool') {
     // Qwen returns tool calls in the local_tool phase via extra.local_mcp["★"].
     // These may arrive with or without XML tool call blocks in the answer phase,
@@ -361,6 +364,16 @@ async function processContentChunks(state: StreamProcessorState, ctx: NonStreami
   }
 
   flushAndDetectLoops(state, logId);
+  // ── Zero-output guard (issue #64) ──
+  // Non-streaming path would return {content:""} with stop — same empty bug as streaming
+  const filteredCheck = cleanTextOfXmlArtifacts(state.lastFullContent).cleanedText?.trim() || '';
+  const isEmptyNs = state.toolCallsOut.length === 0 && !filteredCheck && !state.reasoningBuffer?.trim();
+  if (isEmptyNs) {
+    logStore.log('warn', 'chat', `[NonStream] Empty upstream response for ${logId} — returning error`);
+    logStore.addError(logId, 'Empty upstream response — no content, reasoning, or tool calls');
+    logStore.finalizeRequest(logId);
+    return c.json({ error: { message: 'Upstream returned empty response (no content or reasoning). This often happens when the conversation is too long and context was truncated. Try starting a new conversation or reducing history.', type: 'server_error', code: 'empty_upstream_response' } }, 502);
+  }
   const response = buildResponseFromState(state, ctx);
   logStore.finalizeRequest(logId);
   return response;

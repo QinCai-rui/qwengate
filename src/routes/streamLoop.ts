@@ -177,6 +177,52 @@ export async function handlePostStreamCompletion(
     const flushCleaned = pipelineResult.cleanText;
     const flushThinking = pipelineResult.thinking;
 
+    // ── Zero-output guard (issue #64) ─────────────────────────────
+    // If upstream finished with no text, no reasoning, and no tool calls,
+    // don't emit a successful empty response — emit a fallback error instead
+    // so clients (Hermes/OpenCode) don't hit deterministic empty retries.
+    const isEmptyOutput =
+      effectiveToolCallCount === 0 &&
+      !flushCleaned?.trim() &&
+      !flushThinking?.trim() &&
+      !streamState.reasoningBuffer?.trim() &&
+      !streamState.lastFullContent?.trim();
+    if (isEmptyOutput) {
+      const emptyMsg =
+        'Upstream returned empty response (no content or reasoning). This often happens when the conversation is too long and context was truncated. Try starting a new conversation or reducing history.';
+      logStore.log('warn', 'stream', `[Stream] Empty upstream response for ${logId} — emitting fallback error`);
+      logStore.addError(logId, 'Empty upstream response — no content, reasoning, or tool calls');
+      await writeEvent(streamWriter, buildChunkEvent(completionId, model, [makeChoice({ content: emptyMsg })]));
+      logStore.addProcessedOutput(logId, emptyMsg);
+      ampState.emittedOutputBytes += emptyMsg.length;
+      streamState.lastFullContent = emptyMsg;
+      // Fall through to usage/finish with content present
+      const usageEmpty = buildUsage(streamState.promptTokens, streamState.completionTokens, streamState.reasoningBuffer);
+      await writeEvent(
+        streamWriter,
+        buildChunkEvent(completionId, model, [makeChoice({}, 'stop')], includeUsage ? undefined : { usage: usageEmpty }),
+      );
+      if (includeUsage) {
+        await writeEvent(streamWriter, buildChunkEvent(completionId, model, [], { usage: usageEmpty }));
+      }
+      await streamWriter.write('data: [DONE]\n\n');
+      checkFinalAmplification(ampState, logId, resolvedEmail, logStore);
+      logStore.updateEntry(logId, (entry) => {
+        const now = Date.now();
+        const startedAt = new Date(entry.timestamp).getTime();
+        if (startedAt) entry.latency_ms = now - startedAt;
+        if (streamState.lastFullContent) entry.remainingText = streamState.lastFullContent;
+        if (streamState.reasoningBuffer) entry.reasoningContent = streamState.reasoningBuffer;
+        entry.finalResponse = {
+          finishReason: 'stop',
+          toolCallCount: 0,
+          contentPreview: emptyMsg.substring(0, 100),
+        };
+      });
+      logStore.finalizeRequest(logId);
+      return;
+    }
+
     if (flushThinking) {
       const thinkDelta = getSnapshotDelta(flushThinking, streamState.lastThinkingSnapshot);
       if (thinkDelta) {

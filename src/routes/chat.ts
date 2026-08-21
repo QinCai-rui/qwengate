@@ -122,9 +122,10 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
   } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
 
   // ── Inline content truncation ─────────────────────────────────
-  // Keep the most recent ~50k characters inline; push older history
+  // Keep the most recent ~120k characters inline; push older history
   // into context.txt so the model can reference it when needed.
-  const MAX_INLINE_CHARS = 50000;
+  // Qwen hard limit is 131072 chars — 120k leaves safe headroom.
+  const MAX_INLINE_CHARS = 120000;
   let inlineContent = processedMessages[0].content as string;
   let chatHistoryContent = '';
 
@@ -203,8 +204,37 @@ async function setupSession(messages: any[], body: OpenAIRequest, availableToken
         const file = await uploadLargeTextAsFile(accountEmail, combinedContent, 'context.txt');
         processedMessages[0] = { ...processedMessages[0], files: [file] };
       } catch (err: any) {
-        logStore.log('debug', 'chat', '[Chat] Failed to upload context file: ' + (err.message || err));
+        logStore.log('warn', 'chat', '[Chat] Failed to upload context file, falling back to inline: ' + (err.message || err));
+        // Fallback: restore lost context inline up to Qwen hard limit — prevents empty response when context.txt is lost
+        {
+          const pieces: string[] = [];
+          if (systemContent) pieces.push(systemContent);
+          if (toolResultsContent) pieces.push(toolResultsContent);
+          if (chatHistoryContent) pieces.push(chatHistoryContent);
+          pieces.push(inlineContent);
+          const original = pieces.join("\n\n");
+          const QWEN_LIMIT = 131072;
+          // Keep tail (most recent) if over limit
+          const fallback = original.length > QWEN_LIMIT ? original.slice(-QWEN_LIMIT) : original;
+          processedMessages[0] = { ...processedMessages[0], content: fallback };
+          logStore.log('warn', 'chat', `[Chat] Restored inline fallback ${fallback.length}/${original.length} chars after context.txt failure`);
+        }
       }
+    }
+
+    // If context was sliced but no file got attached (no account or upload skipped), restore inline — prevents empty/context-loss (issue #64)
+    if (chatHistoryContent && (!processedMessages[0].files || processedMessages[0].files.length === 0)) {
+      const pieces: string[] = [];
+      if (systemContent) pieces.push(systemContent);
+      if (toolResultsContent) pieces.push(toolResultsContent);
+      pieces.push(chatHistoryContent);
+      pieces.push(inlineContent);
+      const original = pieces.join("\n\n");
+      const QWEN_LIMIT = 131072;
+      const fallback = original.length > QWEN_LIMIT ? original.slice(-QWEN_LIMIT) : original;
+      processedMessages[0] = { ...processedMessages[0], content: fallback };
+      // clear sliced marker so we don't re-apply fallback after retry
+      chatHistoryContent = '';
     }
 
     // Attach uploaded images to the first message

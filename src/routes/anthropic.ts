@@ -313,7 +313,7 @@ async function setupAnthropicSession(
     toolResultsContent,
   } = buildQwenMessages(cleanedMessages, body, availableTokens, toolCalling);
 
-  const MAX_INLINE_CHARS = 50000;
+  const MAX_INLINE_CHARS = 120000;
   let inlineContent = processedMessages[0].content as string;
   let chatHistoryContent = '';
   if (typeof inlineContent === 'string' && inlineContent.length > MAX_INLINE_CHARS) {
@@ -384,8 +384,35 @@ async function setupAnthropicSession(
         const file = await uploadLargeTextAsFile(accountEmail, parts.join('\n\n'), 'context.txt');
         processedMessages[0] = { ...processedMessages[0], files: [file] };
       } catch (err: any) {
-        logStore.log('debug', 'chat', '[Anthropic] Failed to upload context file: ' + (err.message || err));
+        logStore.log('warn', 'chat', '[Anthropic] Failed to upload context file, falling back to inline: ' + (err.message || err));
+        // Fallback: restore lost context inline up to Qwen hard limit — prevents empty response when context.txt is lost
+        {
+          const pieces: string[] = [];
+          if (systemContent) pieces.push(systemContent);
+          if (toolResultsContent) pieces.push(toolResultsContent);
+          if (chatHistoryContent) pieces.push(chatHistoryContent);
+          pieces.push(inlineContent);
+          const original = pieces.join("\n\n");
+          const QWEN_LIMIT = 131072;
+          const fallback = original.length > QWEN_LIMIT ? original.slice(-QWEN_LIMIT) : original;
+          processedMessages[0] = { ...processedMessages[0], content: fallback };
+          logStore.log('warn', 'chat', `[Anthropic] Restored inline fallback ${fallback.length}/${original.length} chars after context.txt failure`);
+        }
       }
+    }
+
+    // If context was sliced but no file got attached (no account or upload skipped), restore inline — prevents empty/context-loss (issue #64)
+    if (chatHistoryContent && (!processedMessages[0].files || processedMessages[0].files.length === 0)) {
+      const pieces: string[] = [];
+      if (systemContent) pieces.push(systemContent);
+      if (toolResultsContent) pieces.push(toolResultsContent);
+      pieces.push(chatHistoryContent);
+      pieces.push(inlineContent);
+      const original = pieces.join("\n\n");
+      const QWEN_LIMIT = 131072;
+      const fallback = original.length > QWEN_LIMIT ? original.slice(-QWEN_LIMIT) : original;
+      processedMessages[0] = { ...processedMessages[0], content: fallback };
+      chatHistoryContent = '';
     }
 
     if (imageFiles.length > 0) {
@@ -889,6 +916,24 @@ async function handleAnthropicStream(
         'chat',
         `[Anthropic] Tool call summary: ${allToolCalls.length} raw → ${validToolCalls.length} valid → emitting ${validToolCalls.length} tool_use blocks`,
       );
+      // ── Zero-output guard (issue #64) ─────────────────────────
+      const anthropicIsEmpty = validToolCalls.length === 0 && !lastFullContent.trim() && !reasoningBuffer.trim();
+      if (anthropicIsEmpty) {
+        const emptyMsg = 'Upstream returned empty response (no content or reasoning). This often happens when the conversation is too long and context was truncated. Try starting a new conversation or reducing history.';
+        logStore.log('warn', 'chat', `[Anthropic] Empty upstream response for ${logId} — emitting fallback error`);
+        logStore.addError(logId, 'Empty upstream response — no content, reasoning, or tool calls');
+        if (!emittedTextBlock) {
+          await streamWriter.write(
+            `event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: textBlockIndex, content_block: { type: 'text', text: '' } })}\n\n`,
+          );
+          emittedTextBlock = true;
+        }
+        await streamWriter.write(
+          `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: textBlockIndex, delta: { type: 'text_delta', text: emptyMsg } })}\n\n`,
+        );
+        lastFullContent = emptyMsg;
+        hasEmittedContent = true;
+      }
       // Close text or thinking block
       if (emittedTextBlock) {
         await streamWriter.write(
