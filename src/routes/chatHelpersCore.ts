@@ -239,6 +239,11 @@ export function parseQwenErrorPayload(
       const msg = typeof payload.error === 'string' ? payload.error : payload.error.message || JSON.stringify(payload.error);
       return { message: `Qwen upstream error: ${msg}`, status: 502 };
     }
+    if (Array.isArray(payload?.ret) && payload.ret[0]) {
+      const code = String(payload.ret[0]);
+      const details = payload.ret[1] || 'Qwen rejected the request';
+      return { message: `Qwen upstream error: ${code}: ${details}`, status: 502 };
+    }
   } catch {
     return null;
   }
@@ -318,6 +323,9 @@ export interface ToolCallProcessingOptions {
   toolSpamGuard: ToolSpamGuard;
   correctionPrompts: string[];
   maxToolCalls: number;
+  toolCalling?: boolean;
+  allowedToolNames?: Set<string>;
+  toolChoice?: unknown;
 }
 
 export function processToolCallsThroughGuard(toolCalls: any[], toolCallsOut: any[], options: ToolCallProcessingOptions): void {
@@ -334,6 +342,15 @@ export function processToolCallsThroughGuard(toolCalls: any[], toolCallsOut: any
   }
 
   for (const tc of toolCalls) {
+    if (options.toolCalling === false || options.toolChoice === 'none') {
+      correctionPrompts.push('[TOOL CALL BLOCKED] Tool calling is disabled for this request. Respond with normal text.');
+      continue;
+    }
+    if (options.allowedToolNames && !options.allowedToolNames.has(tc.name)) {
+      logStore.recordHallucinatedToolName();
+      correctionPrompts.push(`[TOOL CALL BLOCKED] "${tc.name}" was not declared by the client. Use only declared tools.`);
+      continue;
+    }
     const guard = validateSingleToolCall(tc);
     if (!guard.ok) {
       correctionPrompts.push(guard.correctionPrompt);
@@ -363,7 +380,7 @@ export function processToolCallsThroughGuard(toolCalls: any[], toolCallsOut: any
     });
     if (logParsed) {
       logStore.updateEntry(logId, (entry: any) => {
-        entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
+        entry.parsedToolCalls.push({ name: tc.sourceName || tc.name, args: JSON.stringify(tc.arguments) });
       });
     }
   }

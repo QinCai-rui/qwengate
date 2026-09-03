@@ -187,5 +187,4 @@ async function loadUsage() {
   renderModelRows(data.accounts);
 }
 
-loadUsage();
-setInterval(loadUsage, 15000);
+createPoller(loadUsage, 15000);

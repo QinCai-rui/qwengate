@@ -13,30 +13,29 @@ function updateUptime() {
 async function refreshHealth() {
   var data = await apiFetch('/health');
   if (!data) return;
-  var accts = data.accounts || {};
-  var total = accts.total != null ? accts.total : 0;
-  var avail = accts.available != null ? accts.available : 0;
-  setText('kpiTotalAccounts', total);
-  setText('kpiTotalAccountsSub', avail + ' available');
-  var pct = total > 0 ? Math.round((avail / total) * 100) : 0;
-  setText('kpiAuthenticatedSub', pct + '% available');
-  if (data.uptime != null) {
-    uptimeSeconds = data.uptime;
-    uptimeBase = Date.now();
-    updateUptime();
-  }
   var acctData = await apiFetch('/accounts');
   if (Array.isArray(acctData)) {
+    var total = acctData.length;
     var authed = 0;
+    var avail = 0;
     var totalReqs = 0;
     for (var i = 0; i < acctData.length; i++) {
       if (acctData[i].authenticated) authed++;
+      if (acctData[i].authenticated && !acctData[i].throttled && !acctData[i].disabled) avail++;
       totalReqs += acctData[i].totalRequests || 0;
     }
+    setText('kpiTotalAccounts', total);
+    setText('kpiTotalAccountsSub', avail + ' available');
     setText('kpiAuthenticated', authed);
     var authPct = total > 0 ? Math.round((authed / total) * 100) : 0;
     setText('kpiAuthenticatedSub', authPct + '% of ' + total);
     setText('kpiTotalRequests', totalReqs);
+  }
+  var uptime = await apiFetch('/metrics/uptime');
+  if (uptime && uptime.uptimeSeconds != null) {
+    uptimeSeconds = uptime.uptimeSeconds;
+    uptimeBase = Date.now();
+    updateUptime();
   }
 }
 /* ── Pool Stats ── */
@@ -111,7 +110,9 @@ async function refreshSysLogs() {
   var maxId = _lastSysLogId;
   for (var i = 0; i < data.length; i++) {
     var l = data[i];
-    if (!l.id || l.id <= _lastSysLogId) continue;
+    var logSeq = l.id && /^sys-(\d+)$/.test(l.id) ? Number(l.id.slice(4)) : 0;
+    var lastSeq = _lastSysLogId && /^sys-(\d+)$/.test(_lastSysLogId) ? Number(_lastSysLogId.slice(4)) : 0;
+    if (!l.id || (logSeq && logSeq <= lastSeq)) continue;
     var lvl = (l.level || 'info').toLowerCase();
     var cls = lvl === 'debug' ? 'log-debug' : lvl === 'warn' || lvl === 'warning' ? 'log-warn' : lvl === 'error' ? 'log-error' : 'log-info';
     html +=
@@ -134,7 +135,7 @@ async function refreshSysLogs() {
     if (lvl === 'error' || lvl === 'warn') {
       showNotif(lvl, l.category || '', l.message || '');
     }
-    if (l.id > maxId) maxId = l.id;
+    if (!maxId || logSeq > (maxId && /^sys-(\d+)$/.test(maxId) ? Number(maxId.slice(4)) : 0)) maxId = l.id;
   }
   if (!html) return;
   container.insertAdjacentHTML('afterbegin', html);
@@ -163,10 +164,6 @@ function showNotif(level, category, message) {
 }
 /* ── Init ── */
 function init() {
-  refreshHealth();
-  refreshPool();
-  refreshModelHealth();
-  refreshSysLogs();
   createPoller(refreshHealth, 2000);
   createPoller(refreshPool, 2000);
   createPoller(refreshSysLogs, 2000);

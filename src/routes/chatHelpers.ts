@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { modelRouter } from '../services/modelRouter.ts';
-import { buildFeatureConfig, createQwenStream, fetchQwenModels } from '../services/qwen.ts';
+import { buildFeatureConfig, createQwenStream, fetchQwenModels, resolveThinkingMode } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { THINK_TAG_NAMES, TOOL_CALL_KEYWORDS } from '../utils/tagNames.ts';
 import { pendingCorrections } from './chatHelpersCore.ts';
@@ -49,18 +49,20 @@ export interface QwenMessage {
 export interface BuildQwenMessagesResult {
   qwenMessages: QwenMessage[];
   systemContent?: string;
-  toolResultsContent?: string;
 }
+
+const MAX_INLINE_CONTEXT_CHARS = 100_000;
+const HISTORY_FILE_MARKER =
+  '<conversation-history-file>Earlier conversation history is attached in context.txt.</conversation-history-file>';
 
 // ── Business logic ───────────────────────────────────────────────
 
-export function buildQwenMessages(messages: any[], body: any, availableTokens: number, _toolCalling: boolean): BuildQwenMessagesResult {
+export function buildQwenMessages(messages: any[], body: any, _toolCalling: boolean): BuildQwenMessagesResult {
   const timestamp = Math.floor(Date.now() / 1000);
   const model = (body.model || '').replace('-no-thinking', '');
 
   const segments: string[] = [];
   const systemParts: string[] = [];
-  const toolResultObjects: any[] = [];
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
@@ -95,14 +97,7 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
 
       if (sanitized.length === 0) continue;
 
-      const charLimit = Math.floor(availableTokens * 3.0);
-      const truncated =
-        sanitized.length > charLimit
-          ? sanitized.substring(0, charLimit) +
-            `\n\n[TRUNCATED: input exceeded ${charLimit} characters (model: ${body.model}, available tokens: ${availableTokens})]`
-          : sanitized;
-
-      segments.push(`<user>\n${truncated}\n</user>`);
+      segments.push(`<user>\n${sanitized}\n</user>`);
     } else if (msg.role === 'assistant') {
       let assistantContent = contentStr || '';
       const reasoning = msg.reasoning_content;
@@ -148,32 +143,18 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
       }
 
       const truncated = compressToolResult(contentStr || '');
-      // Inline tool result so the model sees it directly in the prompt.
-      // Without this, results live ONLY in context.txt and the model loops
-      // calling the same tool when the file is missing/stale (issue #44).
-      // The context.txt copy is kept as a fallback for long conversations.
       const inlineName = escXml(toolName || 'unknown');
       const inlineResult = escXml(truncated);
       segments.push(`<tool-result tool="${inlineName}">\n${inlineResult}\n</tool-result>`);
-      toolResultObjects.push({
-        type: 'function',
-        tool: toolName || 'unknown',
-        result: {
-          success: true,
-          stdout: truncated,
-          stderr: '',
-          command: toolName || '',
-        },
-      });
     }
   }
 
   // Single user message with all history wrapped in <user>/<assist> tags
   let prompt = segments.length > 0 ? segments.join('\n\n') : '';
 
-  const featureConfig = buildFeatureConfig(true);
+  const featureConfig = buildFeatureConfig(resolveThinkingMode(body.model || '', body));
 
-  if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
+  if (_toolCalling && body.tool_choice !== 'none' && body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
     const localMcp: Record<string, any> = {};
     localMcp['★'] = {};
     const toolNames: string[] = [];
@@ -203,13 +184,9 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
   // Single message (Qwen API only accepts 1 message per chat)
   const fid = randomUUID();
   const systemContent = systemParts.length > 0 ? systemParts.join('\n\n') : undefined;
-  const formatToolResult = (r: {
-    type: string;
-    tool: string;
-    result: { success: boolean; stdout?: string; stderr?: string; command?: string };
-  }) =>
-    `<tool_result tool="${r.tool}" success="${r.result.success}">\n<command>${escXml(r.result.command || '')}</command>\n<stdout>${escXml(r.result.stdout || '')}</stdout>\n<stderr>${escXml(r.result.stderr || '')}</stderr>\n</tool_result>`;
-  const toolResultsContent = toolResultObjects.length > 0 ? toolResultObjects.map(formatToolResult).join('\n\n') : undefined;
+  if (systemContent) {
+    prompt = `<system-instructions>\n${systemContent}\n</system-instructions>${prompt ? `\n\n${prompt}` : ''}`;
+  }
   const qwenMessages: QwenMessage[] = [
     {
       fid,
@@ -229,7 +206,40 @@ export function buildQwenMessages(messages: any[], body: any, availableTokens: n
     },
   ];
 
-  return { qwenMessages, systemContent, toolResultsContent };
+  return { qwenMessages, systemContent };
+}
+
+/**
+ * Keep the current turn and instructions inline, moving only complete older
+ * conversation turns to a file before Qwen's web WAF rejects the request.
+ */
+export function detachOlderContext(qwenMessages: QwenMessage[]): string | undefined {
+  const message = qwenMessages[0];
+  if (!message || typeof message.content !== 'string' || message.content.length <= MAX_INLINE_CONTEXT_CHARS) return undefined;
+
+  const systemEnd = message.content.indexOf('</system-instructions>');
+  const prefixEnd = systemEnd >= 0 ? systemEnd + '</system-instructions>'.length : 0;
+  const prefix = message.content.slice(0, prefixEnd);
+  const history = message.content.slice(prefixEnd).replace(/^\n\n/, '');
+  const turns = history.split(/\n\n(?=<user>|<assist>)/);
+
+  let inlineLength = prefix.length + HISTORY_FILE_MARKER.length + 2;
+  let splitIndex = turns.length;
+  for (let index = turns.length - 1; index >= 0; index--) {
+    const nextLength = turns[index].length + (splitIndex < turns.length ? 2 : 0);
+    if (inlineLength + nextLength > MAX_INLINE_CONTEXT_CHARS) break;
+    inlineLength += nextLength;
+    splitIndex = index;
+  }
+
+  // A single oversized current turn must stay inline and let Qwen return its
+  // own size error. There is no older turn that can be safely detached.
+  if (splitIndex === 0 || splitIndex === turns.length) return undefined;
+
+  const detachedHistory = turns.slice(0, splitIndex).join('\n\n');
+  const recentHistory = turns.slice(splitIndex).join('\n\n');
+  message.content = `${prefix}${prefix ? '\n\n' : ''}${HISTORY_FILE_MARKER}\n\n${recentHistory}`;
+  return `<chat_history>\n${detachedHistory}\n</chat_history>`;
 }
 
 export async function handleImageModelFallback(body: any, messages: any[]): Promise<void> {
@@ -265,6 +275,7 @@ export async function getModelSpecs(body: any): Promise<{ maxContext: number; ma
 export async function acquireSessionWithCorrections(
   accountEmail: string | undefined,
   qwenMessages: QwenMessage[],
+  requestSignal?: AbortSignal,
 ): Promise<{
   session: any;
   qwenMessages: QwenMessage[];
@@ -272,7 +283,7 @@ export async function acquireSessionWithCorrections(
   sessionHeaders: any;
   resolvedEmail: string;
 }> {
-  const session = await sessionPool.acquire(accountEmail);
+  const session = await sessionPool.acquire(accountEmail, requestSignal);
   const prevCorrections =
     pendingCorrections.get(session.chatId) ||
     (accountEmail ? pendingCorrections.get(accountEmail) : undefined) ||
@@ -300,24 +311,28 @@ export async function acquireSessionWithCorrections(
 
 export async function createQwenStreamWithRetry(
   qwenMessages: QwenMessage[],
-  isThinkingModel: boolean,
+  thinkingMode: 'auto' | 'thinking' | 'fast',
   routedModel: string,
   chatId: string,
   nextParentId: string | null,
   resolvedEmail: string,
   tools?: unknown[],
   toolChoice?: unknown,
+  requestSignal?: AbortSignal,
+  requestHeaders?: { cookie?: string; userAgent?: string },
 ): Promise<{ stream: ReadableStream; abortController: AbortController; qwenLogFile?: string }> {
   try {
     const result = await createQwenStream(
       qwenMessages,
-      isThinkingModel,
+      thinkingMode,
       routedModel,
       chatId,
       nextParentId,
       resolvedEmail,
       tools,
       toolChoice,
+      requestSignal,
+      requestHeaders,
     );
     modelRouter.recordSuccess(routedModel);
     return { stream: result.stream, abortController: result.abortController, qwenLogFile: result.qwenLogFile };

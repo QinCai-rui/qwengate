@@ -198,7 +198,10 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
         headers['cookie'] = currentCookie ? `${currentCookie}; acw_tc=${freshAcwTc}` : `acw_tc=${freshAcwTc}`;
       }
 
-      const responseText = await response.text().catch(() => '');
+      const responseText = await response
+        .clone()
+        .text()
+        .catch(() => '');
       const isStillWaf = !responseText || responseText.includes('aliyun_waf') || responseText.includes('<html');
       if (!isStillWaf) {
         // The acw_tc refresh worked — response body is valid

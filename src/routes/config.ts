@@ -6,7 +6,7 @@ export const configRouter = new Hono();
 configRouter.get('/', (c) => {
   const all = config.getAll();
   const envOverrides = (Object.keys(DEFAULT_CONFIG) as (keyof typeof DEFAULT_CONFIG)[]).filter((key) => process.env[key] !== undefined);
-  return c.json({ config: all, envOverrides });
+  return c.json({ config: { ...all, API_KEY: '', DASHBOARD_PASSWORD: '' }, envOverrides });
 });
 
 configRouter.put('/', async (c) => {
@@ -27,7 +27,7 @@ configRouter.put('/', async (c) => {
   for (const key of Object.keys(body)) {
     if (isValidKey(key)) {
       const val = body[key];
-      if (typeof val !== 'string') {
+      if (typeof val !== 'string' || (key === 'DASHBOARD_PASSWORD' && val.length < 12)) {
         return c.json({ error: `Value for '${key}' must be a string` }, 400);
       }
       config.set(key, val);

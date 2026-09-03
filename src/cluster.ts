@@ -7,7 +7,7 @@
  * Or: npm run cluster
  */
 
-import { availableParallelism, cpus } from 'node:os';
+import { availableParallelism } from 'node:os';
 import { logStore } from './services/logStore.ts';
 import { isBun } from './utils/env.ts';
 
@@ -16,8 +16,17 @@ if (!isBun) {
   process.exit(1);
 }
 
-const numWorkers = availableParallelism?.() ?? cpus().length;
-logStore.log('debug', 'cluster', `\x1b[31m[cluster]\x1b[0m Starting ${numWorkers} workers...`);
+// The application owns in-memory account leases, sessions, logs, and circuit
+// breakers. Running multiple independent workers would corrupt those counters
+// and can make workers race over the same browser profiles. Until those stores
+// are moved behind shared IPC/persistence, run one correctness-preserving worker.
+const requestedWorkers = availableParallelism();
+const numWorkers = 1;
+logStore.log(
+  'warn',
+  'cluster',
+  `[cluster] Requested ${requestedWorkers} workers, using one worker because shared account/session state is not process-safe.`,
+);
 
 interface Worker {
   process: ReturnType<typeof Bun.spawn>;

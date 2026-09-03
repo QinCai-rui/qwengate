@@ -4,19 +4,28 @@
  * Handles persistent browser profiles, auto-fill login, and token refresh via profiles.
  */
 
+import crypto from 'node:crypto';
 import { launchPersistentContext as cloakPersistentContext } from 'cloakbrowser';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import type { Cookie } from 'playwright';
 import { projectPath } from '../utils/paths.ts';
 import { logStore } from './logStore.ts';
 
 export function getProfileDir(email: string): string {
-  const safe = email
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]/g, '_');
-  const dir = projectPath('.qwen', 'browser-profiles', safe);
+  const normalized = email.toLowerCase().trim();
+  const safe = normalized.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const suffix = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 12);
+  const base = projectPath('.qwen', 'browser-profiles');
+  const dir = join(base, `${safe}-${suffix}`);
+  const legacy = join(base, safe);
+  if (!existsSync(dir) && existsSync(legacy)) {
+    try {
+      renameSync(legacy, dir);
+    } catch {
+      // Keep the legacy directory as a last-resort compatibility path.
+    }
+  }
   mkdirSync(dir, { recursive: true });
   // Set profile name to email so the Chrome window shows the account
   const prefsFile = `${dir}/Preferences`;

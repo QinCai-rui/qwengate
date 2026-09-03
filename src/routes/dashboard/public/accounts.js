@@ -40,8 +40,8 @@ function getAuthStatus(acct) {
     return 'pending';
   }
   if (acct.throttled) return 'throttled';
-  if (acct.authenticated) return 'live';
   if (acct.tokenExpiresInMs != null && acct.tokenExpiresInMs < 0) return 'expired';
+  if (acct.authenticated) return 'live';
   return 'unknown';
 }
 
@@ -107,11 +107,11 @@ function renderAccountsTable(accts) {
       fmtTTL(a.tokenExpiresInMs) +
       '</td>' +
       '<td>' +
-      '<span class="toggle-trigger" onclick="handleToggleDisabled(event,\'' +
+      '<span class="toggle-trigger" data-action="toggle" data-email="' +
       escHtml(a.email) +
-      "'," +
+      '" data-disabled="' +
       a.disabled +
-      ')"' +
+      '"' +
       '><span class="toggle-track' +
       (a.disabled ? ' active' : '') +
       '">' +
@@ -218,7 +218,7 @@ function handleRemove(email) {
 /* ══════════════════════════════════════════════════
    Multi-Tab Browser Sessions (inline panel)
    ══════════════════════════════════════════════════ */
-var browserSessions = []; // [{email, password, ws, canvasWrap, tab, statusText, loadingEl, dotEl}]
+var browserSessions = []; // [{email, ws, canvasWrap, tab, statusText, loadingEl, dotEl}]
 var activeSessionIdx = -1;
 
 /* ── Login button handler ── */
@@ -232,30 +232,20 @@ function handleManualLogin(email) {
     }
   }
 
-  var btn = document.querySelector('button[data-email="' + escHtml(email) + '"][data-action="login"]');
+  var btn = null;
+  document.querySelectorAll('button[data-action="login"]').forEach(function (candidate) {
+    if (candidate.getAttribute('data-email') === email) btn = candidate;
+  });
   if (btn) {
     btn.textContent = 'Authorizing...';
     btn.disabled = true;
   }
   setError(null);
 
-  /* Fetch password, then open inline tab */
+  /* The server resolves the password; never expose it to browser JavaScript. */
   (async function () {
     try {
-      var pwRes = await fetch('/api/accounts/' + encodeURIComponent(email) + '/password', {
-        method: 'GET',
-        headers: authHeaders(),
-      });
-      var pwData;
-      try {
-        pwData = await pwRes.json();
-      } catch {
-        pwData = null;
-      }
-      if (!pwRes.ok || !pwData || !pwData.password) {
-        throw new Error(pwData && pwData.error && pwData.error.message ? pwData.error.message : 'Could not retrieve password');
-      }
-      openBrowserTab(email, pwData.password);
+      openBrowserTab(email);
     } catch (e) {
       setError(e.message);
       showToast(e.message, 'error');
@@ -268,7 +258,7 @@ function handleManualLogin(email) {
 }
 
 /* ── Create a new browser tab ── */
-function openBrowserTab(email, password) {
+function openBrowserTab(email) {
   var panel = document.getElementById('browserPanel');
   var tabBar = document.getElementById('browserTabBar');
   var viewport = document.getElementById('browserViewportInline');
@@ -305,10 +295,8 @@ function openBrowserTab(email, password) {
   canvasWrap.appendChild(loading);
   viewport.appendChild(canvasWrap);
 
-  var idx = browserSessions.length;
   var session = {
     email: email,
-    password: password,
     ws: null,
     canvasWrap: canvasWrap,
     canvas: canvas,
@@ -318,21 +306,24 @@ function openBrowserTab(email, password) {
     statusText: 'Connecting...',
   };
   browserSessions.push(session);
+  function sessionIndex() {
+    return browserSessions.indexOf(session);
+  }
 
   /* Tab click → switch */
   tab.addEventListener('click', function (e) {
     if (e.target === closeBtn) return;
-    switchTab(idx);
+    switchTab(sessionIndex());
   });
 
   /* Close tab click */
   closeBtn.addEventListener('click', function (e) {
     e.stopPropagation();
-    closeBrowserTab(idx);
+    closeBrowserTab(sessionIndex());
   });
 
   /* Switch to new tab */
-  switchTab(idx);
+  switchTab(sessionIndex());
 
   /* Update status bar */
   statusInline.textContent = email + ' — Connecting...';
@@ -341,7 +332,7 @@ function openBrowserTab(email, password) {
   fetch('/api/screencast/launch', {
     method: 'POST',
     headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-    body: JSON.stringify({ email: email, password: password }),
+    body: JSON.stringify({ email: email }),
   })
     .then(function (res) {
       return res.json();
@@ -351,13 +342,13 @@ function openBrowserTab(email, password) {
 
       var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       var wsUrl = proto + '//' + location.host + data.wsUrl;
-      var ws = new WebSocket(wsUrl);
+      var ws = new WebSocket(wsUrl, ['qg.' + data.token]);
       session.ws = ws;
 
       ws.onopen = function () {
         dot.className = 'browser-tab-dot connecting';
         session.statusText = 'Connected — loading...';
-        if (activeSessionIdx === idx) statusInline.textContent = email + ' — Connected — loading...';
+        if (activeSessionIdx === sessionIndex()) statusInline.textContent = email + ' — Connected — loading...';
       };
 
       ws.onmessage = function (evt) {
@@ -372,7 +363,7 @@ function openBrowserTab(email, password) {
           loading.classList.add('hidden');
           dot.className = 'browser-tab-dot live';
           session.statusText = 'Live — ' + (msg.width || 1280) + 'x' + (msg.height || 800);
-          if (activeSessionIdx === idx) statusInline.textContent = email + ' — ' + session.statusText;
+          if (activeSessionIdx === sessionIndex()) statusInline.textContent = email + ' — ' + session.statusText;
           var img = new Image();
           img.onload = function () {
             canvas.width = img.width;
@@ -383,22 +374,22 @@ function openBrowserTab(email, password) {
         } else if (msg.type === 'login_complete') {
           dot.className = 'browser-tab-dot live';
           session.statusText = 'Login complete!';
-          if (activeSessionIdx === idx) statusInline.textContent = email + ' — Login complete!';
+          if (activeSessionIdx === sessionIndex()) statusInline.textContent = email + ' — Login complete!';
           showToast('Login completed for ' + email, 'success');
           pollAuth(email, 5);
           loadAccounts();
         } else if (msg.type === 'browser_closed') {
           dot.className = 'browser-tab-dot closed';
           session.statusText = 'Browser closed';
-          if (activeSessionIdx === idx) statusInline.textContent = email + ' — Browser closed';
+          if (activeSessionIdx === sessionIndex()) statusInline.textContent = email + ' — Browser closed';
         } else if (msg.type === 'session_closed') {
           dot.className = 'browser-tab-dot closed';
           session.statusText = 'Session ended';
-          if (activeSessionIdx === idx) statusInline.textContent = email + ' — Session ended';
+          if (activeSessionIdx === sessionIndex()) statusInline.textContent = email + ' — Session ended';
         } else if (msg.type === 'error') {
           dot.className = 'browser-tab-dot error';
           session.statusText = 'Error: ' + msg.message;
-          if (activeSessionIdx === idx) statusInline.textContent = email + ' — Error: ' + msg.message;
+          if (activeSessionIdx === sessionIndex()) statusInline.textContent = email + ' — Error: ' + msg.message;
           showToast(msg.message, 'error');
         }
       };
@@ -406,7 +397,7 @@ function openBrowserTab(email, password) {
       ws.onerror = function () {
         dot.className = 'browser-tab-dot error';
         session.statusText = 'Connection error';
-        if (activeSessionIdx === idx) statusInline.textContent = email + ' — Connection error';
+        if (activeSessionIdx === sessionIndex()) statusInline.textContent = email + ' — Connection error';
         showToast('WebSocket failed for ' + email, 'error');
       };
 
@@ -420,7 +411,7 @@ function openBrowserTab(email, password) {
     .catch(function (e) {
       dot.className = 'browser-tab-dot error';
       session.statusText = 'Error: ' + e.message;
-      if (activeSessionIdx === idx) statusInline.textContent = email + ' — Error: ' + e.message;
+      if (activeSessionIdx === sessionIndex()) statusInline.textContent = email + ' — Error: ' + e.message;
       showToast(e.message, 'error');
     });
 }
@@ -458,7 +449,7 @@ function closeBrowserTab(idx) {
   /* Close WebSocket */
   if (s.ws) {
     try {
-      s.ws.send(JSON.stringify({ type: 'close' }));
+      if (s.ws.readyState === WebSocket.OPEN) s.ws.send(JSON.stringify({ type: 'close' }));
     } catch {}
     s.ws.close();
     s.ws = null;
@@ -524,6 +515,9 @@ function closeAllBrowserTabs() {
 
 /* ── Canvas input → WebSocket ── */
 function setupCanvasInput(canvas, ws) {
+  function send(message) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+  }
   function getCanvasCoords(e) {
     var rect = canvas.getBoundingClientRect();
     var scaleX = canvas.width / rect.width;
@@ -536,24 +530,24 @@ function setupCanvasInput(canvas, ws) {
 
   canvas.addEventListener('click', function (e) {
     var coords = getCanvasCoords(e);
-    ws.send(JSON.stringify({ type: 'input', event: { type: 'click', x: coords.x, y: coords.y, button: e.button } }));
+    send({ type: 'input', event: { type: 'click', x: coords.x, y: coords.y, button: e.button } });
   });
 
   canvas.addEventListener('mousemove', function (e) {
     var coords = getCanvasCoords(e);
-    ws.send(JSON.stringify({ type: 'input', event: { type: 'mousemove', x: coords.x, y: coords.y, button: e.button } }));
+    send({ type: 'input', event: { type: 'mousemove', x: coords.x, y: coords.y, button: e.button } });
   });
 
   canvas.addEventListener('mousedown', function (e) {
     e.preventDefault();
     canvas.focus();
     var coords = getCanvasCoords(e);
-    ws.send(JSON.stringify({ type: 'input', event: { type: 'mousedown', x: coords.x, y: coords.y, button: e.button } }));
+    send({ type: 'input', event: { type: 'mousedown', x: coords.x, y: coords.y, button: e.button } });
   });
 
   canvas.addEventListener('mouseup', function (e) {
     var coords = getCanvasCoords(e);
-    ws.send(JSON.stringify({ type: 'input', event: { type: 'mouseup', x: coords.x, y: coords.y, button: e.button } }));
+    send({ type: 'input', event: { type: 'mouseup', x: coords.x, y: coords.y, button: e.button } });
   });
 
   canvas.addEventListener(
@@ -562,7 +556,7 @@ function setupCanvasInput(canvas, ws) {
       e.preventDefault();
       var coords = getCanvasCoords(e);
       var dir = e.deltaY > 0 ? 1 : e.deltaY < 0 ? -1 : 0;
-      ws.send(JSON.stringify({ type: 'input', event: { type: 'scroll', x: coords.x, y: coords.y, deltaY: dir } }));
+      send({ type: 'input', event: { type: 'scroll', x: coords.x, y: coords.y, deltaY: dir } });
     },
     { passive: false },
   );
@@ -576,32 +570,17 @@ function setupCanvasInput(canvas, ws) {
 
   canvas.addEventListener('keydown', function (e) {
     e.preventDefault();
-    ws.send(
-      JSON.stringify({
-        type: 'input',
-        event: { type: 'keydown', key: e.key, code: e.code, text: e.key.length === 1 ? e.key : '' },
-      }),
-    );
+    send({ type: 'input', event: { type: 'keydown', key: e.key, code: e.code, text: e.key.length === 1 ? e.key : '' } });
   });
 
   canvas.addEventListener('keyup', function (e) {
     e.preventDefault();
-    ws.send(
-      JSON.stringify({
-        type: 'input',
-        event: { type: 'keyup', key: e.key, code: e.code },
-      }),
-    );
+    send({ type: 'input', event: { type: 'keyup', key: e.key, code: e.code } });
   });
 
   canvas.addEventListener('keypress', function (e) {
     e.preventDefault();
-    ws.send(
-      JSON.stringify({
-        type: 'input',
-        event: { type: 'keypress', key: e.key, code: e.code, text: e.key },
-      }),
-    );
+    send({ type: 'input', event: { type: 'keypress', key: e.key, code: e.code, text: e.key } });
   });
 }
 
@@ -666,9 +645,6 @@ async function handleToggleDisabled(event, email, currentlyDisabled) {
 
 /* ── Init ── */
 function init() {
-  /* Load on start */
-  loadAccounts();
-
   /* Auto-poll every 2 seconds */
   createPoller(loadAccounts, 2000);
 
@@ -688,12 +664,14 @@ function init() {
   /* Table button delegation */
   document.getElementById('acctTable').addEventListener('click', function (e) {
     var btn = e.target;
-    if (btn.tagName !== 'BUTTON') return;
+    if (btn.closest) btn = btn.closest('[data-action]');
+    if (!btn) return;
     var email = btn.getAttribute('data-email');
     var action = btn.getAttribute('data-action');
     if (!email || !action) return;
     if (action === 'login') handleManualLogin(email);
     else if (action === 'remove') handleRemove(email);
+    else if (action === 'toggle') handleToggleDisabled(e, email, btn.getAttribute('data-disabled') === 'true');
   });
 
   /* Close confirm modal on overlay click */

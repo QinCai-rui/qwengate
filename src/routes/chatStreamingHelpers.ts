@@ -11,7 +11,7 @@ import {
   extractDeltaContent,
   getSnapshotDelta,
 } from './chatHelpers.ts';
-
+import { processToolCallsThroughGuard, ToolSpamGuard } from './chatHelpersCore.ts';
 import { writeContentDelta, writeReasoningEvent, writeToolCallEvent } from './writeHelpers.ts';
 
 // ── Constants ──────────────────────────────────────────────────────
@@ -63,6 +63,7 @@ export function extractLocalMcpToolCalls(sseData: any): ParsedToolCall[] {
       toolCalls.push({
         id: `call_${crypto.randomUUID()}`,
         name,
+        sourceName: rawName,
         arguments: tool.params,
       });
     }
@@ -103,6 +104,9 @@ export interface StreamProcessingState {
    * of `<` in non-XML text (e.g. "x < 3").
    */
   pendingChunk: string;
+  toolSpamGuard?: ToolSpamGuard;
+  correctionPrompts?: string[];
+  outputLimitReached?: boolean;
 }
 
 export interface StreamProcessingCtx {
@@ -118,9 +122,36 @@ export interface StreamProcessingCtx {
   qwenAbortController: AbortController;
   qwenLogFile?: string;
   sseEventCount?: number;
+  toolCalling?: boolean;
+  allowedToolNames?: Set<string>;
+  toolChoice?: unknown;
+  maxOutputChars?: number;
+  stopSequences?: string[];
 }
 
 export type ProcessStreamResult = 'continue' | 'break_stream';
+
+function guardStreamToolCalls(toolCalls: ParsedToolCall[], state: StreamProcessingState, ctx: StreamProcessingCtx): ParsedToolCall[] {
+  const accepted: any[] = [];
+  const corrections: string[] = [];
+  if (!state.toolSpamGuard) state.toolSpamGuard = new ToolSpamGuard();
+  if (!state.correctionPrompts) state.correctionPrompts = [];
+  processToolCallsThroughGuard(toolCalls, accepted, {
+    logId: ctx.logId,
+    toolSpamGuard: state.toolSpamGuard,
+    correctionPrompts: corrections,
+    maxToolCalls: 8,
+    toolCalling: ctx.toolCalling,
+    allowedToolNames: ctx.allowedToolNames,
+    toolChoice: ctx.toolChoice,
+    logParsed: true,
+  });
+  if (corrections.length) {
+    state.correctionPrompts.push(...corrections);
+    for (const correction of corrections) logStore.addError(ctx.logId, correction);
+  }
+  return accepted.map((tc) => ({ id: tc.id, name: tc.function.name, arguments: JSON.parse(tc.function.arguments) }));
+}
 
 /**
  * Shared content filter pipeline standardizing the order:
@@ -181,6 +212,21 @@ export async function processStreamData(data: any, state: StreamProcessingState,
     state.upstreamError = `Qwen upstream error: ${errMsg}`;
     return 'break_stream';
   }
+  // Qwen can return bot-detection/CAPTCHA failures as a plain JSON body with
+  // HTTP 200 instead of an SSE error event. Treat that response as an error so
+  // the client receives a visible failure instead of an empty completion.
+  if (Array.isArray(data.ret) && data.ret[0]) {
+    const code = String(data.ret[0]);
+    const details = data.ret[1] || 'Qwen rejected the request';
+    const errMsg = `Qwen upstream error: ${code}: ${details}`;
+    logStore.addError(logId, errMsg);
+    logStore.updateEntry(logId, (entry) => {
+      entry.finalResponse = entry.finalResponse || { finishReason: '', toolCallCount: 0, contentPreview: '' };
+      entry.finalResponse.finishReason = 'error';
+    });
+    state.upstreamError = errMsg;
+    return 'break_stream';
+  }
   const deltaStatus = data.choices?.[0]?.delta?.status;
   if (deltaStatus === 'error') {
     logStore.addError(logId, `Qwen stream delta returned error status`);
@@ -205,15 +251,11 @@ export async function processStreamData(data: any, state: StreamProcessingState,
       });
 
       if (newToolCalls.length > 0) {
-        logStore.updateEntry(logId, (entry) => {
-          for (const tc of newToolCalls) {
-            entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.arguments) });
-          }
-        });
-        for (let i = 0; i < newToolCalls.length; i++) {
-          await writeToolCallEvent(streamWriter, completionId, model, newToolCalls[i], ctx.emittedToolCallCount + i);
+        const accepted = guardStreamToolCalls(newToolCalls, state, ctx);
+        for (let i = 0; i < accepted.length; i++) {
+          await writeToolCallEvent(streamWriter, completionId, model, accepted[i], ctx.emittedToolCallCount + i);
         }
-        ctx.emittedToolCallCount += newToolCalls.length;
+        ctx.emittedToolCallCount += accepted.length;
       }
       if (ctx.qwenLogFile && localToolCalls.length > 0) {
         logQwenSSE(ctx.qwenLogFile, ctx.sseEventCount || 0, localToolCalls.length, localToolCalls);
@@ -311,13 +353,36 @@ export async function processStreamData(data: any, state: StreamProcessingState,
   }
 
   // At this point the text won't be delayed. Accumulate and process.
+  const previousContentLength = state.lastFullContent.length;
+  const remainingOutput = ctx.maxOutputChars ? Math.max(0, ctx.maxOutputChars - previousContentLength) : rawText.length;
+  if (ctx.maxOutputChars && rawText.length > remainingOutput) {
+    rawText = rawText.slice(0, remainingOutput);
+    state.outputLimitReached = true;
+  }
+  if (ctx.stopSequences?.length) {
+    const candidateContent = state.lastFullContent + rawText;
+    const stopAt = ctx.stopSequences
+      .map((stop) => candidateContent.indexOf(stop))
+      .filter((i) => i >= 0)
+      .sort((a, b) => a - b)[0];
+    if (stopAt !== undefined) {
+      rawText = rawText.slice(0, Math.max(0, stopAt - previousContentLength));
+      state.outputLimitReached = true;
+    }
+  }
   state.lastRawContent += rawText;
   state.lastFullContent += rawText;
 
   // Performance: skip all downstream work when there's no new raw content.
   // This avoids the expensive parseXmlToolCalls (100KB buffer) and
   // filterContentPipeline on thinking-only or empty chunks.
-  if (!rawText) return 'continue';
+  if (!rawText) {
+    if (state.outputLimitReached) {
+      ctx.qwenAbortController.abort();
+      return 'break_stream';
+    }
+    return 'continue';
+  }
 
   // Track tool call depth to suppress content leaks from chunk-boundary fragments
   // When inside a tool call block (depth > 0), don't accumulate into
@@ -340,19 +405,15 @@ export async function processStreamData(data: any, state: StreamProcessingState,
       return true;
     });
 
-    if (newToolCalls.length > 0) {
-      logStore.updateEntry(logId, (entry) => {
-        for (const tc of newToolCalls) {
-          entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.parameters) });
-        }
-      });
-    }
-
-    for (const [i, tc] of newToolCalls.entries()) {
-      const parsed = xmlToolCallToParsed(tc, ctx.emittedToolCallCount + i);
+    const accepted = guardStreamToolCalls(
+      newToolCalls.map((tc) => xmlToolCallToParsed(tc, 0)),
+      state,
+      ctx,
+    );
+    for (const [i, parsed] of accepted.entries()) {
       await writeToolCallEvent(streamWriter, completionId, model, parsed, ctx.emittedToolCallCount + i);
     }
-    ctx.emittedToolCallCount += newToolCalls.length;
+    ctx.emittedToolCallCount += accepted.length;
   }
 
   // Truncate lastFullContent to prevent unbounded growth (M-10)
@@ -429,6 +490,9 @@ export async function processStreamData(data: any, state: StreamProcessingState,
     }
   }
 
-  if (streamFinished) return 'break_stream';
+  if (streamFinished || state.outputLimitReached) {
+    if (state.outputLimitReached) ctx.qwenAbortController.abort();
+    return 'break_stream';
+  }
   return 'continue';
 }

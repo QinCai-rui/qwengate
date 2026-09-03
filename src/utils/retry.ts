@@ -22,6 +22,8 @@ export interface RetryConfig {
   attemptTimeoutMs?: number;
   /** Circuit breaker instance to use (optional). If provided, open circuit = immediate rejection. */
   circuitBreaker?: CircuitBreaker;
+  /** Abort the current attempt and stop retrying when the caller disconnects. */
+  signal?: AbortSignal;
 }
 
 function getDefaultRetryConfig(): Required<RetryConfig> {
@@ -33,6 +35,7 @@ function getDefaultRetryConfig(): Required<RetryConfig> {
     nonRetryableStatuses: [400, 401, 403, 404, 405, 409, 410, 411, 412, 413, 414, 415, 418],
     attemptTimeoutMs: 30000,
     circuitBreaker: undefined as never,
+    signal: undefined as never,
   };
 }
 
@@ -259,14 +262,25 @@ export function isRetryable(error: unknown, httpStatus?: number): boolean {
 /**
  * Sleep for the specified duration.
  */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new DOMException('Retry aborted', 'AbortError'));
+    const timer = setTimeout(resolve, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('Retry aborted', 'AbortError'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout?: () => void): Promise<T> {
   if (timeoutMs <= 0) return promise;
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new AttemptTimeoutError(timeoutMs)), timeoutMs);
+    const timer = setTimeout(() => {
+      onTimeout?.();
+      reject(new AttemptTimeoutError(timeoutMs));
+    }, timeoutMs);
     promise.then(
       (val) => {
         clearTimeout(timer);
@@ -294,7 +308,7 @@ export function getRetryConfigFromEnv(): Required<RetryConfig> {
   return { ...DEFAULT_CONFIG, ...envConfig };
 }
 
-export async function withRetry<T>(fn: () => Promise<T>, config?: RetryConfig): Promise<T> {
+export async function withRetry<T>(fn: (signal: AbortSignal) => Promise<T>, config?: RetryConfig): Promise<T> {
   const cfg: Required<RetryConfig> = {
     ...DEFAULT_CONFIG,
     ...getRetryConfigFromEnv(),
@@ -309,12 +323,17 @@ export async function withRetry<T>(fn: () => Promise<T>, config?: RetryConfig): 
   let delay = cfg.baseDelayMs;
 
   for (let attempt = 0; attempt <= cfg.maxRetries; attempt++) {
+    const attemptController = new AbortController();
+    const abortAttempt = () => attemptController.abort();
+    cfg.signal?.addEventListener('abort', abortAttempt, { once: true });
     try {
-      const result = await withTimeout(fn(), cfg.attemptTimeoutMs);
+      if (cfg.signal?.aborted) throw new DOMException('Retry aborted', 'AbortError');
+      const result = await withTimeout(fn(attemptController.signal), cfg.attemptTimeoutMs, () => attemptController.abort());
       if (cfg.circuitBreaker) await cfg.circuitBreaker.recordSuccess();
       return result;
     } catch (error: unknown) {
       lastError = error;
+      if (cfg.signal?.aborted) throw error;
 
       let httpStatus: number | undefined;
       if (error && typeof error === 'object') {
@@ -353,9 +372,11 @@ export async function withRetry<T>(fn: () => Promise<T>, config?: RetryConfig): 
         'retry',
         `[Retry] attempt ${attempt + 1}/${cfg.maxRetries + 1} failed (${httpStatus || errorName}: ${errorMsg}), retrying in ${Math.round(actualDelay)}ms...`,
       );
-      await sleep(actualDelay);
+      await sleep(actualDelay, cfg.signal);
 
       delay = Math.min(delay * cfg.backoffMultiplier, cfg.maxDelayMs);
+    } finally {
+      cfg.signal?.removeEventListener('abort', abortAttempt);
     }
   }
 

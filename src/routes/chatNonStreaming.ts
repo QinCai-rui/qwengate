@@ -1,4 +1,6 @@
 import { Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
+import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { detectParallelToolLoop } from '../tools/guard.ts';
@@ -30,6 +32,7 @@ export interface NonStreamingContext {
   sessionHeaders: any;
   toolCalling: boolean;
   cleanOutput: boolean;
+  qwenAbortController?: AbortController;
 }
 
 interface StreamProcessorState {
@@ -47,6 +50,9 @@ interface StreamProcessorState {
   completionTokens: number;
   promptTokens: number;
   nextParentId: string | null;
+  upstreamError?: string;
+  upstreamStatus?: number;
+  outputLimitReached?: boolean;
 }
 
 function buildPromptString(messages: Message[]): string {
@@ -111,6 +117,7 @@ function processThinkingDelta(delta: any, state: StreamProcessorState): void {
 }
 
 function processAnswerDelta(delta: any, state: StreamProcessorState, ctx: NonStreamingContext): void {
+  if (state.outputLimitReached) return;
   if (delta.content === undefined) return;
   const vStr = delta.content || '';
   if (!vStr || vStr === 'FINISHED') return;
@@ -126,6 +133,21 @@ function processAnswerDelta(delta: any, state: StreamProcessorState, ctx: NonStr
     }
   }
 
+  const maxOutputChars = ((ctx.body.max_completion_tokens ?? ctx.body.max_tokens) || 1_000_000) * 4;
+  if (state.lastFullContent.length > maxOutputChars) {
+    state.lastFullContent = state.lastFullContent.slice(0, maxOutputChars);
+    state.outputLimitReached = true;
+  }
+  const stops = ctx.body.stop ? (Array.isArray(ctx.body.stop) ? ctx.body.stop : [ctx.body.stop]) : [];
+  const stopAt = stops
+    .map((stop) => state.lastFullContent.indexOf(stop))
+    .filter((i) => i >= 0)
+    .sort((a, b) => a - b)[0];
+  if (stopAt !== undefined) {
+    state.lastFullContent = state.lastFullContent.slice(0, stopAt);
+    state.outputLimitReached = true;
+  }
+
   const contentToCheck = state.lastFullContent.substring(state.lastParsedPosition);
   if (contentToCheck.length > 0) {
     const { toolCalls } = parseXmlToolCalls(contentToCheck);
@@ -136,6 +158,9 @@ function processAnswerDelta(delta: any, state: StreamProcessorState, ctx: NonStr
         toolSpamGuard: state.toolSpamGuard,
         correctionPrompts: state.correctionPrompts,
         maxToolCalls: MAX_TOOL_CALLS_PER_TURN,
+        toolCalling: ctx.toolCalling,
+        allowedToolNames: new Set((ctx.body.tools || []).map((t: any) => t.function?.name || t.name).filter(Boolean)),
+        toolChoice: ctx.body.tool_choice,
         logParsed: true,
       });
     }
@@ -162,11 +187,23 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
   if (chunk.error) {
     const errMsg = typeof chunk.error === 'string' ? chunk.error : chunk.error.message || JSON.stringify(chunk.error);
     logStore.addError(ctx.logId, `Qwen upstream SSE error: ${errMsg}`);
+    state.upstreamError = `Qwen upstream error: ${errMsg}`;
+    state.upstreamStatus = 502;
+    return;
+  }
+  if (chunk.success === false || (Array.isArray(chunk.ret) && chunk.ret[0])) {
+    const code = chunk.data?.code || chunk.code || chunk.ret?.[0] || 'UpstreamError';
+    const details = chunk.data?.details || chunk.message || chunk.ret?.[1] || 'Qwen returned an error';
+    state.upstreamError = `Qwen upstream error: ${code}: ${details}`;
+    state.upstreamStatus = code === 'RateLimited' ? 429 : 502;
+    logStore.addError(ctx.logId, state.upstreamError);
     return;
   }
   const deltaStatus = chunk.choices?.[0]?.delta?.status;
   if (deltaStatus === 'error') {
     logStore.addError(ctx.logId, 'Qwen stream delta returned error status');
+    state.upstreamError = 'Qwen stream delta returned error status';
+    state.upstreamStatus = 502;
     return;
   }
 
@@ -211,13 +248,17 @@ function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonSt
         toolSpamGuard: state.toolSpamGuard,
         correctionPrompts: state.correctionPrompts,
         maxToolCalls: MAX_TOOL_CALLS_PER_TURN,
+        toolCalling: ctx.toolCalling,
+        allowedToolNames: new Set((ctx.body.tools || []).map((t: any) => t.function?.name || t.name).filter(Boolean)),
+        toolChoice: ctx.body.tool_choice,
         logParsed: true,
       });
     }
   }
 }
 
-function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
+function flushAndDetectLoops(state: StreamProcessorState, ctx: NonStreamingContext): void {
+  const { logId } = ctx;
   const { toolCalls } = parseXmlToolCalls(state.lastFullContent);
   if (toolCalls.length > 0) {
     const parsed = toolCalls.map((tc, i) => xmlToolCallToParsed(tc, i));
@@ -245,6 +286,9 @@ function flushAndDetectLoops(state: StreamProcessorState, logId: string): void {
         toolSpamGuard: state.toolSpamGuard,
         correctionPrompts: state.correctionPrompts,
         maxToolCalls: MAX_TOOL_CALLS_PER_TURN,
+        toolCalling: ctx.toolCalling,
+        allowedToolNames: new Set((ctx.body.tools || []).map((t: any) => t.function?.name || t.name).filter(Boolean)),
+        toolChoice: ctx.body.tool_choice,
         label: 'xml-flush',
         logParsed: true,
       });
@@ -312,7 +356,7 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
     const startedAt = new Date(entry.timestamp).getTime();
     if (startedAt) entry.latency_ms = now - startedAt;
     entry.finalResponse = {
-      finishReason: state.toolCallsOut.length ? 'tool_calls' : 'stop',
+      finishReason: state.outputLimitReached ? 'length' : state.toolCallsOut.length ? 'tool_calls' : 'stop',
       toolCallCount: state.toolCallsOut.length,
       contentPreview: state.lastFullContent.length > 500 ? state.lastFullContent.substring(0, 500) + '...' : state.lastFullContent,
     };
@@ -342,7 +386,7 @@ function buildResponseFromState(state: StreamProcessorState, ctx: NonStreamingCo
         index: 0,
         message,
         logprobs: null,
-        finish_reason: state.toolCallsOut.length ? 'tool_calls' : 'stop',
+        finish_reason: state.outputLimitReached ? 'length' : state.toolCallsOut.length ? 'tool_calls' : 'stop',
       },
     ],
     usage,
@@ -356,10 +400,14 @@ async function processContentChunks(state: StreamProcessorState, ctx: NonStreami
   if (upstreamError) {
     logStore.finalizeRequest(logId);
     const cleanMessage = cleanTextOfXmlArtifacts(upstreamError.message).cleanedText || upstreamError.message;
-    return c.json({ error: { message: cleanMessage } }, upstreamError.status);
+    return c.json({ error: { message: cleanMessage } }, upstreamError.status as ContentfulStatusCode);
+  }
+  if (state.upstreamError) {
+    logStore.finalizeRequest(logId);
+    return c.json({ error: { message: state.upstreamError } }, (state.upstreamStatus || 502) as ContentfulStatusCode);
   }
 
-  flushAndDetectLoops(state, logId);
+  flushAndDetectLoops(state, ctx);
   const response = buildResponseFromState(state, ctx);
   logStore.finalizeRequest(logId);
   return response;
@@ -373,7 +421,24 @@ export async function handleNonStreamingRequest(ctx: NonStreamingContext): Promi
 
   try {
     while (true) {
-      const { done, value } = await state.reader.read();
+      if (ctx.c.req.raw.signal?.aborted) {
+        ctx.qwenAbortController?.abort();
+        await state.reader.cancel().catch(() => {});
+        throw new DOMException('Request aborted', 'AbortError');
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const readResult = await Promise.race([
+        state.reader.read(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('Non-streaming upstream idle timeout')),
+            Math.max(10_000, config.getInt('STREAM_IDLE_TIMEOUT_MS', 60_000)),
+          );
+        }),
+      ]).finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+      const { done, value } = readResult;
       if (done) break;
 
       state.buffer += state.decoder.decode(value, { stream: true });
@@ -384,10 +449,12 @@ export async function handleNonStreamingRequest(ctx: NonStreamingContext): Promi
         parseQwenResponse(line, state, ctx);
       }
     }
+    state.buffer += state.decoder.decode();
+    if (state.buffer.trim()) parseQwenResponse(state.buffer, state, ctx);
 
-    nonStreamReleased = true;
-    sessionPool.release(session.chatId, state.nextParentId, sessionHeaders, resolvedEmail);
     const result = await processContentChunks(state, ctx);
+    nonStreamReleased = true;
+    sessionPool.release(session.chatId, state.nextParentId, sessionHeaders, resolvedEmail, result.status < 400);
     logFinalized = true;
     return result;
   } finally {
@@ -402,6 +469,7 @@ export async function handleNonStreamingRequest(ctx: NonStreamingContext): Promi
     } catch {
       /* reader already cancelled */
     }
+    ctx.qwenAbortController?.abort();
     if (!nonStreamReleased) {
       sessionPool.release(session.chatId, state.nextParentId, sessionHeaders, resolvedEmail, false);
     }

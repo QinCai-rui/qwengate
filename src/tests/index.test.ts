@@ -19,7 +19,8 @@ test('Health check returns degraded when Playwright not initialized', async () =
 
   const body = await res.json();
   assert.strictEqual(body.status, 'degraded');
-  assert.ok(typeof body.uptime === 'number');
+  assert.strictEqual(body.uptime, undefined);
+  assert.strictEqual(body.accounts, undefined);
 });
 
 test('Models endpoint returns cleaned OpenAI-compatible model data', async () => {
@@ -290,11 +291,11 @@ test('API Key protection', async () => {
   }
 });
 
-test('Chat completions with image uploads attaches files (t2t chat_type, vision class)', async () => {
+test('Chat completions keep image input inline without file uploads', async () => {
   const originalFetch = globalThis.fetch;
   const originalAccounts = [...accounts];
 
-  // Seed a test account so pickAccount returns an account for image upload
+  // Seed a test account so pickAccount returns an account for the chat request.
   accounts.push({
     email: 'test@qwen-gate.dev',
     password: 'test',
@@ -308,43 +309,12 @@ test('Chat completions with image uploads attaches files (t2t chat_type, vision 
     startupStatus: 'ready',
   });
 
-  let stsCalled = false;
-  let ossCalled = false;
   let chatPayload: any = null;
 
   (globalThis as any).fetch = async (input: any, init?: any) => {
     const url = typeof input === 'string' ? input : input.url;
     if (url.includes('/api/models')) {
       return new Response(JSON.stringify({ data: [{ id: 'qwen3.6-plus', owned_by: 'qwen' }] }), { status: 200 });
-    }
-    if (url.includes('/api/v2/files/getstsToken')) {
-      stsCalled = true;
-      return new Response(
-        JSON.stringify({
-          data: {
-            access_key_id: 'test-key',
-            access_key_secret: 'test-secret',
-            security_token: 'test-token',
-            bucketname: 'test-bucket',
-            region: 'oss-cn-hangzhou',
-            endpoint: 'oss-cn-hangzhou.aliyuncs.com',
-            file_id: 'test-file-id',
-            file_path: 'test-user/test-file-id_image.png',
-            file_url: 'https://test-bucket.oss-cn-hangzhou.aliyuncs.com/test-file-id_image.png',
-          },
-        }),
-        { status: 200 },
-      );
-    }
-    if (url.includes('/api/v2/files/parse/status')) {
-      return new Response(JSON.stringify({ data: [{ status: 'success' }] }), { status: 200 });
-    }
-    if (url.includes('/api/v2/files/parse')) {
-      return new Response(JSON.stringify({ success: true }), { status: 200 });
-    }
-    if (url.includes('aliyuncs.com') || url.includes('oss-')) {
-      ossCalled = true;
-      return new Response(null, { status: 200 });
     }
     if (url.includes('/api/v2/chat/completions')) {
       // Capture the payload for later assertions
@@ -391,34 +361,22 @@ test('Chat completions with image uploads attaches files (t2t chat_type, vision 
     const res = await app.fetch(req);
     assert.strictEqual(res.status, 200);
 
-    // Verify STS token was requested (image upload initiated)
-    assert.ok(stsCalled, 'Should have called getstsToken for image upload');
-
-    // Verify OSS upload happened
-    assert.ok(ossCalled, 'Should have uploaded image to OSS');
-
     // Verify the chat payload has the right format
     assert.ok(chatPayload, 'Chat completion should have been called');
     const msg = chatPayload?.messages?.[0];
     assert.ok(msg, 'Should have at least one message');
 
-    // The image_url should be stripped from content text (only text parts remain)
-    assert.ok(!msg.content.includes('image_url'), 'Image URL should be stripped from content text');
+    // The image payload remains part of the inline message content.
+    assert.ok(msg.content.includes('image_url'), 'Image URL should remain in content text');
     assert.ok(msg.content.includes('What is in this image?'), 'Text content should be preserved');
+    assert.ok(msg.content.includes('iVBORw0KGgoAAAANSUhEUgAAAAEAAAA='), 'Image data should remain inline');
 
-    // Should have files attached
-    assert.ok(Array.isArray(msg.files), 'Message should have files array');
-    assert.ok(msg.files.length > 0, 'Should have at least one file (image)');
+    assert.deepStrictEqual(msg.files, [], 'Message should not contain file attachments');
 
     // Chat type should remain t2t (default) — Qwen web UI uses t2t even with images
     assert.strictEqual(msg.chat_type, 't2t', 'Chat type should remain t2t for images');
     assert.strictEqual(msg.sub_chat_type, 't2t', 'Sub chat type should remain t2t');
     assert.strictEqual(msg.extra?.meta?.subChatType, 't2t', 'Extra subChatType should remain t2t');
-
-    // Verify file attachment format
-    const file = msg.files[0];
-    assert.strictEqual(file.type, 'image', 'File attachment type should be image');
-    assert.strictEqual(file.file_class, 'vision', 'File class should be vision');
   } finally {
     globalThis.fetch = originalFetch;
     accounts.splice(0, accounts.length, ...originalAccounts);
@@ -508,33 +466,6 @@ test('Anthropic streaming strips XML artifacts from text deltas', async () => {
     const url = typeof input === 'string' ? input : input.url;
     if (url.includes('/api/models')) {
       return new Response(JSON.stringify({ data: [{ id: 'qwen3.7-max', owned_by: 'qwen' }] }), { status: 200 });
-    }
-    if (url.includes('/api/v2/files/getstsToken')) {
-      return new Response(
-        JSON.stringify({
-          data: {
-            access_key_id: 'test-key',
-            access_key_secret: 'test-secret',
-            security_token: 'test-token',
-            bucketname: 'test-bucket',
-            region: 'oss-cn-hangzhou',
-            endpoint: 'oss-cn-hangzhou.aliyuncs.com',
-            file_id: 'test-file-id',
-            file_path: 'test-user/test-file-id_context.txt',
-            file_url: 'https://test-bucket.oss-cn-hangzhou.aliyuncs.com/test-file-id_context.txt',
-          },
-        }),
-        { status: 200 },
-      );
-    }
-    if (url.includes('/api/v2/files/parse/status')) {
-      return new Response(JSON.stringify({ data: [{ status: 'success' }] }), { status: 200 });
-    }
-    if (url.includes('/api/v2/files/parse')) {
-      return new Response(JSON.stringify({ success: true }), { status: 200 });
-    }
-    if (url.includes('aliyuncs.com') || url.includes('oss-')) {
-      return new Response(null, { status: 200 });
     }
     if (url.includes('/api/v2/chat/completions')) {
       const stream = new ReadableStream({
@@ -662,33 +593,6 @@ test('Anthropic /v1/messages streaming with local_mcp tool call emits correct to
     const url = typeof input === 'string' ? input : input.url;
     if (url.includes('/api/models')) {
       return new Response(JSON.stringify({ data: [{ id: 'qwen3.7-max', owned_by: 'qwen' }] }), { status: 200 });
-    }
-    if (url.includes('/api/v2/files/getstsToken')) {
-      return new Response(
-        JSON.stringify({
-          data: {
-            access_key_id: 'test-key',
-            access_key_secret: 'test-secret',
-            security_token: 'test-token',
-            bucketname: 'test-bucket',
-            region: 'oss-cn-hangzhou',
-            endpoint: 'oss-cn-hangzhou.aliyuncs.com',
-            file_id: 'test-file-id',
-            file_path: 'test-user/test-file-id_context.txt',
-            file_url: 'https://test-bucket.oss-cn-hangzhou.aliyuncs.com/test-file-id_context.txt',
-          },
-        }),
-        { status: 200 },
-      );
-    }
-    if (url.includes('/api/v2/files/parse/status')) {
-      return new Response(JSON.stringify({ data: [{ status: 'success' }] }), { status: 200 });
-    }
-    if (url.includes('/api/v2/files/parse')) {
-      return new Response(JSON.stringify({ success: true }), { status: 200 });
-    }
-    if (url.includes('aliyuncs.com') || url.includes('oss-')) {
-      return new Response(null, { status: 200 });
     }
     if (url.includes('/api/v2/chat/completions')) {
       const stream = new ReadableStream({

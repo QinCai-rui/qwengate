@@ -1,13 +1,10 @@
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
-import { cleanTextOfXmlArtifacts, parseXmlToolCalls } from '../tools/xmlToolParser.ts';
+import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import { type AmplificationGuardState, checkAmplificationGuard, getSnapshotDelta, parseQwenErrorPayload } from './chatHelpers.ts';
 import { filterContentPipeline, processStreamData, type StreamProcessingCtx, type StreamProcessingState } from './chatStreamingHelpers.ts';
 import { checkFinalAmplification, scheduleCleanup } from './cleanupHelpers.ts';
 import { buildChunkEvent, buildUsage, makeChoice, writeEvent, writeReasoningEvent } from './writeHelpers.ts';
-
-/** Shared TextDecoder — stateless, safe to reuse across streams */
-export const sharedDecoder = new TextDecoder();
 
 export interface StreamLoopResult {
   buffer: string;
@@ -25,11 +22,31 @@ export async function runStreamLoop(
 ): Promise<StreamLoopResult> {
   let streamDone = false;
   let nextParentId = streamState.nextParentId;
+  const decoder = new TextDecoder();
+
+  const processLine = async (line: string): Promise<void> => {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith('data: ')) return;
+    const dataStr = trimmed.slice(6);
+    if (dataStr === '[DONE]') {
+      streamDone = true;
+      return;
+    }
+    try {
+      const chunk = JSON.parse(dataStr);
+      const result = await processStreamData(chunk, streamState, streamCtx);
+      await new Promise((r) => setTimeout(r, 0));
+      if (result === 'break_stream') streamDone = true;
+    } catch (e) {
+      console.error('[Chat] Streaming: parse error on chunk, ignoring partial:', (e as Error)?.message, 'raw:', dataStr.slice(0, 200));
+    }
+  };
 
   while (true) {
     if (streamDone) break;
     if (c.req.raw?.signal?.aborted) {
-      reader.cancel();
+      streamCtx.qwenAbortController.abort();
+      await reader.cancel().catch(() => {});
       break;
     }
 
@@ -59,40 +76,24 @@ export async function runStreamLoop(
       return { buffer: bufferRef.text, nextParentId, error: (timeoutErr as Error).message };
     }
     if (idleTimer) clearTimeout(idleTimer);
-    if (readResult.done) break;
+    if (readResult.done) {
+      bufferRef.text += decoder.decode();
+      if (bufferRef.text) {
+        await processLine(bufferRef.text);
+        bufferRef.text = '';
+      }
+      break;
+    }
     if (readResult.value) ampState.rawInputBytes += readResult.value.length;
 
-    const rawDecoded = sharedDecoder.decode(readResult.value, { stream: true });
+    const rawDecoded = decoder.decode(readResult.value, { stream: true });
     bufferRef.text += rawDecoded;
     const lines = bufferRef.text.split('\n');
     bufferRef.text = lines.pop() || '';
 
     for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data: ')) continue;
-
-      const dataStr = trimmed.slice(6);
-      if (dataStr === '[DONE]') {
-        streamDone = true;
-        break;
-      }
-
-      try {
-        const chunk = JSON.parse(dataStr);
-
-        const result = await processStreamData(chunk, streamState, streamCtx);
-        // Yield to the event loop after each event so Bun gets a socket flush
-        // point per SSE event. Without this, one upstream-batched read with N
-        // complete lines writes all N events back-to-back (0-4ms gaps) — the
-        // client sees "everything at once" instead of a stream.
-        await new Promise((r) => setTimeout(r, 0));
-        if (result === 'break_stream') {
-          streamDone = true;
-          break;
-        }
-      } catch (e) {
-        console.error('[Chat] Streaming: parse error on chunk, ignoring partial:', (e as Error)?.message, 'raw:', dataStr.slice(0, 200));
-      }
+      await processLine(line);
+      if (streamDone) break;
     }
     nextParentId = streamState.nextParentId;
   }
@@ -149,21 +150,9 @@ export async function handlePostStreamCompletion(
       streamState.pendingChunk = '';
     }
 
-    // Count tool calls from the final assembled content
-    const finalToolCalls = streamState.lastFullContent ? parseXmlToolCalls(streamState.lastFullContent).toolCalls.length : 0;
-    const effectiveToolCallCount = Math.max(emittedToolCallCount, finalToolCalls);
-
-    // Populate parsedToolCalls from full accumulated content (per-chunk extraction
-    // never sees complete blocks since individual SSE deltas are too small).
-    if (streamState.lastFullContent && effectiveToolCallCount > emittedToolCallCount) {
-      const parsed = parseXmlToolCalls(streamState.lastFullContent).toolCalls;
-      // Avoid double-counting: only add tool calls that weren't already emitted
-      for (const tc of parsed.slice(emittedToolCallCount)) {
-        logStore.updateEntry(logId, (entry) => {
-          entry.parsedToolCalls.push({ name: tc.name, args: JSON.stringify(tc.parameters) });
-        });
-      }
-    }
+    // Only count tool calls accepted by the shared guard. Re-parsing the final
+    // buffer here would bypass declaration, disablement, and spam checks.
+    const effectiveToolCallCount = emittedToolCallCount;
 
     const pipelineResult = filterContentPipeline(streamState.lastFullContent, enableContentFiltering);
     const flushCleaned = pipelineResult.cleanText;
@@ -213,9 +202,6 @@ export async function handlePostStreamCompletion(
     const upstreamError =
       parseQwenErrorPayload(buffer) || (streamState.upstreamError ? { message: streamState.upstreamError, status: 502 as const } : null);
     if (upstreamError) {
-      try {
-        require('fs').writeFileSync('/tmp/qwen-error-buffer.json', buffer.slice(0, 10000));
-      } catch {}
       const cleanErrorMessage = cleanTextOfXmlArtifacts(upstreamError.message).cleanedText || upstreamError.message;
       // Append the error as a final content chunk — the partial answer
       // stays visible, and the user sees why the stream stopped.
@@ -231,7 +217,7 @@ export async function handlePostStreamCompletion(
     }
 
     const usage = buildUsage(streamState.promptTokens, streamState.completionTokens, streamState.reasoningBuffer);
-    const finalFinishReason = effectiveToolCallCount > 0 ? 'tool_calls' : 'stop';
+    const finalFinishReason = streamState.outputLimitReached ? 'length' : effectiveToolCallCount > 0 ? 'tool_calls' : 'stop';
 
     await writeEvent(
       streamWriter,

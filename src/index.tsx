@@ -1,23 +1,23 @@
 import 'dotenv/config';
+import crypto from 'node:crypto';
 import { existsSync, unlinkSync, writeFileSync } from 'fs';
 import { Hono } from 'hono';
-import { bearerAuth } from 'hono/bearer-auth';
 import { cors } from 'hono/cors';
 
 import { rateLimitMiddleware, startAutoCleanup, stopAutoCleanup } from './middleware/rateLimit.ts';
 import { accountsRouter } from './routes/accounts.ts';
 import { anthropicMessages } from './routes/anthropic.ts';
 import { chatCompletions } from './routes/chat.ts';
-import { configRouter } from './routes/config.ts';
 import { registerDashboardRoutes } from './routes/dashboard/dashboardRoutes.ts';
 import { debugNetworkApp } from './routes/debugNetwork.ts';
-import { getAccountCount, getAccountStats, getAccounts, getAvailableCount, initAuth, setStartupStatus } from './services/auth.ts';
+import { getAccountCount, getAccounts, getAvailableCount, initAuth, setStartupStatus } from './services/auth.ts';
 import { closeScreencast, handleInputEvent, startScreencast } from './services/cdpScreencast.ts';
 import { config, updateClaudeCodeSettings } from './services/configService.ts';
+import { requireApiOrDashboardAuth } from './services/dashboardAuth.ts';
 import { logStore } from './services/logStore.ts';
 import { configureAccount, fetchQwenModels } from './services/qwen.ts';
 import { getUsage, getUsageSummary, loadUsageStore } from './services/usageTracker.ts';
-import { safeCompare } from './utils/auth.ts';
+import { requireApiKey } from './utils/auth.ts';
 import { isBun } from './utils/env.ts';
 import { projectPath } from './utils/paths.ts';
 
@@ -94,7 +94,35 @@ async function gracefulShutdown(_signal: string): Promise<void> {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-app.use('*', cors({ origin: '*' }));
+app.use(
+  '*',
+  cors({
+    origin: (origin, c) => {
+      if (!origin) return '';
+      const configured = process.env.CORS_ORIGIN?.trim();
+      if (configured) {
+        const allowed = configured
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean);
+        return allowed.includes(origin) ? origin : '';
+      }
+      try {
+        return origin === new URL(c.req.url).origin ? origin : '';
+      } catch {
+        return '';
+      }
+    },
+  }),
+);
+
+app.use('*', async (c, next) => {
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
+  c.header('Referrer-Policy', 'no-referrer');
+  c.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  await next();
+});
 
 // Debug: log all incoming requests
 app.use('*', async (c, next) => {
@@ -109,21 +137,10 @@ app.use('*', async (c, next) => {
 app.get('/health', (c) => {
   const totalAccounts = getAccountCount();
   const availableAccounts = getAvailableCount();
-  const stats = getAccountStats();
-  const authenticatedCount = stats.filter((s) => s.authenticated).length;
-  const throttledCount = stats.filter((s) => s.throttled).length;
-  const isHealthy = totalAccounts > 0 && authenticatedCount > 0;
+  const isHealthy = totalAccounts > 0 && availableAccounts > 0;
   return c.json({
     status: isHealthy ? 'ok' : 'degraded',
     version: '0.7.0',
-    uptime: process.uptime(),
-    inFlight: inFlightRequests,
-    accounts: {
-      total: totalAccounts,
-      authenticated: authenticatedCount,
-      available: availableAccounts,
-      throttled: throttledCount,
-    },
   });
 });
 // Ping — lightweight static response
@@ -135,49 +152,53 @@ app.get('/ping', () => PING_RESPONSE);
 
 // API Key protection for OpenAI-compatible routes
 app.use('/v1/*', async (c, next) => {
-  const apiKey = config.get('API_KEY');
-  if (!apiKey) return await next();
-  return bearerAuth({ token: apiKey })(c, next);
+  return requireApiKey(c, next);
 });
 
 registerDashboardRoutes(app);
 
+app.use('/debug/network*', requireApiOrDashboardAuth);
 app.route('/debug/network', debugNetworkApp);
 
 // Account CRUD API — protected by bearer auth
 app.use('/api/accounts*', async (c, next) => {
-  const apiKey = config.get('API_KEY');
-  if (!apiKey) return await next();
-  return bearerAuth({ token: apiKey })(c, next);
+  return requireApiOrDashboardAuth(c, next);
 });
 app.route('/api/accounts', accountsRouter);
 
 // Usage stats API — per-account × per-model daily counters (protected)
 app.use('/api/usage*', async (c, next) => {
-  const apiKey = config.get('API_KEY');
-  if (!apiKey) return await next();
-  return bearerAuth({ token: apiKey })(c, next);
+  return requireApiOrDashboardAuth(c, next);
 });
 app.get('/api/usage', (c) => c.json(getUsageSummary()));
 app.get('/api/usage/raw', (c) => c.json(getUsage()));
 
-// Config API
-if (config.get('API_KEY')) {
-  configRouter.use('*', async (c, next) => {
-    const auth = c.req.header('Authorization');
-    if (!auth || !auth.startsWith('Bearer ') || !safeCompare(auth.slice(7), config.get('API_KEY'))) {
-      return c.json({ error: 'Unauthorized' }, 401);
-    }
-    await next();
-  });
-}
-app.route('/api/config', configRouter);
-
 // 10MB request body limit on all chat endpoints
 const MAX_BODY_BYTES = 10 * 1024 * 1024;
+async function requestBodyExceedsLimit(c: any, limit: number): Promise<boolean> {
+  const declared = Number(c.req.header('content-length'));
+  if (Number.isFinite(declared) && declared > limit) return true;
+  if (!c.req.raw.body) return false;
+  try {
+    const clone = c.req.raw.clone();
+    const reader = clone.body?.getReader();
+    if (!reader) return false;
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return false;
+      total += value?.byteLength || 0;
+      if (total > limit) {
+        await reader.cancel();
+        return true;
+      }
+    }
+  } catch {
+    return true;
+  }
+}
 app.use('/v1/chat/completions', async (c, next) => {
-  const contentLength = Number(c.req.header('content-length') || 0);
-  if (contentLength > MAX_BODY_BYTES) {
+  if (await requestBodyExceedsLimit(c, MAX_BODY_BYTES)) {
     return c.json({ error: { message: 'Request body too large' } }, 413);
   }
   await next();
@@ -195,8 +216,7 @@ app.post(
 
 // 10MB request body limit on anthropic endpoint
 app.use('/v1/messages', async (c, next) => {
-  const contentLength = Number(c.req.header('content-length') || 0);
-  if (contentLength > MAX_BODY_BYTES) {
+  if (await requestBodyExceedsLimit(c, MAX_BODY_BYTES)) {
     return c.json({ error: { message: 'Request body too large' } }, 413);
   }
   await next();
@@ -308,13 +328,17 @@ if (import.meta.main) {
             const url = new URL(req.url);
             // Intercept WebSocket upgrade for screencast
             if (url.pathname === '/api/screencast/ws' && req.headers.get('upgrade') === 'websocket') {
-              const token = url.searchParams.get('token') as string;
+              const protocol = req.headers.get('sec-websocket-protocol') || '';
+              const token = protocol.startsWith('qg.') ? protocol.slice(3) : '';
               const session = token ? screencastTokens.get(token) : null;
               if (!session) {
                 return new Response('Invalid or expired token', { status: 401 });
               }
               screencastTokens.delete(token);
-              return server.upgrade(req, { data: { email: session.email, password: session.password } });
+              return server.upgrade(req, {
+                data: { email: session.email, password: session.password },
+                headers: { 'Sec-WebSocket-Protocol': `qg.${token}` },
+              });
             }
             return app.fetch(req, server);
           },
@@ -354,23 +378,17 @@ if (import.meta.main) {
         serverStop = () => bunServer.stop(false);
 
         // Screencast launch endpoint — creates token, client connects WS with token
-        app.post('/api/screencast/launch', async (c) => {
+        app.post('/api/screencast/launch', requireApiOrDashboardAuth, async (c) => {
           try {
-            const apiKey = config.get('API_KEY');
-            if (apiKey) {
-              const auth = c.req.header('Authorization');
-              if (!auth || !auth.startsWith('Bearer ') || !safeCompare(auth.slice(7), apiKey)) {
-                return c.json({ error: 'Unauthorized' }, 401);
-              }
-            }
             const body = await c.req.json();
-            const { email, password } = body;
-            if (!email || !password) return c.json({ error: 'email and password required' }, 400);
-            const token = Math.random().toString(36).slice(2) + Date.now().toString(36);
-            screencastTokens.set(token, { email, password });
+            const { email } = body;
+            const account = (await import('./services/accountManager.ts')).getAccountByEmail(String(email || ''));
+            if (!account?.password) return c.json({ error: 'known account email required' }, 400);
+            const token = crypto.randomBytes(32).toString('base64url');
+            screencastTokens.set(token, { email: account.email, password: account.password });
             // Auto-expire token after 30s
             setTimeout(() => screencastTokens.delete(token), 30_000);
-            return c.json({ token, wsUrl: `/api/screencast/ws?token=${token}` });
+            return c.json({ token, wsUrl: '/api/screencast/ws' });
           } catch {
             return c.json({ error: 'Invalid request' }, 400);
           }

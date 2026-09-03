@@ -87,12 +87,25 @@ export interface OpenAIRequest {
   stream_options?: {
     include_usage?: boolean;
   };
+  reasoning?: {
+    effort?: string;
+  };
+  reasoning_effort?: string;
+  enable_thinking?: boolean;
+  extra_body?: Record<string, unknown>;
+  max_tokens?: number;
+  max_completion_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  stop?: string | string[];
 }
 
 export interface ParsedToolCall {
   id: string;
   name: string;
   arguments: unknown;
+  /** Original name emitted by the upstream protocol, when normalization changed it. */
+  sourceName?: string;
 }
 
 export interface ModelSpec {

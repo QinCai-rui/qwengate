@@ -21,7 +21,7 @@ accountsRouter.get('/', (c) => {
   const masked = accounts.map((a) => ({
     email: a.email,
     passwordMasked: a.password ? '••••••••' : '',
-    authenticated: a.state !== null && a.state.token !== '',
+    authenticated: Boolean(a.state?.token && a.state.expiresAt > Date.now()),
     tokenExpiresAt: a.state?.expiresAt || null,
     throttled: a.throttledUntil > Date.now(),
     throttledUntil: a.throttledUntil > Date.now() ? a.throttledUntil : null,
@@ -45,8 +45,11 @@ accountsRouter.post('/', async (c) => {
       return c.json({ error: { message: 'email and password are required' } }, 400);
     }
 
-    if (typeof email !== 'string' || typeof password !== 'string') {
+    if (typeof email !== 'string' || typeof password !== 'string' || email.length > 320 || password.length > 4096) {
       return c.json({ error: { message: 'email and password must be strings' } }, 400);
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return c.json({ error: { message: 'invalid email address' } }, 400);
     }
 
     const result = await addAccount(email, password);
@@ -110,10 +113,10 @@ accountsRouter.delete('/:email', async (c) => {
 });
 
 /**
- * GET /api/accounts/:email/login
+ * POST /api/accounts/:email/login
  * Trigger browser login for a specific account
  */
-accountsRouter.get('/:email/login', async (c) => {
+accountsRouter.post('/:email/login', async (c) => {
   try {
     const email = decodeURIComponent(c.req.param('email'));
     const account = getAccountByEmail(email);
@@ -150,7 +153,7 @@ accountsRouter.get('/:email/login', async (c) => {
   }
 });
 
-accountsRouter.get('/:email/autofill', async (c) => {
+accountsRouter.post('/:email/autofill', async (c) => {
   try {
     const email = decodeURIComponent(c.req.param('email'));
     const account = getAccountByEmail(email);
@@ -175,22 +178,5 @@ accountsRouter.get('/:email/autofill', async (c) => {
   } catch (err: any) {
     console.error('[Accounts] AUTOFILL failed:', err.message);
     return c.json({ error: { message: 'Auto-fill login failed' } }, 500);
-  }
-});
-
-/**
- * GET /api/accounts/:email/password
- * Returns the stored password for embedded browser login (screencast).
- * Protected by API key — internal dashboard use only.
- */
-accountsRouter.get('/:email/password', async (c) => {
-  try {
-    const email = decodeURIComponent(c.req.param('email'));
-    const account = getAccountByEmail(email);
-    if (!account) return c.json({ error: { message: `Account ${email} not found` } }, 404);
-    if (!account.password) return c.json({ error: { message: 'No password stored' } }, 400);
-    return c.json({ email: account.email, password: account.password });
-  } catch {
-    return c.json({ error: { message: 'Failed' } }, 500);
   }
 });

@@ -4,6 +4,7 @@ import { logStore } from '../services/logStore.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import type { Message, OpenAIRequest } from '../types/openai.ts';
 import { type AmplificationGuardState } from './chatHelpers.ts';
+import { ToolSpamGuard } from './chatHelpersCore.ts';
 import { type StreamProcessingCtx, type StreamProcessingState } from './chatStreamingHelpers.ts';
 import { cleanupImmediately } from './cleanupHelpers.ts';
 import { handlePostStreamCompletion, runStreamLoop } from './streamLoop.ts';
@@ -75,6 +76,11 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
         qwenAbortController,
         qwenLogFile: ctx.qwenLogFile,
         emittedToolCallCount: 0,
+        toolCalling: ctx.toolCalling,
+        allowedToolNames: new Set((body.tools || []).map((t: any) => t.function?.name || t.name).filter(Boolean)),
+        toolChoice: body.tool_choice,
+        maxOutputChars: ((body.max_completion_tokens ?? body.max_tokens) || 1_000_000) * 4,
+        stopSequences: body.stop ? (Array.isArray(body.stop) ? body.stop : [body.stop]) : [],
       };
 
       const bufferRef = { text: '' };
@@ -135,6 +141,7 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       streamReleased = true;
       logStore.log('debug', 'stream', `[Stream] <<< Streaming completed for ${logId} in ${Date.now() - _streamStartTime}ms`);
     } finally {
+      if (c.req.raw.signal?.aborted) qwenAbortController.abort();
       if (!streamReleased) {
         // Always write [DONE] so the SSE stream terminates cleanly, even on error
         try {
@@ -193,5 +200,8 @@ function buildInitialStreamState(finalPrompt: string, initialParentId: string | 
     lastParsePosition: 0,
     toolCallDepth: 0,
     pendingChunk: '',
+    toolSpamGuard: new ToolSpamGuard(),
+    correctionPrompts: [],
+    outputLimitReached: false,
   };
 }

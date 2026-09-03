@@ -97,7 +97,7 @@ export class RequestLogStore extends SystemLogger {
   private get maxEntries(): number {
     if (this._maxEntries === undefined) {
       try {
-        this._maxEntries = config.getInt('MAX_LOGS', 50);
+        this._maxEntries = Math.max(1, Math.min(1000, config.getInt('MAX_LOGS', 50)));
       } catch {
         this._maxEntries = 50;
       }
@@ -188,13 +188,17 @@ export class RequestLogStore extends SystemLogger {
     if (!entry) return;
     updater(entry);
     for (const listener of this.listeners) {
-      listener(entry);
+      try {
+        listener(entry);
+      } catch (err) {
+        console.error('[LogStore] listener error:', err);
+      }
     }
   }
   addRawChunk(id: string, chunk: string): void {
     this.updateEntry(id, (entry) => {
       if (entry.qwenRawChunks.length < MAX_CHUNKS_PER_ENTRY) {
-        entry.qwenRawChunks.push(chunk);
+        entry.qwenRawChunks.push(chunk.substring(0, MAX_FIELD_LENGTH));
       }
     });
   }
@@ -378,7 +382,7 @@ export class RequestLogStore extends SystemLogger {
         chunks: entry.qwenRawChunks || [],
         input: entry.clientRequest || {},
       };
-      const fileName = `${dateStr}_${timeStr}.json`;
+      const fileName = `${dateStr}_${timeStr}_${entry.id}.json`;
       const filePath = join(this.requestLogDir, fileName);
       // Periodic cleanup instead of readdirSync+sort on every request
       this.requestFileCount++;
@@ -393,7 +397,7 @@ export class RequestLogStore extends SystemLogger {
           /* cleanup is best-effort */
         }
       }
-      writeFile(filePath, JSON.stringify(payload, null, 2)).catch((err) =>
+      writeFile(filePath, JSON.stringify(payload, null, 2), { mode: 0o600 }).catch((err) =>
         console.error('[LogStore] Failed to write request log:', err.message),
       );
     } catch {

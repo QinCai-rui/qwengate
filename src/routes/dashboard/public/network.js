@@ -59,6 +59,7 @@ function truncateUrl(url, maxLen) {
 
 /* ── State ── */
 var allEntries = [];
+var expandedEntryIds = {};
 
 /* ── Filter ── */
 function onFilterChange() {
@@ -98,11 +99,9 @@ async function fetchNetworkEntries() {
   var emptyEl = document.getElementById('netEmpty');
   var errorEl = document.getElementById('netError');
   if (!data || !data.entries || !Array.isArray(data.entries)) {
-    emptyEl.style.display = '';
-    errorEl.style.display = 'none';
-    allEntries = [];
-    renderNetworkEntries([]);
-    document.getElementById('entryCount').textContent = '0';
+    emptyEl.style.display = allEntries.length ? 'none' : '';
+    errorEl.style.display = '';
+    renderNetworkEntries(allEntries);
     return;
   }
   emptyEl.style.display = 'none';
@@ -114,6 +113,10 @@ async function fetchNetworkEntries() {
 
 function renderNetworkEntries(entries) {
   var container = document.getElementById('netContainer');
+  var existing = container.querySelectorAll('.net-entry[data-entry-id]');
+  for (var x = 0; x < existing.length; x++) {
+    if (existing[x].querySelector('.net-entry-header.open')) expandedEntryIds[existing[x].getAttribute('data-entry-id')] = true;
+  }
   var filters = getFilters();
   var filtered = entries.filter(function (e) {
     return matchesFilters(e, filters);
@@ -148,10 +151,13 @@ function renderNetworkEntries(entries) {
 
     var card = document.createElement('div');
     card.className = 'net-entry';
+    card.setAttribute('data-entry-id', e.id || String(i));
 
     /* ── Entry Header ── */
     card.innerHTML =
-      '<div class="net-entry-header" onclick="toggleEntry(this)">' +
+      '<div class="net-entry-header' +
+      (expandedEntryIds[e.id || String(i)] ? ' open' : '') +
+      '" onclick="toggleEntry(this)">' +
       '<span class="badge ' +
       methodBadgeClass(method) +
       '">' +
@@ -181,7 +187,9 @@ function renderNetworkEntries(entries) {
       ts +
       '</span>' +
       '</div>' +
-      '<div class="net-entry-body">' +
+      '<div class="net-entry-body' +
+      (expandedEntryIds[e.id || String(i)] ? ' open' : '') +
+      '">' +
       renderEntryDetail(e) +
       '</div>';
 
@@ -291,11 +299,13 @@ function toggleEntry(header) {
   header.classList.toggle('open');
   var body = header.nextElementSibling;
   if (body) body.classList.toggle('open');
+  var card = header.parentElement;
+  var id = card && card.getAttribute('data-entry-id');
+  if (id) expandedEntryIds[id] = header.classList.contains('open');
 }
 
 /* ── Init ── */
 function init() {
-  fetchNetworkEntries();
   createPoller(fetchNetworkEntries, 2000);
 }
 

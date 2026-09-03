@@ -13,8 +13,16 @@ function setText(id, val) {
   var el = document.getElementById(id);
   if (el) el.textContent = val;
 }
+function getDashboardApiKey() {
+  try {
+    return sessionStorage.getItem('qg.dashboard.apiKey') || '';
+  } catch {
+    return '';
+  }
+}
 function authHeaders() {
-  return window.API_KEY ? { Authorization: 'Bearer ' + window.API_KEY } : {};
+  var key = getDashboardApiKey();
+  return key ? { Authorization: 'Bearer ' + key } : {};
 }
 function fmtTime(ts) {
   if (!ts) return '—';
@@ -47,7 +55,11 @@ function togglePanel(header) {
 }
 async function apiFetch(url) {
   try {
-    var res = await fetch(url, { headers: authHeaders() });
+    var res = await fetch(url, { headers: authHeaders(), credentials: 'same-origin', cache: 'no-store' });
+    if (res.status === 401) {
+      window.location.href = '/dashboard/login';
+      return null;
+    }
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -59,23 +71,10 @@ function createPoller(fn, baseInterval) {
   var timer = null,
     failures = 0,
     running = false;
-  function tick() {
+  async function tick() {
     if (!running) return;
     try {
-      var r = fn();
-      if (r && typeof r.then === 'function') {
-        r.then(
-          function () {
-            failures = 0;
-            schedule();
-          },
-          function () {
-            failures++;
-            schedule();
-          },
-        );
-        return;
-      }
+      await fn();
       failures = 0;
     } catch {
       failures++;
@@ -137,7 +136,7 @@ async function toggleDarkMode() {
   try {
     await fetch('/api/config', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + window.API_KEY },
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
       body: JSON.stringify({ DARK_MODE: String(next) }),
     });
   } catch (e) {

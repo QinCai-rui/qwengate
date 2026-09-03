@@ -230,7 +230,6 @@ function renderErrorSummary(errors) {
 
 /* ── Init ── */
 function init() {
-  refreshMonitor();
   createPoller(refreshMonitor, 4000);
 }
 if (document.readyState === 'loading') {

@@ -49,6 +49,7 @@ export interface NetworkDebugOptions {
 
 const MAX_ENTRIES = 200;
 const MAX_STORED_CHUNKS = 100;
+const MAX_CHUNK_LENGTH = 10_000;
 const MAX_BODY_PREVIEW = 2000;
 
 const entries: NetworkDebugEntry[] = [];
@@ -61,16 +62,25 @@ function redactHeaders(headers: Record<string, string>): Record<string, string> 
   for (const [key, value] of Object.entries(headers)) {
     const lowerKey = key.toLowerCase();
 
-    if (lowerKey === 'cookie') {
-      redacted[key] = value.length > 30 ? `${value.slice(0, 30)}...[redacted]` : value;
-    } else if (lowerKey === 'authorization') {
-      redacted[key] = 'Bearer ***';
+    if (['cookie', 'set-cookie', 'authorization', 'proxy-authorization', 'x-api-key', 'x-auth-token'].includes(lowerKey)) {
+      redacted[key] = '[redacted]';
     } else {
       redacted[key] = value;
     }
   }
 
   return redacted;
+}
+
+const SENSITIVE_KEY = /^(authorization|cookie|set-cookie|password|passwd|token|refresh_token|refreshToken|api[_-]?key|secret)$/i;
+function redactBody(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactBody);
+  if (!value || typeof value !== 'object') return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    result[key] = SENSITIVE_KEY.test(key) ? '[redacted]' : redactBody(item);
+  }
+  return result;
 }
 
 function notifyListeners(entry: NetworkDebugEntry): void {
@@ -85,7 +95,7 @@ function notifyListeners(entry: NetworkDebugEntry): void {
 }
 
 export function createNetworkEntry(options: NetworkDebugOptions): NetworkDebugEntry {
-  const bodyStr = options.body ? JSON.stringify(options.body) : '';
+  const bodyStr = options.body ? JSON.stringify(redactBody(options.body)) : '';
   const entry: NetworkDebugEntry = {
     id: crypto.randomUUID(),
     timestamp: new Date().toISOString(),
@@ -150,7 +160,7 @@ export function recordResponse(entryId: string, response: Response): void {
   response.headers.forEach((value, key) => {
     headers[key] = value;
   });
-  entry.response.headers = headers;
+  entry.response.headers = redactHeaders(headers);
 
   notifyListeners(entry);
 }
@@ -174,7 +184,7 @@ export function recordStreamChunk(entryId: string, chunk: string): void {
 
   // Store up to MAX_STORED_CHUNKS
   if (entry.stream.chunks.length < MAX_STORED_CHUNKS) {
-    entry.stream.chunks.push(chunk);
+    entry.stream.chunks.push(chunk.length > MAX_CHUNK_LENGTH ? `${chunk.slice(0, MAX_CHUNK_LENGTH)}...[truncated]` : chunk);
   }
 
   notifyListeners(entry);
@@ -205,7 +215,7 @@ export function errorEntry(entryId: string, error: string): void {
   }
 
   entry.phase = 'error';
-  entry.errors.push(error);
+  entry.errors.push(error.length > MAX_BODY_PREVIEW ? `${error.slice(0, MAX_BODY_PREVIEW)}...[truncated]` : error);
 
   // Calculate duration even on error
   const now = Date.now();
@@ -215,7 +225,7 @@ export function errorEntry(entryId: string, error: string): void {
 }
 
 export function getRecentNetworkEntries(count: number = 50): NetworkDebugEntry[] {
-  return entries.slice(0, Math.min(count, entries.length));
+  return entries.slice(0, Math.max(0, Math.min(count, entries.length)));
 }
 
 export function getNetworkEntry(id: string): NetworkDebugEntry | undefined {

@@ -1,4 +1,4 @@
-import { decrementInFlight, getAllAccountEmails, getTokenWithAccount } from './auth.ts';
+import { getAccountByEmail, getAllAccountEmails, getTokenWithAccount } from './auth.ts';
 import { browserlessFetch } from './browserlessFetch.ts';
 import { config } from './configService.ts';
 import { DEFAULT_SYSTEM_PROMPT } from './defaultSystemPrompt.ts';
@@ -9,13 +9,22 @@ import { QWEN_API_BASE, QWEN_CHATS_URL, QWEN_MODELS_URL, QWEN_SETTINGS_URL } fro
 
 export { DEFAULT_SYSTEM_PROMPT };
 
+function accountCookie(email: string | undefined, token?: string): string {
+  const profileCookies = email ? getAccountByEmail(email)?.profileCookies || '' : '';
+  const extraCookies = profileCookies
+    .replace(/\btoken=[^;]+;?\s*/g, '')
+    .replace(/;+$/, '')
+    .trim();
+  return token ? `token=${token}${extraCookies ? `; ${extraCookies}` : ''}` : profileCookies;
+}
+
 async function postQwenSettings(
   email: string | undefined,
   payload: Record<string, unknown>,
 ): Promise<{ response: Response; debugId: string }> {
   const bodyStr = JSON.stringify(payload);
   const tokenInfo = email ? await getTokenWithAccount(email) : null;
-  const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+  const cookieStr = accountCookie(email, tokenInfo?.token);
   const response = await browserlessFetch(QWEN_SETTINGS_URL, {
     method: 'POST',
     headers: {
@@ -129,7 +138,7 @@ export async function configureAccount(email: string, instruction?: string): Pro
 export async function deleteAllChats(email: string): Promise<void> {
   try {
     const tokenInfo = email ? await getTokenWithAccount(email) : null;
-    const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+    const cookieStr = accountCookie(email, tokenInfo?.token);
     const response = await browserlessFetch(QWEN_CHATS_URL, {
       method: 'DELETE',
       headers: {
@@ -161,16 +170,14 @@ export async function deleteAllChats(email: string): Promise<void> {
 
 export async function fetchQwenModels(): Promise<any[]> {
   const now = Date.now();
-  const cacheTtl = config.getInt('MODELS_CACHE_TTL_MS', 3600000);
+  const cacheTtl = Math.max(1_000, config.getInt('MODELS_CACHE_TTL_MS', 3600000));
   if (cachedModels && now - lastModelsFetch < cacheTtl) {
     return cachedModels;
   }
 
-  const { email: resolvedEmail } = await getBasicHeaders();
-  if (resolvedEmail) decrementInFlight(resolvedEmail);
-
+  const { email: resolvedEmail, cookie } = await getBasicHeaders();
   const tokenInfo = resolvedEmail ? await getTokenWithAccount(resolvedEmail) : null;
-  const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+  const cookieStr = cookie || (tokenInfo ? `token=${tokenInfo.token}` : '');
 
   let lastErr: Error | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {

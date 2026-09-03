@@ -16,18 +16,54 @@ export const QWEN_API_BASE = 'https://chat.qwen.ai';
 export const QWEN_CHAT_COMPLETIONS_URL = `${QWEN_API_BASE}/api/v2/chat/completions`;
 export const QWEN_SETTINGS_URL = `${QWEN_API_BASE}/api/v2/users/user/settings/update`;
 
+export type QwenThinkingMode = 'auto' | 'thinking' | 'fast';
+
 /** Build shared feature_config for Qwen message payloads. */
-export function buildFeatureConfig(_enableThinking: boolean): Record<string, any> {
+export function buildFeatureConfig(mode: QwenThinkingMode): Record<string, any> {
   return {
-    thinking_enabled: true,
+    thinking_enabled: mode !== 'fast',
     output_schema: 'phase',
     research_mode: 'normal',
-    auto_thinking: false,
-    thinking_mode: 'Thinking',
-    thinking_format: 'summary',
+    auto_thinking: mode === 'auto',
+    thinking_mode: mode === 'auto' ? 'Auto' : mode === 'thinking' ? 'Thinking' : 'Fast',
+    ...(mode !== 'fast' && { thinking_format: 'summary' }),
     auto_search: true,
   };
 }
+
+/** Resolve Qwen's thinking mode from OpenAI-compatible request options. */
+export function resolveThinkingMode(
+  modelId: string,
+  options: {
+    reasoning?: { effort?: string };
+    reasoning_effort?: string;
+    enable_thinking?: boolean;
+    extra_body?: Record<string, unknown>;
+  },
+): QwenThinkingMode {
+  if (modelId.includes('no-thinking')) return 'fast';
+
+  if (typeof options.enable_thinking === 'boolean') return options.enable_thinking ? 'thinking' : 'fast';
+
+  const extraBody = options.extra_body;
+  if (typeof extraBody?.enable_thinking === 'boolean') return extraBody.enable_thinking ? 'thinking' : 'fast';
+
+  const extraReasoning = extraBody?.reasoning;
+  const extraEffort =
+    typeof extraReasoning === 'object' && extraReasoning !== null ? (extraReasoning as { effort?: unknown }).effort : undefined;
+  const effort = options.reasoning?.effort ?? options.reasoning_effort ?? (typeof extraEffort === 'string' ? extraEffort : undefined);
+
+  switch (effort?.toLowerCase()) {
+    case 'auto':
+      return 'auto';
+    case 'fast':
+    case 'none':
+      return 'fast';
+    default:
+      return 'thinking';
+  }
+}
+
 export const QWEN_CHATS_URL = `${QWEN_API_BASE}/api/v2/chats/`;
 export const QWEN_MODELS_URL = `${QWEN_API_BASE}/api/models`;
 export const QWEN_BX_V = '2.5.36';
@@ -191,13 +227,15 @@ const qwenCircuitBreaker = new CircuitBreaker('qwen-api', {
 
 export async function createQwenStream(
   messages: QwenMessage[],
-  enableThinking: boolean,
+  thinkingMode: QwenThinkingMode,
   modelId: string,
   chatId?: string,
   parentId?: string | null,
   accountEmail?: string,
   tools?: unknown[],
   toolChoice?: unknown,
+  requestSignal?: AbortSignal,
+  requestHeaders?: { cookie?: string; userAgent?: string },
 ): Promise<QwenStreamResult> {
   const actualParentId: string | null = parentId !== undefined ? parentId : null;
   const timestamp = Math.floor(Date.now() / 1000);
@@ -215,7 +253,7 @@ export async function createQwenStream(
     timestamp: msg.timestamp || timestamp,
     models: msg.models || [model],
     chat_type: msg.chat_type || 't2t',
-    feature_config: msg.feature_config || buildFeatureConfig(enableThinking),
+    feature_config: msg.feature_config || buildFeatureConfig(thinkingMode),
     extra: msg.extra || { meta: { subChatType: 't2t' } },
     sub_chat_type: msg.sub_chat_type || 't2t',
     parent_id: msg.parent_id ?? (i === 0 ? actualParentId : null),
@@ -257,12 +295,15 @@ export async function createQwenStream(
     maxDelayMs: Math.max(0, config.getInt('RETRY_MAX_DELAY_MS', 30000)),
     backoffMultiplier: Math.max(0.1, config.getFloat('RETRY_BACKOFF_MULTIPLIER', 2)),
     attemptTimeoutMs: 30_000,
+    signal: requestSignal,
   };
 
   const retriesEnabled = config.getBool('RETRY_ENABLED', true);
   let currentAccountEmail = accountEmail;
   let lastDebugEntryId: string | null = null;
   const streamAbortController = new AbortController();
+  const abortFromCaller = () => streamAbortController.abort();
+  requestSignal?.addEventListener('abort', abortFromCaller, { once: true });
 
   // Per-request usage logging — which account hit which model today
   function logUsage(acctEmail: string | undefined | null, modelName: string): void {
@@ -359,7 +400,9 @@ export async function createQwenStream(
   }
 
   let makeRequestQwenLogFile: string | undefined;
-  const makeRequest = async (): Promise<{ response: Response; headers: Record<string, string>; qwenLogFile?: string }> => {
+  const makeRequest = async (
+    requestSignal?: AbortSignal,
+  ): Promise<{ response: Response; headers: Record<string, string>; qwenLogFile?: string }> => {
     const bodyStr = JSON.stringify(payload);
     if (config.get('SAVE_REQUEST_LOGS') === 'true') {
       makeRequestQwenLogFile = logQwenRequest(payload, url);
@@ -367,7 +410,10 @@ export async function createQwenStream(
 
     // Browserless path: impers worker for TLS/HTTP2 impersonation, cookie from account manager
     const tokenInfo = currentAccountEmail ? await getTokenWithAccount(currentAccountEmail) : null;
-    const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+    // A retry may rotate to another account after a rate-limit response. Do not
+    // reuse the previous account's WAF cookies on that retry.
+    const sessionCookie = currentAccountEmail === accountEmail ? requestHeaders?.cookie : undefined;
+    const cookieStr = sessionCookie || (tokenInfo ? `token=${tokenInfo.token}` : '');
     const tokenPreview = cookieStr ? cookieStr.substring(0, 20) + '...' : 'none';
 
     logStore.log(
@@ -408,13 +454,16 @@ export async function createQwenStream(
         'sec-fetch-dest': 'empty',
         'sec-fetch-mode': 'cors',
         'sec-fetch-site': 'same-origin',
-        'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+        'user-agent':
+          requestHeaders?.userAgent ||
+          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
         'x-accel-buffering': 'no',
         'x-request-id': crypto.randomUUID(),
         timezone: cachedTimezone,
       },
       body: bodyStr,
       accountEmail: currentAccountEmail,
+      signal: requestSignal || streamAbortController.signal,
       stream: true, // keep session alive for streaming via impers worker
     });
     logStore.log(
@@ -423,6 +472,7 @@ export async function createQwenStream(
       `[Qwen] Fetch response status=${response.status} ok=${response.ok} account=${currentAccountEmail || '?'}`,
     );
     recordResponse(lastDebugEntryId, response);
+    if (!response.ok) await handleErrorResponse(response, debugEntry.id);
     logUsage(currentAccountEmail, model);
     return { response, headers: {}, qwenLogFile: makeRequestQwenLogFile };
   };
@@ -434,13 +484,19 @@ export async function createQwenStream(
     const retryAfterMs = Math.max(0, 30_000 - (Date.now() - stats.lastFailureTime));
     throw new CircuitOpenError(retryAfterMs);
   }
-  if (retriesEnabled && retryConfig.maxRetries > 0) {
-    result = await withRetry(makeRequest, { ...retryConfig, circuitBreaker: qwenCircuitBreaker });
-  } else {
-    result = await makeRequest();
-    await qwenCircuitBreaker.recordSuccess();
+  try {
+    if (retriesEnabled && retryConfig.maxRetries > 0) {
+      result = await withRetry(makeRequest, { ...retryConfig, circuitBreaker: qwenCircuitBreaker });
+    } else {
+      result = await makeRequest(streamAbortController.signal);
+      await qwenCircuitBreaker.recordSuccess();
+    }
+  } catch (err) {
+    requestSignal?.removeEventListener('abort', abortFromCaller);
+    throw err;
   }
   if (!result.response.body) {
+    requestSignal?.removeEventListener('abort', abortFromCaller);
     throw new Error(`Qwen returned empty response body (status ${result.response.status})`);
   }
   const streamDebugEntryId = lastDebugEntryId;
@@ -455,6 +511,7 @@ export async function createQwenStream(
         controller.enqueue(chunk);
       },
       flush() {
+        requestSignal?.removeEventListener('abort', abortFromCaller);
         if (streamDebugEntryId) {
           completeEntry(streamDebugEntryId);
         }

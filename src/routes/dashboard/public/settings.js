@@ -125,7 +125,7 @@ function renderClaudeCodeInfo() {
     'Set these environment variables when running Claude Code, or the <code>.claude/settings.json</code> file has been auto-configured for you.</p>' +
     '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;margin-top:8px">' +
     '<code style="display:block;padding:4px 0">ANTHROPIC_BASE_URL=' +
-    baseUrl +
+    escHtml(baseUrl) +
     '</code>' +
     '<code style="display:block;padding:4px 0">ANTHROPIC_AUTH_TOKEN=unused</code>' +
     '</div>' +
@@ -281,9 +281,8 @@ function updateRestartBadge(key) {
 /* ── Load ── */
 async function loadSettings() {
   try {
-    var res = await fetch('/api/config');
-    if (res.ok) {
-      var data = await res.json();
+    var data = await apiFetch('/api/config');
+    if (data) {
       if (data && data.config) {
         settingsData = {};
         originalData = {};
@@ -319,11 +318,18 @@ async function saveSettings() {
   btn.textContent = 'Saving...';
   var msgEl = document.getElementById('settingsMessage');
   try {
-    var headers = { 'Content-Type': 'application/json' };
+    var headers = Object.assign({ 'Content-Type': 'application/json' }, authHeaders());
+    var payload = {};
+    var keysToSave = Object.keys(settingsData);
+    for (var p = 0; p < keysToSave.length; p++) {
+      var keyToSave = keysToSave[p];
+      if ((keyToSave !== 'DASHBOARD_PASSWORD' && keyToSave !== 'API_KEY') || settingsData[keyToSave])
+        payload[keyToSave] = settingsData[keyToSave];
+    }
     var res = await fetch('/api/config', {
       method: 'PUT',
       headers: headers,
-      body: JSON.stringify(settingsData),
+      body: JSON.stringify(payload),
     });
     var result = await res.json();
     if (!res.ok) {

@@ -98,6 +98,9 @@ export async function initAuth(onAccountReady?: (email: string) => Promise<void>
       if (p.disabled !== undefined) {
         existing.disabled = p.disabled;
       }
+      if (p.profileCookies) {
+        existing.profileCookies = p.profileCookies;
+      }
     } else if (p.password) {
       merged.push(p);
     }

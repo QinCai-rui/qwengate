@@ -160,7 +160,7 @@ All settings in `config.json`. Key options:
 | Key                       | Default      | Description                                     |
 | ------------------------- | ------------ | ----------------------------------------------- |
 | `PORT`                    | `"26405"`    | Server port                                     |
-| `API_KEY`                 | `""`         | Bearer token for API auth (empty = no auth)     |
+| `API_KEY`                 | `""`         | Bearer token for API auth (required for API access) |
 | `BROWSER`                 | `"chromium"` | Browser engine: `chromium`, `firefox`, `webkit`, `chrome`, `edge` |
 | `TOOL_CALLING`            | `"true"`     | Enable tool call parsing                        |
 | `CLEAN_OUTPUT`            | `"true"`     | Strip internal artifacts from responses         |

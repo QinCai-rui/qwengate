@@ -133,6 +133,7 @@ export async function wreqFetch(url: string, options: WreqFetchOptions = {}): Pr
   try {
     response = await makeReq();
   } catch (err) {
+    if (options.signal?.aborted || (err instanceof Error && err.name === 'AbortError')) throw err;
     logCrash('wreqFetch.connection', err, { url: url.split('?')[0] });
     restartWorker();
     const baseUrl2 = await ensureWorker();

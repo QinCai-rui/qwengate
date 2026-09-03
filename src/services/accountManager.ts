@@ -4,7 +4,7 @@
  * Handles account CRUD, discovery, persistence, and the account file watcher.
  */
 import crypto from 'crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, watch, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import type { AccountEntry } from '../types/auth.ts';
@@ -24,11 +24,10 @@ const QWEN_DIR = projectPath('.qwen');
 const OLD_ACCOUNTS_FILE = projectPath('qwen_profile', 'accounts.json');
 
 function getProfileDirForEmail(email: string): string {
-  const safe = email
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]/g, '_');
-  return projectPath('.qwen', 'browser-profiles', safe);
+  const normalized = email.toLowerCase().trim();
+  const safe = normalized.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  const suffix = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 12);
+  return projectPath('.qwen', 'browser-profiles', `${safe}-${suffix}`);
 }
 
 export function migrateFromOldPaths(): void {
@@ -62,7 +61,53 @@ export interface CookieData {
 }
 /** Strip // and /* * / JSONC comments before JSON.parse */
 function stripJsoncComments(text: string): string {
-  return text.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  let result = '';
+  let inString = false;
+  let escaped = false;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const current = text[i];
+    const next = text[i + 1];
+
+    if (inLineComment) {
+      if (current === '\n') {
+        inLineComment = false;
+        result += current;
+      }
+      continue;
+    }
+    if (inBlockComment) {
+      if (current === '*' && next === '/') {
+        inBlockComment = false;
+        i++;
+      } else if (current === '\n') {
+        result += current;
+      }
+      continue;
+    }
+    if (inString) {
+      result += current;
+      if (escaped) escaped = false;
+      else if (current === '\\') escaped = true;
+      else if (current === '"') inString = false;
+      continue;
+    }
+    if (current === '"') {
+      inString = true;
+      result += current;
+    } else if (current === '/' && next === '/') {
+      inLineComment = true;
+      i++;
+    } else if (current === '/' && next === '*') {
+      inBlockComment = true;
+      i++;
+    } else {
+      result += current;
+    }
+  }
+  return result;
 }
 
 interface PersistedAccountData {
@@ -70,9 +115,22 @@ interface PersistedAccountData {
   password: string;
   throttledUntil?: number;
   disabled?: boolean;
+  profileCookies?: string;
 }
-export function parseAccountsFromEnv(): Array<{ email: string; password: string }> {
-  const result: Array<{ email: string; password: string }> = [];
+export function parseAccountsFromEnv(): Array<{
+  email: string;
+  password: string;
+  throttledUntil?: number;
+  disabled?: boolean;
+  profileCookies?: string;
+}> {
+  const result: Array<{
+    email: string;
+    password: string;
+    throttledUntil?: number;
+    disabled?: boolean;
+    profileCookies?: string;
+  }> = [];
   for (const [key, value] of Object.entries(process.env)) {
     if (!/^ACCOUNT\d+$/i.test(key) || !value) continue;
     const trimmed = value.trim();
@@ -87,7 +145,13 @@ export function parseAccountsFromEnv(): Array<{ email: string; password: string 
   }
   return result;
 }
-export function discoverSavedAccounts(): Array<{ email: string; password: string }> {
+export function discoverSavedAccounts(): Array<{
+  email: string;
+  password: string;
+  throttledUntil?: number;
+  disabled?: boolean;
+  profileCookies?: string;
+}> {
   return parseAccountsFromEnv();
 }
 
@@ -111,7 +175,8 @@ const IV_LENGTH = 16;
 const MASTER_KEY_FILE = projectPath('.qwen', 'master.key');
 
 function getEncryptionKey(): string {
-  // 1. If a master key file exists, use it (survives API_KEY changes)
+  // The master key is independent from API_KEY so rotating API credentials does
+  // not make persisted account credentials undecryptable.
   try {
     if (existsSync(MASTER_KEY_FILE)) {
       return readFileSync(MASTER_KEY_FILE, 'utf-8').trim();
@@ -120,21 +185,43 @@ function getEncryptionKey(): string {
     // Fall through to other strategies
   }
 
-  // 2. Use API_KEY as encryption key (backward compatibility)
-  const apiKey = config.get('API_KEY');
-  if (apiKey) return apiKey;
-
-  // 3. Generate a persistent master key on first use
+  // Generate a persistent master key on first use.
   try {
     const dir = path.dirname(MASTER_KEY_FILE);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const newKey = crypto.randomBytes(32).toString('hex');
-    writeFileSync(MASTER_KEY_FILE, newKey, 'utf-8');
+    writeFileSync(MASTER_KEY_FILE, newKey, { encoding: 'utf-8', mode: 0o600 });
+    chmodSync(MASTER_KEY_FILE, 0o600);
     return newKey;
   } catch {
-    // 4. Fallback: hostname-based key (only when filesystem is unwritable)
+    // If the filesystem is unwritable, retain compatibility with the old API_KEY
+    // keying scheme before falling back to a host-bound key.
+    const apiKey = config.get('API_KEY');
+    if (apiKey) return apiKey;
     const machineId = `${os.hostname()}-${projectPath('.')}`;
     return crypto.createHash('sha256').update(machineId).digest('hex');
+  }
+}
+
+let usedLegacyEncryptionKey = false;
+
+function decryptWithKey(encryptedText: string, keyMaterial: string): string | null {
+  const parts = encryptedText.split(':');
+  const versioned = parts[0] === 'qg1';
+  if (versioned && parts.length !== 4) return null;
+  if (!versioned && parts.length !== 3) return null;
+  const [, ivHex, authTagHex, encrypted] = versioned ? parts : ['', ...parts];
+  try {
+    const key = deriveKey(keyMaterial);
+    const iv = Buffer.from(ivHex, 'hex');
+    const authTag = Buffer.from(authTagHex, 'hex');
+    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
+    decipher.setAuthTag(authTag);
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch {
+    return null;
   }
 }
 
@@ -149,26 +236,28 @@ export function encrypt(plaintext: string): string {
   let encrypted = cipher.update(plaintext, 'utf8', 'hex');
   encrypted += cipher.final('hex');
   const authTag = cipher.getAuthTag();
-  return iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
+  return 'qg1:' + iv.toString('hex') + ':' + authTag.toString('hex') + ':' + encrypted;
 }
 
 export function decrypt(encryptedText: string): string {
-  const parts = encryptedText.split(':');
-  if (parts.length !== 3) return encryptedText;
-  const [ivHex, authTagHex, encrypted] = parts;
-  try {
-    const key = deriveKey(getEncryptionKey());
-    const iv = Buffer.from(ivHex, 'hex');
-    const authTag = Buffer.from(authTagHex, 'hex');
-    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-    decipher.setAuthTag(authTag);
-    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
-    decrypted += decipher.final('utf8');
-    return decrypted;
-  } catch {
-    logStore.log('error', 'auth', 'Decryption failed — wrong API_KEY or corrupted data');
-    return '';
+  usedLegacyEncryptionKey = false;
+  const primaryKey = getEncryptionKey();
+  const decrypted = decryptWithKey(encryptedText, primaryKey);
+  if (decrypted !== null) return decrypted;
+
+  // qg1 and the unversioned three-part format may have been encrypted with the
+  // pre-migration API_KEY-derived key. Try it only as a read-time fallback.
+  const legacyKey = config.get('API_KEY');
+  if (legacyKey && legacyKey !== primaryKey) {
+    const legacyDecrypted = decryptWithKey(encryptedText, legacyKey);
+    if (legacyDecrypted !== null) {
+      usedLegacyEncryptionKey = true;
+      return legacyDecrypted;
+    }
   }
+
+  logStore.log('error', 'auth', 'Decryption failed — corrupted data or unavailable encryption key');
+  return '';
 }
 
 // Backward-compatible aliases for existing callers
@@ -177,7 +266,12 @@ function encryptPassword(password: string): string {
 }
 
 function decryptPassword(encryptedText: string): string {
-  return decrypt(encryptedText);
+  if (encryptedText.startsWith('qg1:')) return decrypt(encryptedText);
+  if (encryptedText.split(':').length === 3) {
+    const decrypted = decrypt(encryptedText);
+    return decrypted || encryptedText;
+  }
+  return encryptedText;
 }
 
 // O(1) email→account lookup index (synced with accounts array mutations)
@@ -190,7 +284,11 @@ export function rebuildEmailIndex(): void {
   }
 }
 
-export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
+export function saveAccountsToFile(
+  accounts: ReadonlyArray<
+    Pick<AccountEntry, 'email' | 'password'> & Partial<Pick<AccountEntry, 'profileCookies' | 'throttledUntil' | 'disabled'>>
+  >,
+): void {
   const dir = path.dirname(ACCOUNTS_FILE);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
@@ -199,26 +297,69 @@ export function saveAccountsToFile(accounts: readonly AccountEntry[]): void {
     .filter((a) => a.password)
     .map((a) => ({
       email: a.email,
-      password: a.password, // plaintext
-      ...(a.throttledUntil > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
+      password: encryptPassword(a.password),
+      ...(a.profileCookies ? { profileCookies: encrypt(a.profileCookies) } : {}),
+      ...((a.throttledUntil ?? 0) > Date.now() ? { throttledUntil: a.throttledUntil } : {}),
       ...(a.disabled !== undefined ? { disabled: a.disabled } : {}),
     }));
-  writeFileSync(ACCOUNTS_FILE, JSON.stringify(data, null, 2), 'utf-8');
+  const tmpFile = `${ACCOUNTS_FILE}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  writeFileSync(tmpFile, JSON.stringify(data, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 });
+  chmodSync(tmpFile, 0o600);
+  renameSync(tmpFile, ACCOUNTS_FILE);
+  chmodSync(ACCOUNTS_FILE, 0o600);
 }
-export function loadAccountsFromFile(): Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean }> {
-  const tryLoad = (filePath: string): Array<{ email: string; password: string; throttledUntil?: number; disabled?: boolean }> | null => {
+export function loadAccountsFromFile(): Array<{
+  email: string;
+  password: string;
+  throttledUntil?: number;
+  disabled?: boolean;
+  profileCookies?: string;
+}> {
+  const tryLoad = (
+    filePath: string,
+  ): Array<{
+    email: string;
+    password: string;
+    throttledUntil?: number;
+    disabled?: boolean;
+    profileCookies?: string;
+  }> | null => {
     try {
       if (!existsSync(filePath)) return null;
       const raw = readFileSync(filePath, 'utf-8');
       const data: PersistedAccountData[] = JSON.parse(stripJsoncComments(raw));
-      return data
+      let needsMigration = false;
+      const loaded = data
         .filter((d) => d.email && d.password)
-        .map((d) => ({
-          email: d.email,
-          password: decryptPassword(d.password),
-          throttledUntil: d.throttledUntil,
-          disabled: d.disabled ?? false,
-        }));
+        .map((d) => {
+          const password = decryptPassword(d.password);
+          const passwordUsedLegacyKey = usedLegacyEncryptionKey;
+          const profileCookies = d.profileCookies ? decrypt(d.profileCookies) : undefined;
+          const profileCookiesUsedLegacyKey = usedLegacyEncryptionKey;
+          if (
+            !d.password.startsWith('qg1:') ||
+            (d.profileCookies && !d.profileCookies.startsWith('qg1:')) ||
+            passwordUsedLegacyKey ||
+            profileCookiesUsedLegacyKey
+          ) {
+            needsMigration = true;
+          }
+          return {
+            email: d.email,
+            password,
+            profileCookies,
+            throttledUntil: d.throttledUntil,
+            disabled: d.disabled ?? false,
+          };
+        });
+      if (needsMigration) {
+        try {
+          saveAccountsToFile(loaded);
+        } catch (migrationError: any) {
+          logStore.log('warn', 'auth', `Failed to migrate account secrets: ${migrationError.message}`);
+        }
+      }
+      return loaded;
     } catch (err: any) {
       logStore.log('error', 'auth', `Failed to load ${filePath}: ${err.message}`);
       return null;
@@ -308,15 +449,13 @@ export async function removeAccount(email: string): Promise<void> {
  * Re-scan accounts and merge changes into the live accounts array.
  */
 export async function reloadAccounts(): Promise<void> {
-  if (accountWatcher && !watcherReady) {
-    return;
-  }
-  const discovered = discoverSavedAccounts();
+  const discovered = [...discoverSavedAccounts(), ...loadAccountsFromFile()];
   const discoveredEmails = new Set(discovered.map((d) => d.email.toLowerCase().trim()));
   const existingEmails = new Set(accounts.map((a) => a.email.toLowerCase().trim()));
   let added = 0;
   let removed = 0;
   for (const d of discovered) {
+    if (!d.password) continue;
     const email = d.email.toLowerCase().trim();
     if (!existingEmails.has(email)) {
       const entry: AccountEntry = {
@@ -324,12 +463,13 @@ export async function reloadAccounts(): Promise<void> {
         password: d.password,
         state: null,
         lastUsed: 0,
-        throttledUntil: 0,
+        throttledUntil: d.throttledUntil && d.throttledUntil > Date.now() ? d.throttledUntil : 0,
         refreshInFlight: null,
         loginAttempt: 0,
         inFlight: 0,
         totalRequests: 0,
-        disabled: false,
+        profileCookies: d.profileCookies,
+        disabled: d.disabled ?? false,
       };
       const { loadCookiesFromProfile } = await import('./auth.ts');
       const profileState = await loadCookiesFromProfile(email);
@@ -358,7 +498,6 @@ export async function reloadAccounts(): Promise<void> {
 }
 let accountWatcher: any = null;
 let reloadDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-let watcherReady = false;
 let watcherRetryTimer: ReturnType<typeof setTimeout> | null = null;
 /**
  * Set up fs.watch on .qwen/ directory with 500ms debounce to detect accounts.json changes.
@@ -387,7 +526,6 @@ export function setupAccountWatcher(): void {
         // non-blocking: watcher may already be closed
       }
       accountWatcher = null;
-      watcherReady = false;
       if (watcherRetryTimer) clearTimeout(watcherRetryTimer);
       watcherRetryTimer = setTimeout(() => {
         watcherRetryTimer = null;
@@ -395,9 +533,6 @@ export function setupAccountWatcher(): void {
       }, 10000);
       watcherRetryTimer.unref();
     });
-    setTimeout(() => {
-      watcherReady = true;
-    }, 2000);
   } catch (err: any) {
     logStore.log('error', 'auth', `Failed to set up account watcher: ${err.message}`);
   }
@@ -409,7 +544,6 @@ export function enableHotReload(): void {
   setupAccountWatcher();
 }
 export function resetWatcherState(): void {
-  watcherReady = false;
   if (watcherRetryTimer) {
     clearTimeout(watcherRetryTimer);
     watcherRetryTimer = null;
@@ -418,6 +552,7 @@ export function resetWatcherState(): void {
 export function isAvailable(acct: AccountEntry): boolean {
   if (acct.disabled) return false;
   if (!acct.state) return false;
+  if (acct.state.expiresAt <= Date.now()) return false;
   if (acct.throttledUntil > Date.now()) return false;
   return true;
 }
@@ -428,7 +563,8 @@ export async function pickAccount(excludeEmail?: string): Promise<AccountEntry |
   try {
     let available = accounts.filter(isAvailable);
     if (excludeEmail) {
-      available = available.filter((a) => a.email !== excludeEmail);
+      const normalizedExclude = excludeEmail.toLowerCase().trim();
+      available = available.filter((a) => a.email.toLowerCase().trim() !== normalizedExclude);
     }
     if (available.length === 0) {
       // All accounts are throttled or unauthenticated — return null instead
@@ -464,19 +600,8 @@ export async function pickAccount(excludeEmail?: string): Promise<AccountEntry |
       `[Account] Picked ${picked.email} — inFlight=${picked.inFlight} totalReqs=${picked.totalRequests} lastUsed=${picked.lastUsed ? Date.now() - picked.lastUsed + 'ms ago' : 'never'}${excludeEmail ? ` (excluded: ${excludeEmail})` : ''}`,
     );
     picked.lastUsed = Date.now();
-    // Reset stuck inFlight: if counter > 0 and last increment was > 60s ago, it leaked
-    if (picked.inFlight > 0 && picked.lastInFlightAt && Date.now() - picked.lastInFlightAt > 60_000) {
-      logStore.log(
-        'warn',
-        'auth',
-        `[Account] Reset stuck inFlight for ${picked.email} (was ${picked.inFlight}, stuck for ${Math.round((Date.now() - picked.lastInFlightAt) / 1000)}s)`,
-      );
-      picked.inFlight = 0;
-    }
     picked.inFlight++;
     picked.lastInFlightAt = Date.now();
-    // Safety valve: reset if counter drifts unreasonably high
-    if (picked.inFlight > 20) picked.inFlight = 0;
     return picked;
   } catch (err: any) {
     logStore.log('error', 'auth', 'pickAccount error:', err);
@@ -485,11 +610,17 @@ export async function pickAccount(excludeEmail?: string): Promise<AccountEntry |
 }
 export function incrementInFlight(email: string): void {
   const acct = getAccountByEmail(email);
-  if (acct) acct.inFlight++;
+  if (acct) {
+    acct.inFlight++;
+    acct.lastInFlightAt = Date.now();
+  }
 }
 export function decrementInFlight(email: string): void {
   const acct = getAccountByEmail(email);
-  if (acct && acct.inFlight > 0) acct.inFlight--;
+  if (acct && acct.inFlight > 0) {
+    acct.inFlight--;
+    if (acct.inFlight === 0) acct.lastInFlightAt = undefined;
+  }
 }
 export function incrementTotalRequests(email: string): void {
   const acct = getAccountByEmail(email);
@@ -540,12 +671,12 @@ export function getAccountStats(): Array<{
   const now = Date.now();
   return accounts.map((a) => ({
     email: a.email,
-    authenticated: a.state !== null,
+    authenticated: Boolean(a.state?.token && a.state.expiresAt > now),
     throttled: a.throttledUntil > now,
     disabled: a.disabled ?? false,
     throttledRemainingMs: Math.max(0, a.throttledUntil - now),
     throttledUnlockAt: a.throttledUntil > now ? new Date(a.throttledUntil).toISOString() : null,
-    tokenExpiresInMs: a.state ? Math.max(0, a.state.expiresAt - now) : 0,
+    tokenExpiresInMs: a.state ? a.state.expiresAt - now : 0,
     lastUsedAgoMs: a.lastUsed ? now - a.lastUsed : -1,
     inFlight: a.inFlight,
     totalRequests: a.totalRequests,
@@ -583,7 +714,7 @@ export async function getTokenWithAccount(email?: string): Promise<{ token: stri
     acct = await pickAccount();
     picked = true;
   }
-  if (!acct?.state?.token) {
+  if (!acct?.state?.token || acct.state.expiresAt <= Date.now()) {
     if (picked && acct) decrementInFlight(acct.email);
     return null;
   }

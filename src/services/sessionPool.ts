@@ -35,10 +35,16 @@ export class SessionPool {
    * Acquire a fresh session. If email is provided, use that specific account.
    * Otherwise, pick the best available account (round-robin, non-throttled).
    */
-  async acquire(email?: string): Promise<PoolEntry> {
+  async acquire(email?: string, requestSignal?: AbortSignal): Promise<PoolEntry> {
+    if (requestSignal?.aborted) {
+      if (email) decrementInFlight(email);
+      throw new DOMException('Request aborted', 'AbortError');
+    }
     if (process.env.TEST_MOCK_PLAYWRIGHT) {
       const mockId = process.env.TEST_SESSION_ID || 'mock-session';
-      return { chatId: mockId, parentId: null, inUse: true, accountEmail: 'mock@test' };
+      this.activeSessions.add(mockId);
+      this.activeCount++;
+      return { chatId: mockId, parentId: null, inUse: true, accountEmail: email || 'mock@test' };
     }
 
     const maxAttempts = email ? 1 : Math.max(1, getAllAccountEmails().length);
@@ -47,22 +53,29 @@ export class SessionPool {
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const resolvedEmail = email || (await pickAccount())?.email;
+      const acquireController = new AbortController();
+      let acquireTimer: ReturnType<typeof setTimeout> | undefined;
+      const abortRequest = () => acquireController.abort();
+      requestSignal?.addEventListener('abort', abortRequest, { once: true });
 
       try {
         // Fetch headers once, pass to createSessionWithHeaders (no duplicate getBasicHeaders call)
         const result = await Promise.race([
           (async () => {
             const headers = await getBasicHeaders(resolvedEmail);
-            const chatId = await this.createSessionWithHeaders(resolvedEmail, headers);
+            const chatId = await this.createSessionWithHeaders(resolvedEmail, headers, acquireController.signal);
             return { headers, chatId };
           })(),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error(`Session acquire timed out for ${resolvedEmail || '?'} after ${ACQUIRE_TIMEOUT}ms`)),
-              ACQUIRE_TIMEOUT,
-            ),
-          ),
-        ]);
+          new Promise<never>((_, reject) => {
+            acquireTimer = setTimeout(() => {
+              acquireController.abort();
+              reject(new Error(`Session acquire timed out for ${resolvedEmail || '?'} after ${ACQUIRE_TIMEOUT}ms`));
+            }, ACQUIRE_TIMEOUT);
+          }),
+        ]).finally(() => {
+          if (acquireTimer) clearTimeout(acquireTimer);
+          requestSignal?.removeEventListener('abort', abortRequest);
+        });
         const { headers, chatId } = result;
         const entry: PoolEntry = {
           chatId,
@@ -146,7 +159,7 @@ export class SessionPool {
 
     try {
       const tokenInfo = email ? await import('./auth.ts').then((m) => m.getTokenWithAccount(email!)) : null;
-      const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+      const cookieStr = cachedHeaders?.cookie || (tokenInfo ? `token=${tokenInfo.token}` : '');
       const response = await browserlessFetch(`${QWEN_API_BASE}/api/v2/chats/${chatId}`, {
         method: 'DELETE',
         headers: {
@@ -172,7 +185,7 @@ export class SessionPool {
   getStats(): { total: number; available: number; inUse: number; waiting: number } {
     return {
       total: this.activeSessions.size,
-      available: this.activeSessions.size - this.activeCount,
+      available: Math.max(0, this.activeSessions.size - this.activeCount),
       inUse: this.activeCount,
       waiting: 0,
     };
@@ -181,7 +194,7 @@ export class SessionPool {
   /**
    * Create a session using pre-fetched headers (avoids duplicate getBasicHeaders call).
    */
-  private async createSessionWithHeaders(email: string | undefined, headers: BasicHeaders): Promise<string> {
+  private async createSessionWithHeaders(email: string | undefined, headers: BasicHeaders, signal?: AbortSignal): Promise<string> {
     const acct = email ? getAccountByEmail(email) : null;
 
     const sessionBody = JSON.stringify({
@@ -194,7 +207,7 @@ export class SessionPool {
     });
 
     const tokenInfo = email ? await import('./auth.ts').then((m) => m.getTokenWithAccount(email!)) : null;
-    const cookieStr = tokenInfo ? `token=${tokenInfo.token}` : '';
+    const cookieStr = headers.cookie || (tokenInfo ? `token=${tokenInfo.token}` : '');
 
     const response = await browserlessFetch(`${QWEN_API_BASE}/api/v2/chats/new`, {
       method: 'POST',
@@ -208,6 +221,7 @@ export class SessionPool {
       },
       body: sessionBody,
       accountEmail: email,
+      signal,
     });
 
     if (!response.ok) {

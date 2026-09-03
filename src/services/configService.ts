@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import crypto from 'node:crypto';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { projectPath } from '../utils/paths.ts';
 import { logStore } from './logStore.ts';
@@ -30,6 +31,8 @@ export interface ConfigSchema {
   MODELS_CACHE_TTL_MS: string;
   DARK_MODE: string;
   CLAUDE_CODE_PROXY: string;
+  DASHBOARD_USERNAME: string;
+  DASHBOARD_PASSWORD: string;
 }
 
 export const DEFAULT_CONFIG: ConfigSchema = {
@@ -59,6 +62,8 @@ export const DEFAULT_CONFIG: ConfigSchema = {
   MODELS_CACHE_TTL_MS: '3600000',
   DARK_MODE: 'false',
   CLAUDE_CODE_PROXY: 'false',
+  DASHBOARD_USERNAME: '',
+  DASHBOARD_PASSWORD: '',
 };
 
 const CONFIG_KEYS = new Set<string>(Object.keys(DEFAULT_CONFIG));
@@ -112,7 +117,8 @@ export class ConfigService {
       // File missing → create it with defaults
       this._data = {};
       try {
-        writeFileSync(filePath, JSON.stringify(DEFAULT_CONFIG, null, 2) + '\n', 'utf-8');
+        writeFileSync(filePath, JSON.stringify(DEFAULT_CONFIG, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 });
+        chmodSync(filePath, 0o600);
       } catch {
         // If we can't write (e.g. readonly fs in test), just keep empty _data
       }
@@ -127,7 +133,7 @@ export class ConfigService {
 
     const checkPositive = (key: keyof ConfigSchema, name: string): void => {
       const val = parseInt(this.get(key), 10);
-      if (!isNaN(val) && val < 0) {
+      if (isNaN(val) || val < 0) {
         logStore.log('debug', 'config', `[config] ${name} (${key}) is negative (${val}), using default ${DEFAULT_CONFIG[key]}`);
       }
     };
@@ -194,7 +200,11 @@ export class ConfigService {
   }
 
   save(): void {
-    writeFileSync(this._filePath, JSON.stringify(this._data, null, 2) + '\n', 'utf-8');
+    const tmpFile = `${this._filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    writeFileSync(tmpFile, JSON.stringify(this._data, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 });
+    chmodSync(tmpFile, 0o600);
+    renameSync(tmpFile, this._filePath);
+    chmodSync(this._filePath, 0o600);
   }
 
   reset(): void {

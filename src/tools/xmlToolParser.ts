@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { ParsedToolCall } from '../types/openai.ts';
 import { TOOL_CALL_KEYWORDS } from '../utils/tagNames.ts';
 
 export interface ParsedXmlToolCall {
@@ -99,10 +100,7 @@ export function cleanTextOfXmlArtifacts(text: string): { toolCalls: ParsedXmlToo
   return { toolCalls, cleanedText: fullyCleaned };
 }
 
-export function xmlToolCallToParsed(
-  block: ParsedXmlToolCall,
-  _index: number,
-): { id: string; name: string; arguments: Record<string, unknown> } {
+export function xmlToolCallToParsed(block: ParsedXmlToolCall, _index: number): ParsedToolCall {
   const args: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(block.parameters)) {
     try {
@@ -116,6 +114,7 @@ export function xmlToolCallToParsed(
   return {
     id: `call_${crypto.randomUUID()}`,
     name,
+    sourceName: rawName,
     arguments: args,
   };
 }
