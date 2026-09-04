@@ -3,7 +3,7 @@ import { browserlessFetch } from './browserlessFetch.ts';
 import { config } from './configService.ts';
 import { logStore } from './logStore.ts';
 import { type BasicHeaders, getBasicHeaders } from './playwright.ts';
-import { QWEN_API_BASE } from './qwen.ts';
+import { QWEN_API_BASE, type QwenTransport } from './qwen.ts';
 
 interface PoolEntry {
   chatId: string;
@@ -35,7 +35,7 @@ export class SessionPool {
    * Acquire a fresh session. If email is provided, use that specific account.
    * Otherwise, pick the best available account (round-robin, non-throttled).
    */
-  async acquire(email?: string, requestSignal?: AbortSignal): Promise<PoolEntry> {
+  async acquire(email?: string, requestSignal?: AbortSignal, transport: QwenTransport = 'wreq'): Promise<PoolEntry> {
     if (requestSignal?.aborted) {
       if (email) decrementInFlight(email);
       throw new DOMException('Request aborted', 'AbortError');
@@ -63,7 +63,7 @@ export class SessionPool {
         const result = await Promise.race([
           (async () => {
             const headers = await getBasicHeaders(resolvedEmail);
-            const chatId = await this.createSessionWithHeaders(resolvedEmail, headers, acquireController.signal);
+            const chatId = await this.createSessionWithHeaders(resolvedEmail, headers, acquireController.signal, transport);
             return { headers, chatId };
           })(),
           new Promise<never>((_, reject) => {
@@ -194,7 +194,12 @@ export class SessionPool {
   /**
    * Create a session using pre-fetched headers (avoids duplicate getBasicHeaders call).
    */
-  private async createSessionWithHeaders(email: string | undefined, headers: BasicHeaders, signal?: AbortSignal): Promise<string> {
+  private async createSessionWithHeaders(
+    email: string | undefined,
+    headers: BasicHeaders,
+    signal?: AbortSignal,
+    transport: QwenTransport = 'wreq',
+  ): Promise<string> {
     const acct = email ? getAccountByEmail(email) : null;
 
     const sessionBody = JSON.stringify({
@@ -222,6 +227,7 @@ export class SessionPool {
       body: sessionBody,
       accountEmail: email,
       signal,
+      transport,
     });
 
     if (!response.ok) {

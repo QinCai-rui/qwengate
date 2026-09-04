@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { modelRouter } from '../services/modelRouter.ts';
-import { buildFeatureConfig, createQwenStream, fetchQwenModels, resolveThinkingMode } from '../services/qwen.ts';
+import { buildFeatureConfig, createQwenStream, fetchQwenModels, type QwenTransport, resolveThinkingMode } from '../services/qwen.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { THINK_TAG_NAMES, TOOL_CALL_KEYWORDS } from '../utils/tagNames.ts';
 import { pendingCorrections } from './chatHelpersCore.ts';
@@ -224,7 +224,7 @@ export function detachOlderContext(qwenMessages: QwenMessage[], forceFileUpload 
   const history = message.content.slice(prefixEnd).replace(/^\n\n/, '');
   const turns = history.split(/\n\n(?=<user>|<assist>)/);
 
-  let splitIndex = turns.length - 1;
+  let splitIndex = forceFileUpload && turns.length === 1 ? turns.length : turns.length - 1;
   if (!forceFileUpload) {
     let inlineLength = prefix.length + HISTORY_FILE_MARKER.length + 2;
     splitIndex = turns.length;
@@ -236,13 +236,14 @@ export function detachOlderContext(qwenMessages: QwenMessage[], forceFileUpload 
     }
   }
 
-  // A single oversized current turn must stay inline and let Qwen return its
-  // own size error. There is no older turn that can be safely detached.
-  if (splitIndex === 0 || splitIndex === turns.length) return undefined;
+  // A single oversized current turn must stay inline during normal size-based
+  // detachment. On a CAPTCHA retry, put that turn in the file too so the retry
+  // actually changes the request shape and can escape the WAF challenge.
+  if (!forceFileUpload && (splitIndex === 0 || splitIndex === turns.length)) return undefined;
 
   const detachedHistory = turns.slice(0, splitIndex).join('\n\n');
   const recentHistory = turns.slice(splitIndex).join('\n\n');
-  message.content = `${prefix}${prefix ? '\n\n' : ''}${HISTORY_FILE_MARKER}\n\n${recentHistory}`;
+  message.content = `${prefix}${prefix ? '\n\n' : ''}${HISTORY_FILE_MARKER}${recentHistory ? `\n\n${recentHistory}` : ''}`;
   return `<chat_history>\n${detachedHistory}\n</chat_history>`;
 }
 
@@ -280,6 +281,7 @@ export async function acquireSessionWithCorrections(
   accountEmail: string | undefined,
   qwenMessages: QwenMessage[],
   requestSignal?: AbortSignal,
+  transport: QwenTransport = 'wreq',
 ): Promise<{
   session: any;
   qwenMessages: QwenMessage[];
@@ -287,7 +289,7 @@ export async function acquireSessionWithCorrections(
   sessionHeaders: any;
   resolvedEmail: string;
 }> {
-  const session = await sessionPool.acquire(accountEmail, requestSignal);
+  const session = await sessionPool.acquire(accountEmail, requestSignal, transport);
   const prevCorrections =
     pendingCorrections.get(session.chatId) ||
     (accountEmail ? pendingCorrections.get(accountEmail) : undefined) ||
@@ -324,6 +326,7 @@ export async function createQwenStreamWithRetry(
   toolChoice?: unknown,
   requestSignal?: AbortSignal,
   requestHeaders?: { cookie?: string; userAgent?: string },
+  transport: QwenTransport = 'wreq',
 ): Promise<{ stream: ReadableStream; abortController: AbortController; qwenLogFile?: string }> {
   try {
     const result = await createQwenStream(
@@ -337,6 +340,7 @@ export async function createQwenStreamWithRetry(
       toolChoice,
       requestSignal,
       requestHeaders,
+      transport,
     );
     modelRouter.recordSuccess(routedModel);
     return { stream: result.stream, abortController: result.abortController, qwenLogFile: result.qwenLogFile };

@@ -1,11 +1,10 @@
 import crypto from 'node:crypto';
 import { Context } from 'hono';
-import { decrementInFlight, pickAccount, throttleAccount } from '../services/auth.ts';
+import { pickAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
 import { RetryableQwenStreamError, resolveThinkingMode } from '../services/qwen.ts';
-import { uploadContextAsFile } from '../services/qwenContextUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import { OpenAIRequest } from '../types/openai.ts';
@@ -14,7 +13,6 @@ import {
   acquireSessionWithCorrections,
   buildQwenMessages,
   createQwenStreamWithRetry,
-  detachOlderContext,
   handleImageModelFallback,
   parseQwenErrorPayload,
 } from './chatHelpers.ts';
@@ -62,10 +60,8 @@ async function parseRequestBody(c: Context) {
 }
 
 async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: boolean, logId: string, requestSignal?: AbortSignal) {
-  // File upload happens inside retry loop using the same account as the request
-  // (accounts can't access files uploaded by other accounts — must share the account)
   let lastFailedEmail: string | undefined;
-  let forceFileUpload = false;
+  let useBrowserTransport = false;
 
   const thinkingMode = resolveThinkingMode(body.model, body);
   const MAX_ACCOUNT_RETRIES = 5;
@@ -80,25 +76,17 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
       throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
     }
 
-    // A CAPTCHA response is often triggered by a large inline conversation. Retry
-    // with every older turn attached as a file while preserving the latest turn.
     const { qwenMessages: processedMessages } = buildQwenMessages(messages, body, toolCalling);
-    const detachedContext = detachOlderContext(processedMessages, forceFileUpload);
     const requestMessages = processedMessages.map((message) => ({ ...message, files: [] as unknown[] }));
-    if (detachedContext) {
-      if (!accountEmail) throw new Error('Unable to upload older conversation history without a Qwen account');
-      try {
-        const contextFile = await uploadContextAsFile(accountEmail, detachedContext, requestSignal);
-        requestMessages[0] = { ...requestMessages[0], files: [...(requestMessages[0].files || []), contextFile] };
-      } catch (err) {
-        decrementInFlight(accountEmail);
-        throw err;
-      }
-    }
 
     let sessionResult;
     try {
-      sessionResult = await acquireSessionWithCorrections(accountEmail, requestMessages, requestSignal);
+      sessionResult = await acquireSessionWithCorrections(
+        accountEmail,
+        requestMessages,
+        requestSignal,
+        useBrowserTransport ? 'browser' : 'wreq',
+      );
     } catch (err) {
       lastFailedEmail = accountEmail;
       lastError = err;
@@ -132,6 +120,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
         toolCalling ? body.tool_choice : 'none',
         requestSignal,
         sessionHeaders,
+        useBrowserTransport ? 'browser' : 'wreq',
       );
     } catch (err: any) {
       // Release the acquired session to prevent pool exhaustion + inFlight leak
@@ -150,16 +139,17 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
         lastError = err;
         continue;
       }
-      // Bot detection / CAPTCHA: Qwen rejected BEFORE processing (safe to retry on another account).
-      // Throttle the detected account so pickAccount won't pick it again.
-      if (
-        (err.message || '').includes('FAIL_SYS_USER_VALIDATE') ||
-        (err.message || '').includes('CAPTCHA') ||
-        err instanceof RetryableQwenStreamError
-      ) {
-        lastFailedEmail = resolvedEmail;
+      // Bot detection / CAPTCHA: retry through the account's real browser
+      // context. Do not throttle the account or upload the conversation.
+      if ((err.message || '').includes('FAIL_SYS_USER_VALIDATE') || (err.message || '').includes('CAPTCHA')) {
+        useBrowserTransport = true;
+        lastFailedEmail = undefined;
         lastError = err;
-        if (resolvedEmail) throttleAccount(resolvedEmail, 5 * 60 * 1000);
+        continue;
+      }
+      if (err instanceof RetryableQwenStreamError) {
+        lastFailedEmail = undefined;
+        lastError = err;
         continue;
       }
       // Timeout / slow response: Qwen didn't respond in time — skip to next account without penalty
@@ -259,11 +249,10 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
 
       const upstreamError = Object.assign(new Error(firstChunkError.message), { upstreamStatus: firstChunkError.status });
       if (firstChunkError.message.includes('FAIL_SYS_USER_VALIDATE')) {
-        forceFileUpload = true;
-        lastFailedEmail = resolvedEmail;
+        useBrowserTransport = true;
+        lastFailedEmail = undefined;
         lastError = upstreamError;
-        if (resolvedEmail) throttleAccount(resolvedEmail, 5 * 60 * 1000);
-        logStore.log('warn', 'chat', `[Chat] CAPTCHA response from ${resolvedEmail}; retrying with older context uploaded as a file`);
+        logStore.log('warn', 'chat', `[Chat] CAPTCHA response from ${resolvedEmail}; retrying through the real browser context`);
         logStore.addError(logId, upstreamError.message);
         continue;
       }

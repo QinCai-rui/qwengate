@@ -22,6 +22,9 @@ import { isBun } from './utils/env.ts';
 import { projectPath } from './utils/paths.ts';
 
 process.title = 'qwen-gate';
+// CloakBrowser checks npm in the background and can interleave its warning with
+// the multi-line startup banner. Updates remain available through npm manually.
+process.env.CLOAKBROWSER_AUTO_UPDATE ??= 'false';
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[FATAL] Unhandled Promise Rejection:', reason);

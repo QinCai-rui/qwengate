@@ -115,3 +115,13 @@ test('CAPTCHA fallback uploads older history even when the inline prompt is smal
   assert.ok(!inlineContent.includes(olderTurn));
   assert.ok(inlineContent.includes(currentTurn));
 });
+
+test('CAPTCHA fallback uploads a single-turn prompt instead of leaving it inline', () => {
+  const result = buildQwenMessages([{ role: 'user', content: 'Current request that must be uploaded.' }], { model: 'qwen3.7-plus' }, false);
+
+  const detachedHistory = detachOlderContext(result.qwenMessages, true);
+  const inlineContent = String(result.qwenMessages[0].content);
+  assert.ok(detachedHistory?.includes('Current request that must be uploaded.'));
+  assert.ok(!inlineContent.includes('Current request that must be uploaded.'));
+  assert.match(inlineContent, /<conversation-history-file>/);
+});

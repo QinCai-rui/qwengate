@@ -169,7 +169,6 @@ export async function initPlaywright(headless = true, browserType: BrowserType =
             '--disable-translate',
             '--metrics-recording-only',
             '--disable-blink-features=AutomationControlled',
-            `--user-data-dir=/tmp/qwen-pw-${Math.random().toString(36).slice(2, 8)}`,
           ],
         });
         break;

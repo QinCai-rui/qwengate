@@ -141,6 +141,8 @@ export interface QwenStreamResult {
   qwenLogFile?: string;
 }
 
+export type QwenTransport = 'wreq' | 'browser';
+
 // Cached timezone for request headers
 const cachedTimezone = 'America/Sao_Paulo';
 
@@ -236,6 +238,7 @@ export async function createQwenStream(
   toolChoice?: unknown,
   requestSignal?: AbortSignal,
   requestHeaders?: { cookie?: string; userAgent?: string },
+  transport: QwenTransport = 'wreq',
 ): Promise<QwenStreamResult> {
   const actualParentId: string | null = parentId !== undefined ? parentId : null;
   const timestamp = Math.floor(Date.now() / 1000);
@@ -300,6 +303,7 @@ export async function createQwenStream(
 
   const retriesEnabled = config.getBool('RETRY_ENABLED', true);
   let currentAccountEmail = accountEmail;
+  let currentTransport = transport;
   let lastDebugEntryId: string | null = null;
   const streamAbortController = new AbortController();
   const abortFromCaller = () => streamAbortController.abort();
@@ -355,24 +359,13 @@ export async function createQwenStream(
           throw new QwenUpstreamError(`Qwen upstream error: ${code}: ${details}.${wait}`, code, status);
         }
 
-        // Qwen anti-bot CAPTCHA — throttle account and switch
+        // Qwen anti-bot CAPTCHA — retry the same authenticated request in a
+        // real browser context without mutating account health.
         if (errorJson?.ret?.[0] === 'FAIL_SYS_USER_VALIDATE') {
           const details = errorJson.ret[1] || 'CAPTCHA required';
           logStore.log('warn', 'qwen', `CAPTCHA detected for ${currentAccountEmail || 'unknown'}: ${details}`);
-          if (currentAccountEmail) {
-            throttleAccount(currentAccountEmail, 5 * 60 * 1000);
-            logStore.log(
-              'debug',
-              'qwen',
-              `[Qwen] BOT DETECTION: ${currentAccountEmail} hit FAIL_SYS_USER_VALIDATE — throttled 5min, switching account`,
-            );
-            const nextAccount = await pickAccount(currentAccountEmail);
-            if (nextAccount) {
-              currentAccountEmail = nextAccount.email;
-              decrementInFlight(nextAccount.email);
-            }
-          }
-          throw new RetryableQwenStreamError(`Qwen CAPTCHA — switched accounts. ${details}`, 3000);
+          currentTransport = 'browser';
+          throw new RetryableQwenStreamError(`Qwen CAPTCHA — retrying in browser. ${details}`, 3000);
         }
 
         if (
@@ -465,6 +458,7 @@ export async function createQwenStream(
       accountEmail: currentAccountEmail,
       signal: requestSignal || streamAbortController.signal,
       stream: true, // keep session alive for streaming via impers worker
+      transport: currentTransport,
     });
     logStore.log(
       'debug',

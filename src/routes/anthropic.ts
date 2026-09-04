@@ -2,12 +2,11 @@ import crypto from 'node:crypto';
 import { Context } from 'hono';
 import { stream as honoStream } from 'hono/streaming';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { decrementInFlight, pickAccount, throttleAccount } from '../services/auth.ts';
+import { pickAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
 import { RetryableQwenStreamError, resolveThinkingMode } from '../services/qwen.ts';
-import { uploadContextAsFile } from '../services/qwenContextUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
 import type { OpenAIRequest, ParsedToolCall } from '../types/openai.ts';
@@ -16,7 +15,6 @@ import {
   acquireSessionWithCorrections,
   buildQwenMessages,
   createQwenStreamWithRetry,
-  detachOlderContext,
   extractDeltaContent,
   handleImageModelFallback,
 } from './chatHelpers.ts';
@@ -311,11 +309,10 @@ async function setupAnthropicSession(
   stream: ReadableStream;
   qwenAbortController: AbortController;
 }> {
-  // Keep recent context inline; detach only older full turns when necessary.
   const { qwenMessages: processedMessages } = buildQwenMessages(messages, body, toolCalling);
-  const detachedContext = detachOlderContext(processedMessages);
 
   let lastFailedEmail: string | undefined;
+  let useBrowserTransport = false;
   const thinkingMode = resolveThinkingMode(body.model, body);
   let lastError: any;
 
@@ -338,20 +335,15 @@ async function setupAnthropicSession(
     }
 
     const requestMessages = processedMessages.map((message) => ({ ...message, files: [] as unknown[] }));
-    if (detachedContext) {
-      if (!accountEmail) throw new Error('Unable to upload older conversation history without a Qwen account');
-      try {
-        const contextFile = await uploadContextAsFile(accountEmail, detachedContext, requestSignal);
-        requestMessages[0] = { ...requestMessages[0], files: [...(requestMessages[0].files || []), contextFile] };
-      } catch (err) {
-        decrementInFlight(accountEmail);
-        throw err;
-      }
-    }
 
     let sessionResult;
     try {
-      sessionResult = await acquireSessionWithCorrections(accountEmail, requestMessages, requestSignal);
+      sessionResult = await acquireSessionWithCorrections(
+        accountEmail,
+        requestMessages,
+        requestSignal,
+        useBrowserTransport ? 'browser' : 'wreq',
+      );
     } catch (err) {
       lastFailedEmail = accountEmail;
       lastError = err;
@@ -383,6 +375,7 @@ async function setupAnthropicSession(
         toolCalling ? body.tool_choice : 'none',
         requestSignal,
         sessionHeaders,
+        useBrowserTransport ? 'browser' : 'wreq',
       );
     } catch (err: any) {
       sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
@@ -403,10 +396,10 @@ async function setupAnthropicSession(
         (err.message || '').includes('CAPTCHA') ||
         err instanceof RetryableQwenStreamError
       ) {
-        logStore.log('warn', 'chat', `[Anthropic]   -> CAPTCHA/validation, throttling + trying next`);
-        lastFailedEmail = resolvedEmail;
+        logStore.log('warn', 'chat', `[Anthropic]   -> CAPTCHA/validation, retrying through the real browser context`);
+        useBrowserTransport = true;
+        lastFailedEmail = undefined;
         lastError = err;
-        if (resolvedEmail) throttleAccount(resolvedEmail, 5 * 60 * 1000);
         continue;
       }
       if (

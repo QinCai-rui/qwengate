@@ -19,8 +19,9 @@ import { QWEN_API_BASE } from './qwen.ts';
 import { tokenCache } from './tokenCache.ts';
 import { disposeWreqWorker, wreqFetch } from './wreqFetch.ts';
 
-// wreq-js (BoringSSL) is the only transport — bypasses library-level WAF
-// detection that impers (libcurl/OpenSSL) couldn't.
+// wreq-js (BoringSSL) is the default transport — it bypasses library-level WAF
+// detection that impers (libcurl/OpenSSL) could not. CAPTCHA retries can opt
+// into the authenticated Playwright browser transport below.
 
 // Single-flight guard: one cookie refresh per account at a time
 const cookieRefreshInFlight = new Map<string, Promise<string | null>>();
@@ -35,6 +36,8 @@ export interface BrowserlessFetchOptions {
   signal?: AbortSignal;
   /** Keep the session alive for streaming. Default false — session is closed after response. */
   stream?: boolean;
+  /** Use the account's real Playwright browser context instead of wreq. */
+  transport?: 'wreq' | 'browser';
 }
 
 /** Ensure bx-umidtoken is in headers, fetching from cache or sg-wum endpoint. */
@@ -125,6 +128,79 @@ const wafCheck = (r: Response): boolean => {
 };
 
 /**
+ * Fetch through the authenticated browser page. Browser fetch cannot expose a
+ * live ReadableStream across page.evaluate, so the response is buffered and
+ * returned as a normal Response whose body can still be consumed as a stream.
+ */
+async function browserContextFetch(url: string, options: BrowserlessFetchOptions): Promise<Response> {
+  if (!options.accountEmail) {
+    throw new Error('Browser transport requires an account email');
+  }
+
+  const parsedUrl = new URL(url);
+  if (parsedUrl.origin !== QWEN_API_BASE) {
+    throw new Error(`Browser transport only supports ${QWEN_API_BASE}`);
+  }
+
+  const { createAccountContext } = await import('./playwright.ts');
+  const cookieHeader = options.headers?.cookie || '';
+  const cookies = cookieHeader
+    .split(';')
+    .map((pair) => {
+      const separator = pair.indexOf('=');
+      if (separator <= 0) return null;
+      const name = pair.slice(0, separator).trim();
+      const value = pair.slice(separator + 1).trim();
+      return name && value ? { name, value, domain: '.qwen.ai', path: '/', secure: true } : null;
+    })
+    .filter((cookie): cookie is { name: string; value: string; domain: string; path: string; secure: boolean } => cookie !== null);
+  const accountContext = await createAccountContext(
+    options.accountEmail,
+    Object.fromEntries(cookies.map((cookie) => [cookie.name, cookie.value])),
+  );
+  if (cookies.length > 0) {
+    await accountContext.context.addCookies(cookies);
+  }
+
+  const browserHeaders = Object.fromEntries(
+    Object.entries(options.headers || {}).filter(
+      ([name]) =>
+        !/^(cookie|host|content-length|user-agent|origin|referer|connection|accept-encoding)$/i.test(name) && !/^sec-/i.test(name),
+    ),
+  );
+  const result = await accountContext.page.evaluate(
+    async ({ requestUrl, method, headers, body }) => {
+      const response = await fetch(requestUrl, {
+        method,
+        headers,
+        body: body ?? undefined,
+        credentials: 'include',
+        cache: 'no-store',
+      });
+      return {
+        status: response.status,
+        statusText: response.statusText,
+        headers: Array.from(response.headers.entries()),
+        body: await response.text(),
+      };
+    },
+    {
+      requestUrl: url,
+      method: options.method || 'GET',
+      headers: browserHeaders,
+      body: options.body,
+    },
+  );
+
+  logStore.log('debug', 'browserless', `browser ${options.method || 'GET'} ${parsedUrl.pathname} → ${result.status}`);
+  return new Response(result.body, {
+    status: result.status,
+    statusText: result.statusText,
+    headers: result.headers,
+  });
+}
+
+/**
  * Make a browserless HTTP request to Qwen API.
  *
  * Returns a standard Web API Response object.
@@ -136,7 +212,7 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
     return globalThis.fetch(url, { method, headers, body });
   }
 
-  const { method = 'GET', headers = {}, body, accountEmail, signal, stream } = options;
+  const { method = 'GET', headers = {}, body, accountEmail, signal, stream, transport = 'wreq' } = options;
 
   // Auto-inject bx tokens
   await ensureBxUmidtoken(headers);
@@ -171,6 +247,10 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
   }
 
   await ensureAcwTcCookie(headers);
+
+  if (transport === 'browser') {
+    return browserContextFetch(url, { ...options, method, headers, body, accountEmail, signal, stream, transport });
+  }
 
   const startTime = Date.now();
 

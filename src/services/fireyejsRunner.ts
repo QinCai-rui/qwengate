@@ -8,8 +8,8 @@
  * bx-pp: SHA-256 payload hash fallback (opcode 58 needs real AWSC).
  *
  * Cookie refresh: Playwright browser navigates chat.qwen.ai to refresh
- *   acw_tc and other WAF session cookies. This is the only remaining
- *   browser dependency — runs once per 30 min per account.
+ *   acw_tc and other WAF session cookies. The same browser infrastructure is
+ *   also used for CAPTCHA retry requests.
  */
 import { resolve } from 'path';
 import { getBxUaToken } from './bxUaGenerator.ts';
