@@ -214,8 +214,44 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
     }
     clearTimeout(firstChunkTimer);
 
-    const firstChunkText = firstChunk.value ? new TextDecoder().decode(firstChunk.value) : '';
-    const firstChunkError = parseQwenErrorPayload(firstChunkText);
+    // Qwen can split a non-SSE JSON rejection across several network chunks.
+    // Buffer until a complete payload arrives so we can retry before starting the
+    // client response, rather than forwarding an empty completion.
+    const initialChunks: Uint8Array[] = [];
+    const initialDecoder = new TextDecoder();
+    let initialText = '';
+    let initialDone = firstChunk.done;
+    if (firstChunk.value) {
+      initialChunks.push(firstChunk.value);
+      initialText += initialDecoder.decode(firstChunk.value, { stream: true });
+    }
+
+    while (!initialDone) {
+      const trimmedInitial = initialText.trim();
+      const initialError = parseQwenErrorPayload(trimmedInitial);
+      if (initialError) break;
+
+      const initialPayload = trimmedInitial.startsWith('data: ') ? trimmedInitial.slice(6).split('\n')[0] : trimmedInitial;
+      if (initialPayload === '[DONE]') break;
+      try {
+        if (initialPayload) {
+          JSON.parse(initialPayload);
+          break;
+        }
+      } catch {
+        // A partial JSON or SSE frame: read another chunk before deciding.
+      }
+
+      const nextChunk = await streamReader.read();
+      initialDone = nextChunk.done;
+      if (nextChunk.value) {
+        initialChunks.push(nextChunk.value);
+        initialText += initialDecoder.decode(nextChunk.value, { stream: true });
+      }
+    }
+    initialText += initialDecoder.decode();
+
+    const firstChunkError = parseQwenErrorPayload(initialText);
     if (firstChunkError) {
       streamReader.cancel().catch(() => {});
       qwenAbortController.abort();
@@ -238,7 +274,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
     // This lets us keep the first chunk (already read) while allowing async consumption.
     stream = new ReadableStream<Uint8Array>({
       async start(controller) {
-        if (!firstChunk.done && firstChunk.value) controller.enqueue(firstChunk.value);
+        for (const initialChunk of initialChunks) controller.enqueue(initialChunk);
         try {
           while (true) {
             const { done, value } = await streamReader.read();

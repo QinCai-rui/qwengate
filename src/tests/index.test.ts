@@ -213,6 +213,42 @@ test('Chat Completions returns explicit error for non-SSE upstream JSON errors',
   }
 });
 
+test('Chat Completions detects a split HTTP-200 CAPTCHA body before opening the response stream', async () => {
+  const originalFetch = globalThis.fetch;
+  (globalThis as any).fetch = async (input: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.includes('/api/v2/chat/completions')) {
+      const payload = JSON.stringify({ ret: ['FAIL_SYS_USER_VALIDATE', 'request rejected'] });
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(payload.slice(0, 24)));
+            controller.enqueue(new TextEncoder().encode(payload.slice(24)));
+            controller.close();
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }
+    return originalFetch(input);
+  };
+
+  try {
+    const req = new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders),
+      body: JSON.stringify({ model: 'qwen3.6-plus', messages: [{ role: 'user', content: 'hello' }] }),
+    });
+
+    const res = await app.fetch(req);
+    assert.strictEqual(res.status, 502);
+    const body = await res.json();
+    assert.match(body.error.message, /FAIL_SYS_USER_VALIDATE/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('Chat Completions returns a JSON chat.completion object for non-streaming requests', async () => {
   const originalFetch = globalThis.fetch;
   (globalThis as any).fetch = async (input: any) => {
