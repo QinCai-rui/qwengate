@@ -14,7 +14,9 @@ import {
   buildQwenMessages,
   createQwenStreamWithRetry,
   handleImageModelFallback,
+  isQwenCapacityError,
   parseQwenErrorPayload,
+  waitForQwenRetry,
 } from './chatHelpers.ts';
 import { handleNonStreamingRequest } from './chatNonStreaming.ts';
 import { handleStreamingRequest } from './chatStreaming.ts';
@@ -61,7 +63,9 @@ async function parseRequestBody(c: Context) {
 
 async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: boolean, logId: string, requestSignal?: AbortSignal) {
   let lastFailedEmail: string | undefined;
-  let useBrowserTransport = false;
+  // Qwen's risk system keys off the browser session. Prefer the real browser
+  // transport from the first request; wreq remains available for other API paths.
+  let useBrowserTransport = true;
 
   const thinkingMode = resolveThinkingMode(body.model, body);
   const MAX_ACCOUNT_RETRIES = 5;
@@ -137,6 +141,14 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
       if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
         lastFailedEmail = resolvedEmail;
         lastError = err;
+        continue;
+      }
+      if (err.upstreamStatus === 503 || isQwenCapacityError(err.message || '')) {
+        useBrowserTransport = true;
+        lastFailedEmail = undefined;
+        lastError = Object.assign(err, { upstreamStatus: 503 });
+        logStore.log('warn', 'chat', `[Chat] Qwen capacity/risk rejection from ${resolvedEmail}; backing off before browser retry`);
+        await waitForQwenRetry(attempt, requestSignal);
         continue;
       }
       // Bot detection / CAPTCHA: retry through the account's real browser
@@ -248,6 +260,14 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
       sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
 
       const upstreamError = Object.assign(new Error(firstChunkError.message), { upstreamStatus: firstChunkError.status });
+      if (isQwenCapacityError(firstChunkError.message)) {
+        useBrowserTransport = true;
+        lastFailedEmail = undefined;
+        lastError = Object.assign(upstreamError, { upstreamStatus: 503 });
+        logStore.log('warn', 'chat', `[Chat] Qwen capacity/risk rejection from ${resolvedEmail}; backing off before browser retry`);
+        await waitForQwenRetry(attempt, requestSignal);
+        continue;
+      }
       if (firstChunkError.message.includes('FAIL_SYS_USER_VALIDATE')) {
         useBrowserTransport = true;
         lastFailedEmail = undefined;

@@ -30,7 +30,7 @@ test('Qwen CAPTCHA JSON is surfaced as an upstream error', () => {
   const result = parseQwenErrorPayload(JSON.stringify({ ret: ['FAIL_SYS_USER_VALIDATE', 'RGV587_ERROR::SM::request rejected'] }));
   assert.deepStrictEqual(result, {
     message: 'Qwen upstream error: FAIL_SYS_USER_VALIDATE: RGV587_ERROR::SM::request rejected',
-    status: 502,
+    status: 503,
   });
 });
 

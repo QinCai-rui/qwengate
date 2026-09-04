@@ -168,6 +168,13 @@ async function browserContextFetch(url: string, options: BrowserlessFetchOptions
         !/^(cookie|host|content-length|user-agent|origin|referer|connection|accept-encoding)$/i.test(name) && !/^sec-/i.test(name),
     ),
   );
+  // Prefer tokens captured from requests made by the Qwen SPA in this browser
+  // context. Node-side fallbacks can trigger risk control when replayed from a
+  // browser with a different fingerprint.
+  for (const [name, value] of Object.entries(accountContext.headers)) {
+    if (/^bx-/i.test(name)) browserHeaders[name] = value;
+  }
+  delete browserHeaders['bx-pp'];
   const result = await accountContext.page.evaluate(
     async ({ requestUrl, method, headers, body }) => {
       const response = await fetch(requestUrl, {

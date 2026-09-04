@@ -200,6 +200,30 @@ export class ToolSpamGuard {
 
 export const pendingCorrections = new Map<string, string[]>();
 
+/** Qwen uses this anti-bot envelope for temporary capacity/risk rejection. */
+export function isQwenCapacityError(message: string): boolean {
+  return /RGV587_ERROR|overloaded|try again later|too many requests|crowded/i.test(message);
+}
+
+export async function waitForQwenRetry(attempt: number, signal?: AbortSignal): Promise<void> {
+  const delayMs = Math.min(8000, 2000 * 2 ** Math.min(attempt, 2)) + Math.floor(Math.random() * 1000);
+  await new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Retry aborted', 'AbortError'));
+      return;
+    }
+    const timer = setTimeout(resolve, delayMs);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        reject(new DOMException('Retry aborted', 'AbortError'));
+      },
+      { once: true },
+    );
+  });
+}
+
 // Prevent unbounded growth: trim oldest entries every 5 minutes
 const MAX_PENDING_CORRECTIONS = 500;
 setInterval(
@@ -242,7 +266,10 @@ export function parseQwenErrorPayload(
     if (Array.isArray(payload?.ret) && payload.ret[0]) {
       const code = String(payload.ret[0]);
       const details = payload.ret[1] || 'Qwen rejected the request';
-      return { message: `Qwen upstream error: ${code}: ${details}`, status: 502 };
+      return {
+        message: `Qwen upstream error: ${code}: ${details}`,
+        status: isQwenCapacityError(`${code}: ${details}`) ? 503 : 502,
+      };
     }
   } catch {
     return null;

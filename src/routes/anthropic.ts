@@ -17,6 +17,8 @@ import {
   createQwenStreamWithRetry,
   extractDeltaContent,
   handleImageModelFallback,
+  isQwenCapacityError,
+  waitForQwenRetry,
 } from './chatHelpers.ts';
 import { ToolSpamGuard } from './chatHelpersCore.ts';
 import type { NonStreamingContext } from './chatNonStreaming.ts';
@@ -312,7 +314,8 @@ async function setupAnthropicSession(
   const { qwenMessages: processedMessages } = buildQwenMessages(messages, body, toolCalling);
 
   let lastFailedEmail: string | undefined;
-  let useBrowserTransport = false;
+  // Keep Anthropic-compatible requests on the same browser-backed Qwen path.
+  let useBrowserTransport = true;
   const thinkingMode = resolveThinkingMode(body.model, body);
   let lastError: any;
 
@@ -389,6 +392,14 @@ async function setupAnthropicSession(
         logStore.log('warn', 'chat', `[Anthropic]   -> rate-limited, trying next account`);
         lastFailedEmail = resolvedEmail;
         lastError = err;
+        continue;
+      }
+      if (err.upstreamStatus === 503 || isQwenCapacityError(err.message || '')) {
+        logStore.log('warn', 'chat', `[Anthropic]   -> Qwen capacity/risk rejection, backing off before browser retry`);
+        useBrowserTransport = true;
+        lastFailedEmail = undefined;
+        lastError = Object.assign(err, { upstreamStatus: 503 });
+        await waitForQwenRetry(attempt, requestSignal);
         continue;
       }
       if (
