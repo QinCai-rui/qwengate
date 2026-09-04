@@ -256,7 +256,20 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
   await ensureAcwTcCookie(headers);
 
   if (transport === 'browser') {
-    return browserContextFetch(url, { ...options, method, headers, body, accountEmail, signal, stream, transport });
+    if (!accountEmail) {
+      logStore.log('warn', 'browserless', 'Browser transport requested without an account; using wreq for this request');
+      // A browser context is account-scoped. Session/bootstrap calls without a
+      // resolved account must remain usable until account selection completes.
+    } else {
+      try {
+        return await browserContextFetch(url, { ...options, method, headers, body, accountEmail, signal, stream, transport });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logStore.log('warn', 'browserless', `Browser transport unavailable; falling back to wreq: ${message.substring(0, 200)}`);
+        // Keep the gateway usable when the host is missing a Chromium shared
+        // library. The browser path remains preferred once the dependency is fixed.
+      }
+    }
   }
 
   const startTime = Date.now();

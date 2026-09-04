@@ -13,6 +13,7 @@ WORKDIR /app
 # Install system deps for Playwright/Chromium
 RUN apk add --no-cache \
     chromium \
+    nspr \
     nss \
     freetype \
     harfbuzz \
