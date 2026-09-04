@@ -26,8 +26,11 @@ export async function runStreamLoop(
 
   const processLine = async (line: string): Promise<void> => {
     const trimmed = line.trim();
-    if (!trimmed || !trimmed.startsWith('data: ')) return;
-    const dataStr = trimmed.slice(6);
+    if (!trimmed) return;
+    // Qwen sometimes returns a JSON rejection with HTTP 200 instead of an SSE
+    // event. Process it so the client receives a real upstream error.
+    const dataStr = trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed.startsWith('{') ? trimmed : null;
+    if (!dataStr) return;
     if (dataStr === '[DONE]') {
       streamDone = true;
       return;

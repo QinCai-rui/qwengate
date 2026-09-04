@@ -93,6 +93,42 @@ export async function writeToolCallEvent(streamWriter: any, completionId: string
   );
 }
 
+/**
+ * Start a tool call before its arguments are complete. OpenCode can render the
+ * tool's activity as soon as it receives this standard OpenAI stream delta.
+ */
+export async function writeToolCallStartEvent(
+  streamWriter: any,
+  completionId: string,
+  model: string,
+  id: string,
+  name: string,
+  index: number,
+) {
+  await writeEvent(
+    streamWriter,
+    buildChunkEvent(completionId, model, [
+      makeChoice({
+        tool_calls: [{ index, id, type: 'function', function: { name, arguments: '' } }],
+      }),
+    ]),
+  );
+}
+
+/** Write the completed arguments for a tool call started in an earlier delta. */
+export async function writeToolCallArgumentsEvent(
+  streamWriter: any,
+  completionId: string,
+  model: string,
+  arguments_: unknown,
+  index: number,
+) {
+  await writeEvent(
+    streamWriter,
+    buildChunkEvent(completionId, model, [makeChoice({ tool_calls: [{ index, function: { arguments: JSON.stringify(arguments_) } }] })]),
+  );
+}
+
 export function buildUsage(promptTokens: number, completionTokens: number, reasoningBuffer: string) {
   const streamReasoningTokensEstimate = reasoningBuffer ? Math.ceil(reasoningBuffer.length / 4) : 0;
   return {

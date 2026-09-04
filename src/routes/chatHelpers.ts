@@ -213,9 +213,10 @@ export function buildQwenMessages(messages: any[], body: any, _toolCalling: bool
  * Keep the current turn and instructions inline, moving only complete older
  * conversation turns to a file before Qwen's web WAF rejects the request.
  */
-export function detachOlderContext(qwenMessages: QwenMessage[]): string | undefined {
+export function detachOlderContext(qwenMessages: QwenMessage[], forceFileUpload = false): string | undefined {
   const message = qwenMessages[0];
-  if (!message || typeof message.content !== 'string' || message.content.length <= MAX_INLINE_CONTEXT_CHARS) return undefined;
+  if (!message || typeof message.content !== 'string' || (!forceFileUpload && message.content.length <= MAX_INLINE_CONTEXT_CHARS))
+    return undefined;
 
   const systemEnd = message.content.indexOf('</system-instructions>');
   const prefixEnd = systemEnd >= 0 ? systemEnd + '</system-instructions>'.length : 0;
@@ -223,13 +224,16 @@ export function detachOlderContext(qwenMessages: QwenMessage[]): string | undefi
   const history = message.content.slice(prefixEnd).replace(/^\n\n/, '');
   const turns = history.split(/\n\n(?=<user>|<assist>)/);
 
-  let inlineLength = prefix.length + HISTORY_FILE_MARKER.length + 2;
-  let splitIndex = turns.length;
-  for (let index = turns.length - 1; index >= 0; index--) {
-    const nextLength = turns[index].length + (splitIndex < turns.length ? 2 : 0);
-    if (inlineLength + nextLength > MAX_INLINE_CONTEXT_CHARS) break;
-    inlineLength += nextLength;
-    splitIndex = index;
+  let splitIndex = turns.length - 1;
+  if (!forceFileUpload) {
+    let inlineLength = prefix.length + HISTORY_FILE_MARKER.length + 2;
+    splitIndex = turns.length;
+    for (let index = turns.length - 1; index >= 0; index--) {
+      const nextLength = turns[index].length + (splitIndex < turns.length ? 2 : 0);
+      if (inlineLength + nextLength > MAX_INLINE_CONTEXT_CHARS) break;
+      inlineLength += nextLength;
+      splitIndex = index;
+    }
   }
 
   // A single oversized current turn must stay inline and let Qwen return its

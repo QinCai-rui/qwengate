@@ -95,3 +95,23 @@ test('older history is detached before the inline request reaches Qwen WAF size'
   );
   assert.ok(inlineContent.length <= 100_000);
 });
+
+test('CAPTCHA fallback uploads older history even when the inline prompt is small', () => {
+  const olderTurn = 'Earlier request.';
+  const currentTurn = 'Current request.';
+  const result = buildQwenMessages(
+    [
+      { role: 'user', content: olderTurn },
+      { role: 'assistant', content: 'Earlier response.' },
+      { role: 'user', content: currentTurn },
+    ],
+    { model: 'qwen3.7-plus' },
+    false,
+  );
+
+  const detachedHistory = detachOlderContext(result.qwenMessages, true);
+  const inlineContent = String(result.qwenMessages[0].content);
+  assert.ok(detachedHistory?.includes(olderTurn));
+  assert.ok(!inlineContent.includes(olderTurn));
+  assert.ok(inlineContent.includes(currentTurn));
+});

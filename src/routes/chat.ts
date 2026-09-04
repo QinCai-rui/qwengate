@@ -16,6 +16,7 @@ import {
   createQwenStreamWithRetry,
   detachOlderContext,
   handleImageModelFallback,
+  parseQwenErrorPayload,
 } from './chatHelpers.ts';
 import { handleNonStreamingRequest } from './chatNonStreaming.ts';
 import { handleStreamingRequest } from './chatStreaming.ts';
@@ -61,13 +62,10 @@ async function parseRequestBody(c: Context) {
 }
 
 async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: boolean, logId: string, requestSignal?: AbortSignal) {
-  // Keep recent context inline; detach only older full turns when necessary.
-  const { qwenMessages: processedMessages } = buildQwenMessages(messages, body, toolCalling);
-  const detachedContext = detachOlderContext(processedMessages);
-
   // File upload happens inside retry loop using the same account as the request
   // (accounts can't access files uploaded by other accounts — must share the account)
   let lastFailedEmail: string | undefined;
+  let forceFileUpload = false;
 
   const thinkingMode = resolveThinkingMode(body.model, body);
   const MAX_ACCOUNT_RETRIES = 5;
@@ -82,6 +80,10 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
       throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
     }
 
+    // A CAPTCHA response is often triggered by a large inline conversation. Retry
+    // with every older turn attached as a file while preserving the latest turn.
+    const { qwenMessages: processedMessages } = buildQwenMessages(messages, body, toolCalling);
+    const detachedContext = detachOlderContext(processedMessages, forceFileUpload);
     const requestMessages = processedMessages.map((message) => ({ ...message, files: [] as unknown[] }));
     if (detachedContext) {
       if (!accountEmail) throw new Error('Unable to upload older conversation history without a Qwen account');
@@ -211,6 +213,26 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
       continue;
     }
     clearTimeout(firstChunkTimer);
+
+    const firstChunkText = firstChunk.value ? new TextDecoder().decode(firstChunk.value) : '';
+    const firstChunkError = parseQwenErrorPayload(firstChunkText);
+    if (firstChunkError) {
+      streamReader.cancel().catch(() => {});
+      qwenAbortController.abort();
+      sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
+
+      const upstreamError = Object.assign(new Error(firstChunkError.message), { upstreamStatus: firstChunkError.status });
+      if (firstChunkError.message.includes('FAIL_SYS_USER_VALIDATE')) {
+        forceFileUpload = true;
+        lastFailedEmail = resolvedEmail;
+        lastError = upstreamError;
+        if (resolvedEmail) throttleAccount(resolvedEmail, 5 * 60 * 1000);
+        logStore.log('warn', 'chat', `[Chat] CAPTCHA response from ${resolvedEmail}; retrying with older context uploaded as a file`);
+        logStore.addError(logId, upstreamError.message);
+        continue;
+      }
+      throw upstreamError;
+    }
 
     // Reconstruct stream with the first chunk prepended, then pipe remaining data through.
     // This lets us keep the first chunk (already read) while allowing async consumption.
@@ -359,7 +381,7 @@ export async function chatCompletions(c: Context) {
       return c.json(
         {
           error: {
-            message: 'All accounts have reached their daily usage limit. Please try again later.',
+            message: err.message || 'All accounts have reached their daily usage limit. Please try again later.',
             type: 'rate_limit_error',
             code: 'rate_limit_exceeded',
           },

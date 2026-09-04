@@ -12,7 +12,13 @@ import {
   getSnapshotDelta,
 } from './chatHelpers.ts';
 import { processToolCallsThroughGuard, ToolSpamGuard } from './chatHelpersCore.ts';
-import { writeContentDelta, writeReasoningEvent, writeToolCallEvent } from './writeHelpers.ts';
+import {
+  writeContentDelta,
+  writeReasoningEvent,
+  writeToolCallArgumentsEvent,
+  writeToolCallEvent,
+  writeToolCallStartEvent,
+} from './writeHelpers.ts';
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -32,6 +38,8 @@ const SELF_CLOSING_TAG_PATTERN = new RegExp(`^[\\n\\s]*<\\/?(?:${THINK_TAG_NAMES
  * would accumulate well beyond 200 chars before the stream emits any content.
  */
 const MAX_BUFFER_CHARS = 200;
+const FKW = TOOL_CALL_KEYWORDS[0];
+const FUNCTION_START_RE = new RegExp(`<${FKW}=([^\\s>]+)>`);
 
 // ── Local MCP tool call extraction (from Qwen Studio local_tool phase) ──
 
@@ -95,6 +103,8 @@ export interface StreamProcessingState {
   upstreamError?: string;
   /** Depth tracking for nested tool call XML blocks. >0 means suppress content emission. */
   toolCallDepth: number;
+  /** Tool call announced to the client while Qwen is still composing its arguments. */
+  pendingToolCall?: { id: string; name: string; index: number };
   /**
    * One-chunk buffer for handling XML tag splits across SSE chunk boundaries.
    * When a chunk contains `<` without `>`, it might be a tag split (e.g. `<func` + `tion=read>`).
@@ -151,6 +161,11 @@ function guardStreamToolCalls(toolCalls: ParsedToolCall[], state: StreamProcessi
     for (const correction of corrections) logStore.addError(ctx.logId, correction);
   }
   return accepted.map((tc) => ({ id: tc.id, name: tc.function.name, arguments: JSON.parse(tc.function.arguments) }));
+}
+
+function canStartToolCall(name: string, ctx: StreamProcessingCtx): boolean {
+  if (ctx.toolCalling === false || ctx.toolChoice === 'none') return false;
+  return !ctx.allowedToolNames || ctx.allowedToolNames.has(name);
 }
 
 /**
@@ -388,9 +403,17 @@ export async function processStreamData(data: any, state: StreamProcessingState,
   // When inside a tool call block (depth > 0), don't accumulate into
   // lastFilteredFullContent or emit content deltas to the client. The flush
   // path handles the clean version of the tool call text.
-  const FKW = TOOL_CALL_KEYWORDS[0];
   const tagOpen = rawText.includes(`<${FKW}=`);
   const tagClose = rawText.includes(`</${FKW}>`);
+  const functionStart = rawText.match(FUNCTION_START_RE);
+  if (functionStart && !state.pendingToolCall) {
+    const rawName = functionStart[1];
+    const name = rawName.startsWith('★-') ? rawName.slice(2) : rawName;
+    if (canStartToolCall(name, ctx)) {
+      state.pendingToolCall = { id: `call_${crypto.randomUUID()}`, name, index: ctx.emittedToolCallCount };
+      await writeToolCallStartEvent(streamWriter, completionId, model, state.pendingToolCall.id, name, state.pendingToolCall.index);
+    }
+  }
   if (tagOpen) state.toolCallDepth++;
   if (tagClose) state.toolCallDepth = Math.max(0, state.toolCallDepth - 1);
 
@@ -411,10 +434,17 @@ export async function processStreamData(data: any, state: StreamProcessingState,
       ctx,
     );
     for (const [i, parsed] of accepted.entries()) {
-      await writeToolCallEvent(streamWriter, completionId, model, parsed, ctx.emittedToolCallCount + i);
+      if (state.pendingToolCall?.name === parsed.name) {
+        parsed.id = state.pendingToolCall.id;
+        await writeToolCallArgumentsEvent(streamWriter, completionId, model, parsed.arguments, state.pendingToolCall.index);
+        state.pendingToolCall = undefined;
+      } else {
+        await writeToolCallEvent(streamWriter, completionId, model, parsed, ctx.emittedToolCallCount + i);
+      }
     }
     ctx.emittedToolCallCount += accepted.length;
   }
+  if (tagClose) state.pendingToolCall = undefined;
 
   // Truncate lastFullContent to prevent unbounded growth (M-10)
   // Use a generous limit (100000 chars ≈ 25000 tokens) so the content delta

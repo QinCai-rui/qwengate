@@ -170,9 +170,11 @@ function processAnswerDelta(delta: any, state: StreamProcessorState, ctx: NonStr
 
 function parseQwenResponse(line: string, state: StreamProcessorState, ctx: NonStreamingContext): void {
   const trimmed = line.trim();
-  if (!trimmed || !trimmed.startsWith('data: ')) return;
+  if (!trimmed) return;
 
-  const dataStr = trimmed.slice(6);
+  // Qwen can return a bare JSON rejection with HTTP 200 instead of SSE.
+  const dataStr = trimmed.startsWith('data: ') ? trimmed.slice(6) : trimmed.startsWith('{') ? trimmed : null;
+  if (!dataStr) return;
   if (dataStr === '[DONE]') return;
 
   let chunk: any;

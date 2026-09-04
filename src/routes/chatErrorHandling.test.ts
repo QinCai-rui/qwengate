@@ -2,6 +2,7 @@ import assert from 'node:assert';
 import test from 'node:test';
 import { parseQwenErrorPayload } from './chatHelpersCore.ts';
 import { processStreamData, type StreamProcessingState } from './chatStreamingHelpers.ts';
+import { runStreamLoop } from './streamLoop.ts';
 
 function streamState(): StreamProcessingState {
   return {
@@ -49,5 +50,38 @@ test('stream processing stops on a plain JSON Qwen rejection', async () => {
   });
 
   assert.strictEqual(result, 'break_stream');
+  assert.strictEqual(state.upstreamError, 'Qwen upstream error: FAIL_SYS_USER_VALIDATE: request rejected');
+});
+
+test('stream loop processes a bare HTTP-200 Qwen rejection instead of discarding it', async () => {
+  const state = streamState();
+  const payload = JSON.stringify({ ret: ['FAIL_SYS_USER_VALIDATE', 'request rejected'] });
+  const reader = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(payload));
+      controller.close();
+    },
+  }).getReader();
+
+  await runStreamLoop(
+    { req: {} },
+    reader,
+    state,
+    {
+      streamWriter: { write: async () => {} },
+      completionId: 'test',
+      model: 'qwen3.7-plus',
+      emittedToolCallCount: 0,
+      enableContentFiltering: true,
+      cleanOutput: true,
+      logId: 'test',
+      resolvedEmail: 'test@example.com',
+      ampState: { rawInputBytes: 0, emittedOutputBytes: 0, triggered: false },
+      qwenAbortController: new AbortController(),
+    },
+    { rawInputBytes: 0, emittedOutputBytes: 0, triggered: false },
+    { text: '' },
+  );
+
   assert.strictEqual(state.upstreamError, 'Qwen upstream error: FAIL_SYS_USER_VALIDATE: request rejected');
 });

@@ -103,6 +103,13 @@ test('reproduces and tests fix for corrupted tool call when split across chunks'
       ],
     };
     await processStreamData(data, state, ctx);
+    if (chunk === '>\n<parameter') {
+      assert.strictEqual(
+        writtenEvents.filter((event) => event.includes('tool_calls')).length,
+        1,
+        'should announce the tool call before its parameters or closing tag arrive',
+      );
+    }
   }
 
   // 1. Verify that the tool call was successfully parsed and recorded in the logStore entry
@@ -113,8 +120,15 @@ test('reproduces and tests fix for corrupted tool call when split across chunks'
 
   // 2. Verify that the emitted tool call event is sent to the client
   const toolCallEvents = writtenEvents.filter((e) => e.includes('tool_calls'));
-  assert.strictEqual(toolCallEvents.length, 1, 'should have emitted exactly one tool call event to client');
-  assert.ok(toolCallEvents[0].includes('★-edit') || toolCallEvents[0].includes('edit'), 'emitted tool call should be edit');
+  assert.strictEqual(toolCallEvents.length, 2, 'should emit a start event and a completed-arguments event');
+  const startedToolCall = JSON.parse(toolCallEvents[0].slice(6));
+  const completedToolCall = JSON.parse(toolCallEvents[1].slice(6));
+  const startedFunction = startedToolCall.choices[0].delta.tool_calls[0];
+  const completedFunction = completedToolCall.choices[0].delta.tool_calls[0];
+  assert.strictEqual(startedFunction.function.name, 'edit', 'start event should expose the tool name immediately');
+  assert.strictEqual(startedFunction.function.arguments, '', 'start event should not claim incomplete arguments are final');
+  assert.strictEqual(completedFunction.index, startedFunction.index, 'completed arguments should extend the announced tool call');
+  assert.ok(completedFunction.function.arguments.includes('filePath'), 'completed event should contain the parsed arguments');
 
   // 3. Verify that the content streamed to the client does NOT contain leaked function tags/parameters
   // Reconstruct emitted content from content events
