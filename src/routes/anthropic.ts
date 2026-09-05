@@ -428,6 +428,7 @@ async function setupAnthropicSession(
         useBrowserTransport = true;
         lastFailedEmail = undefined;
         lastError = err;
+        if (err instanceof RetryableQwenStreamError) await waitForQwenRetry(attempt, requestSignal);
         continue;
       }
       if (

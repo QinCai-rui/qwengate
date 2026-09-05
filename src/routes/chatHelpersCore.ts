@@ -209,6 +209,10 @@ export function isQwenRGV587Error(message: string): boolean {
   return /RGV587_ERROR|挤爆/i.test(message);
 }
 
+export function isQwenChatInProgressError(message: string): boolean {
+  return /CHAT_IN_PROGRESS|chat is in progress/i.test(message);
+}
+
 export async function waitForQwenRetry(attempt: number, signal?: AbortSignal): Promise<void> {
   const delayMs = Math.min(8000, 2000 * 2 ** Math.min(attempt, 2)) + Math.floor(Math.random() * 1000);
   await new Promise<void>((resolve, reject) => {

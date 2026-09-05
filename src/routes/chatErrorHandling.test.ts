@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import test from 'node:test';
-import { isQwenRGV587Error, parseQwenErrorPayload } from './chatHelpersCore.ts';
+import { isQwenChatInProgressError, isQwenRGV587Error, parseQwenErrorPayload } from './chatHelpersCore.ts';
 
 import { processStreamData, type StreamProcessingState } from './chatStreamingHelpers.ts';
 import { runStreamLoop } from './streamLoop.ts';
@@ -9,6 +9,11 @@ test('only RGV587 capacity errors trigger context-upload retries', () => {
   assert.strictEqual(isQwenRGV587Error('RGV587_ERROR::SM::request rejected'), true);
   assert.strictEqual(isQwenRGV587Error('哎哟喂,被挤爆啦,请稍后重试'), true);
   assert.strictEqual(isQwenRGV587Error('RateLimited: daily usage limit'), false);
+});
+
+test('CHAT_IN_PROGRESS is treated as a temporary busy-session error', () => {
+  assert.strictEqual(isQwenChatInProgressError('Qwen upstream error: CHAT_IN_PROGRESS: The chat is in progress!'), true);
+  assert.strictEqual(isQwenChatInProgressError('Qwen upstream error: RateLimited'), false);
 });
 
 function streamState(): StreamProcessingState {

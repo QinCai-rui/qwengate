@@ -17,6 +17,7 @@ import {
   detachOlderContext,
   handleImageModelFallback,
   isQwenCapacityError,
+  isQwenChatInProgressError,
   isQwenRGV587Error,
   parseQwenErrorPayload,
   waitForQwenRetry,
@@ -194,6 +195,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
       if (err instanceof RetryableQwenStreamError) {
         lastFailedEmail = undefined;
         lastError = err;
+        await waitForQwenRetry(attempt, requestSignal);
         continue;
       }
       // Timeout / slow response: Qwen didn't respond in time — skip to next account without penalty
@@ -292,6 +294,18 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
       sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
 
       const upstreamError = Object.assign(new Error(firstChunkError.message), { upstreamStatus: firstChunkError.status });
+      if (isQwenChatInProgressError(firstChunkError.message)) {
+        const retryError = Object.assign(new Error(firstChunkError.message), { upstreamStatus: 503 });
+        lastFailedEmail = undefined;
+        lastError = retryError;
+        logStore.log(
+          'warn',
+          'chat',
+          `[Chat] Qwen chat is still in progress for ${resolvedEmail} chatId=${session.chatId}; released busy session and creating a fresh session without upload`,
+        );
+        await waitForQwenRetry(attempt, requestSignal);
+        continue;
+      }
       if (isQwenCapacityError(firstChunkError.message)) {
         if (isQwenRGV587Error(firstChunkError.message)) {
           uploadContextOnRetry = true;
