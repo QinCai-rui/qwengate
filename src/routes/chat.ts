@@ -144,10 +144,16 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
         continue;
       }
       if (err.upstreamStatus === 503 || isQwenCapacityError(err.message || '')) {
-        useBrowserTransport = true;
+        // RGV587 is not solved by repeating the same transport. Alternate
+        // browser and wreq while Qwen's capacity/risk response clears.
+        useBrowserTransport = !useBrowserTransport;
         lastFailedEmail = undefined;
         lastError = Object.assign(err, { upstreamStatus: 503 });
-        logStore.log('warn', 'chat', `[Chat] Qwen capacity/risk rejection from ${resolvedEmail}; backing off before browser retry`);
+        logStore.log(
+          'warn',
+          'chat',
+          `[Chat] Qwen capacity/risk rejection from ${resolvedEmail}; backing off before ${useBrowserTransport ? 'browser' : 'wreq'} retry`,
+        );
         await waitForQwenRetry(attempt, requestSignal);
         continue;
       }
@@ -261,10 +267,14 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
 
       const upstreamError = Object.assign(new Error(firstChunkError.message), { upstreamStatus: firstChunkError.status });
       if (isQwenCapacityError(firstChunkError.message)) {
-        useBrowserTransport = true;
+        useBrowserTransport = !useBrowserTransport;
         lastFailedEmail = undefined;
         lastError = Object.assign(upstreamError, { upstreamStatus: 503 });
-        logStore.log('warn', 'chat', `[Chat] Qwen capacity/risk rejection from ${resolvedEmail}; backing off before browser retry`);
+        logStore.log(
+          'warn',
+          'chat',
+          `[Chat] Qwen capacity/risk rejection from ${resolvedEmail}; backing off before ${useBrowserTransport ? 'browser' : 'wreq'} retry`,
+        );
         await waitForQwenRetry(attempt, requestSignal);
         continue;
       }

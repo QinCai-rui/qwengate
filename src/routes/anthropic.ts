@@ -396,7 +396,7 @@ async function setupAnthropicSession(
       }
       if (err.upstreamStatus === 503 || isQwenCapacityError(err.message || '')) {
         logStore.log('warn', 'chat', `[Anthropic]   -> Qwen capacity/risk rejection, backing off before browser retry`);
-        useBrowserTransport = true;
+        useBrowserTransport = !useBrowserTransport;
         lastFailedEmail = undefined;
         lastError = Object.assign(err, { upstreamStatus: 503 });
         await waitForQwenRetry(attempt, requestSignal);
