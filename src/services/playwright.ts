@@ -232,9 +232,9 @@ async function createContextInternal(email: string, cookies?: Record<string, str
   if (!defaultBrowser) throw new Error('Playwright browser not initialized');
   if (accountContexts.has(email)) return accountContexts.get(email)!;
 
-  // Merge provided cookies with any saved profileCookies (full session with
-  // baxia/WAF cookies: cna, ssxmod_itna, tfstk, isg, etc.)
-  let allCookies = { ...cookies };
+  // Merge saved WAF cookies first, then overlay the current request cookies so
+  // a refreshed token can never be replaced by an expired profile token.
+  let allCookies: Record<string, string> = {};
   try {
     const { getAccountByEmail } = await import('./auth.ts');
     const acct = email ? getAccountByEmail(email) : undefined;
@@ -251,8 +251,11 @@ async function createContextInternal(email: string, cookies?: Record<string, str
   } catch (mergeErr: any) {
     logStore.log('debug', 'playwright', `profileCookies merge error: ${mergeErr.message}`);
   }
+  allCookies = { ...allCookies, ...cookies };
 
   const context = await defaultBrowser.newContext({
+    viewport: { width: 1920, height: 1080 },
+    deviceScaleFactor: 1,
     storageState:
       allCookies && Object.keys(allCookies).length > 0
         ? {
@@ -264,7 +267,9 @@ async function createContextInternal(email: string, cookies?: Record<string, str
                   domain: '.qwen.ai',
                   path: '/',
                   expires: Math.floor(Date.now() / 1000) + 3600,
-                  httpOnly: true,
+                  // WAF/session scripts need access to these cookies through
+                  // document.cookie while the browser challenge is active.
+                  httpOnly: false,
                   secure: true,
                   sameSite: 'Lax',
                 }) as Cookie,
@@ -283,11 +288,8 @@ async function createContextInternal(email: string, cookies?: Record<string, str
     await route.continue();
   });
   await page.route('**/*', (route: any) => {
-    const resourceType = route.request().resourceType();
     const url = route.request().url();
-    if (resourceType === 'image' || resourceType === 'font' || resourceType === 'stylesheet' || resourceType === 'media') {
-      route.abort();
-    } else if (
+    if (
       url.includes('google-analytics.com') ||
       url.includes('googletagmanager.com') ||
       url.includes('facebook.com') ||

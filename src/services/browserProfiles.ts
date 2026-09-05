@@ -72,7 +72,7 @@ async function setupBrowserContext(email: string, headless: boolean): Promise<an
     humanize: true,
     geoip: true,
     viewport: { width: 1920, height: 1080 },
-    args: getBrowserArgs(),
+    args: [...getBrowserArgs(), '--window-size=1920,1080', '--force-device-scale-factor=1'],
   });
 }
 
@@ -125,7 +125,8 @@ async function detectCaptcha(page: any): Promise<boolean> {
       document.querySelector('.captcha-container') ||
       document.querySelector('[data-sitekey]') ||
       document.querySelector('.g-recaptcha') ||
-      Array.from(document.querySelectorAll('iframe')).some((f) => /challenge|verify|captcha|recaptcha/i.test(f.src || ''))
+      Array.from(document.querySelectorAll('iframe')).some((f) => /challenge|verify|captcha|recaptcha/i.test(f.src || '')) ||
+      /captcha|verify|slide|slider|drag|puzzle|拖动|滑块|拼图|验证/i.test(document.body?.innerText || '')
     );
   });
 }
