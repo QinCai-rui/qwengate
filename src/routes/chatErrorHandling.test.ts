@@ -16,6 +16,16 @@ test('CHAT_IN_PROGRESS is treated as a temporary busy-session error', () => {
   assert.strictEqual(isQwenChatInProgressError('Qwen upstream error: RateLimited'), false);
 });
 
+test('CHAT_IN_PROGRESS error envelopes keep their non-retryable conflict status', () => {
+  const result = parseQwenErrorPayload(
+    JSON.stringify({ success: false, data: { code: 'CHAT_IN_PROGRESS', details: 'The chat is in progress!' } }),
+  );
+  assert.deepStrictEqual(result, {
+    message: 'Qwen upstream error: CHAT_IN_PROGRESS: The chat is in progress!.',
+    status: 409,
+  });
+});
+
 function streamState(): StreamProcessingState {
   return {
     targetResponseId: null,

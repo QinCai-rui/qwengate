@@ -80,11 +80,14 @@ export class RetryableQwenStreamError extends Error {
 export class QwenUpstreamError extends Error {
   readonly upstreamCode: string;
   readonly upstreamStatus: number;
+  readonly status: number;
   constructor(message: string, upstreamCode: string, upstreamStatus: number) {
     super(message);
     this.name = 'QwenUpstreamError';
     this.upstreamCode = upstreamCode;
     this.upstreamStatus = upstreamStatus;
+    // withRetry uses `status` to avoid retrying permanent 4xx responses.
+    this.status = upstreamStatus;
   }
 }
 
@@ -330,10 +333,12 @@ export async function createQwenStream(
     if (contentType.includes('application/json')) {
       try {
         const errorJson = JSON.parse(errText);
-        if (errorJson?.data?.details?.includes('chat is in progress') || errorJson?.data?.details?.includes('The chat is in progress')) {
-          const retryAfterMs = 2000 + Math.floor(Math.random() * 2000);
-          errorEntry(debugEntryId, errorJson.data.details);
-          throw new RetryableQwenStreamError(`Qwen: ${errorJson.data.details}`, retryAfterMs);
+        if (errorJson?.data?.code === 'CHAT_IN_PROGRESS' || /chat is in progress/i.test(errorJson?.data?.details || '')) {
+          const details = errorJson.data?.details || 'The chat is in progress!';
+          errorEntry(debugEntryId, `CHAT_IN_PROGRESS: ${details}`);
+          // Retrying this chat_id can only repeat the rejection. Let the route
+          // discard its session and create a new chat instead.
+          throw new QwenUpstreamError(`Qwen upstream error: CHAT_IN_PROGRESS: ${details}`, 'CHAT_IN_PROGRESS', 409);
         }
 
         if (errorJson?.success === false) {

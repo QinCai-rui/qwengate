@@ -20,7 +20,9 @@ import {
   extractDeltaContent,
   handleImageModelFallback,
   isQwenCapacityError,
+  isQwenChatInProgressError,
   isQwenRGV587Error,
+  parseQwenErrorPayload,
   waitForQwenRetry,
 } from './chatHelpers.ts';
 import { ToolSpamGuard } from './chatHelpersCore.ts';
@@ -317,9 +319,11 @@ async function setupAnthropicSession(
   const { qwenMessages: processedMessages } = buildQwenMessages(messages, body, toolCalling);
 
   let lastFailedEmail: string | undefined;
-  // Keep Anthropic-compatible requests on the same browser-backed Qwen path.
-  let useBrowserTransport = true;
+  // Browser page.evaluate buffers the entire upstream response, which defeats
+  // token streaming. Use wreq normally and reserve the browser for CAPTCHA.
+  let useBrowserTransport = false;
   let uploadContextOnRetry = false;
+  let chatInProgressRetries = 0;
   const thinkingMode = resolveThinkingMode(body.model, body);
   let lastError: any;
 
@@ -401,6 +405,18 @@ async function setupAnthropicSession(
         `[Anthropic] Stream failed on ${resolvedEmail}: ${err.message || err} (attempt ${attempt + 1}/${MAX_ACCOUNT_RETRIES}) upstreamStatus=${err.upstreamStatus || 'none'} name=${err.name || 'Error'}`,
       );
       logStore.addError(logId, `Stream creation failed for ${resolvedEmail}: ${err.message || String(err)}`);
+      if (isQwenChatInProgressError(err.message || '')) {
+        if (chatInProgressRetries >= 1) throw err;
+        chatInProgressRetries++;
+        lastFailedEmail = undefined;
+        lastError = err;
+        logStore.log(
+          'warn',
+          'chat',
+          `[Anthropic] Qwen chat is still in progress for ${resolvedEmail} chatId=${session.chatId}; released busy session and creating one fresh session without upload`,
+        );
+        continue;
+      }
       if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
         logStore.log('warn', 'chat', `[Anthropic]   -> rate-limited, trying next account`);
         lastFailedEmail = resolvedEmail;
@@ -476,6 +492,31 @@ async function setupAnthropicSession(
     }
     clearTimeout(firstChunkTimer);
 
+    // Qwen may return a HTTP-200 JSON error instead of an SSE stream. Detect it
+    // before sending any Anthropic events so the busy chat can be replaced.
+    const firstChunkText = firstChunk.value ? new TextDecoder().decode(firstChunk.value) : '';
+    const firstChunkError = parseQwenErrorPayload(firstChunkText);
+    if (firstChunkError) {
+      streamReader.cancel().catch(() => {});
+      qwenAbortController.abort();
+      sessionPool.release(session.chatId, nextParentId, sessionHeaders, resolvedEmail, false);
+
+      const upstreamError = Object.assign(new Error(firstChunkError.message), { upstreamStatus: firstChunkError.status });
+      if (isQwenChatInProgressError(firstChunkError.message)) {
+        if (chatInProgressRetries >= 1) throw upstreamError;
+        chatInProgressRetries++;
+        lastFailedEmail = undefined;
+        lastError = upstreamError;
+        logStore.log(
+          'warn',
+          'chat',
+          `[Anthropic] Qwen chat is still in progress for ${resolvedEmail} chatId=${session.chatId}; released busy session and creating one fresh session without upload`,
+        );
+        continue;
+      }
+      throw upstreamError;
+    }
+
     stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         if (!firstChunk.done && firstChunk.value) controller.enqueue(firstChunk.value);
@@ -550,11 +591,15 @@ async function handleAnthropicStream(
       streamWriter.write('event: ping\ndata: {"type":"ping"}\n\n').catch(() => clearInterval(pingInterval));
     }, 10_000);
 
-    // Clean up ping on abort
-    streamWriter.onAbort(() => clearInterval(pingInterval));
-
     let streamReleased = false;
     let streamReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    const abortUpstream = () => {
+      clearInterval(pingInterval);
+      qwenAbortController.abort();
+      streamReader?.cancel().catch(() => {});
+    };
+    streamWriter.onAbort(abortUpstream);
+    c.req.raw.signal?.addEventListener('abort', abortUpstream, { once: true });
     try {
       streamReader = stream.getReader();
       const decoder = new TextDecoder();
@@ -1017,6 +1062,7 @@ async function handleAnthropicStream(
     } catch (streamErr: any) {
       logStore.addError(logId, streamErr.message || String(streamErr));
     } finally {
+      c.req.raw.signal?.removeEventListener('abort', abortUpstream);
       clearInterval(pingInterval);
       if (!streamReleased) {
         logStore.finalizeRequest(logId, {

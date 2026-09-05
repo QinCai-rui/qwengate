@@ -67,10 +67,11 @@ async function parseRequestBody(c: Context) {
 
 async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: boolean, logId: string, requestSignal?: AbortSignal) {
   let lastFailedEmail: string | undefined;
-  // Qwen completion requests prefer the real browser transport. Session
-  // bootstrap stays on wreq so a browser challenge cannot block pool creation.
-  let useBrowserTransport = true;
+  // Browser page.evaluate buffers the entire upstream response, which defeats
+  // token streaming. Use wreq normally and reserve the browser for CAPTCHA.
+  let useBrowserTransport = false;
   let uploadContextOnRetry = false;
+  let chatInProgressRetries = 0;
 
   const thinkingMode = resolveThinkingMode(body.model, body);
   const MAX_ACCOUNT_RETRIES = 5;
@@ -160,6 +161,18 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
       );
       logStore.addError(logId, `Stream creation failed for ${resolvedEmail}: ${err.message || String(err)}`);
 
+      if (isQwenChatInProgressError(err.message || '')) {
+        if (chatInProgressRetries >= 1) throw err;
+        chatInProgressRetries++;
+        lastFailedEmail = undefined;
+        lastError = err;
+        logStore.log(
+          'warn',
+          'chat',
+          `[Chat] Qwen chat is still in progress for ${resolvedEmail} chatId=${session.chatId}; released busy session and creating one fresh session without upload`,
+        );
+        continue;
+      }
       // If rate limited, try next account — Qwen didn't process the request yet
       if (err.upstreamStatus === 429 || /RateLimited|daily usage limit/i.test(err.message || '')) {
         lastFailedEmail = resolvedEmail;
@@ -295,15 +308,15 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
 
       const upstreamError = Object.assign(new Error(firstChunkError.message), { upstreamStatus: firstChunkError.status });
       if (isQwenChatInProgressError(firstChunkError.message)) {
-        const retryError = Object.assign(new Error(firstChunkError.message), { upstreamStatus: 503 });
+        if (chatInProgressRetries >= 1) throw upstreamError;
+        chatInProgressRetries++;
         lastFailedEmail = undefined;
-        lastError = retryError;
+        lastError = upstreamError;
         logStore.log(
           'warn',
           'chat',
-          `[Chat] Qwen chat is still in progress for ${resolvedEmail} chatId=${session.chatId}; released busy session and creating a fresh session without upload`,
+          `[Chat] Qwen chat is still in progress for ${resolvedEmail} chatId=${session.chatId}; released busy session and creating one fresh session without upload`,
         );
-        await waitForQwenRetry(attempt, requestSignal);
         continue;
       }
       if (isQwenCapacityError(firstChunkError.message)) {

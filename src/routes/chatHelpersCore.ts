@@ -264,7 +264,7 @@ export function parseQwenErrorPayload(
       const code = payload.data?.code || payload.code || 'UpstreamError';
       const details = payload.data?.details || payload.message || 'Qwen returned an error';
       const wait = payload.data?.num !== undefined ? ` Wait about ${payload.data.num} hour(s) before trying again.` : '';
-      const status = code === 'RateLimited' ? 429 : code === 'Not_Found' ? 404 : 502;
+      const status = code === 'RateLimited' ? 429 : code === 'Not_Found' ? 404 : code === 'CHAT_IN_PROGRESS' ? 409 : 502;
       return { message: `Qwen upstream error: ${code}: ${details}.${wait}`, status };
     }
     if (payload && payload.error) {

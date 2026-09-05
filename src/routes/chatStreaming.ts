@@ -53,6 +53,12 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
     let streamReleased = false;
     let heartbeatInterval: any;
     let streamReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    const abortUpstream = () => {
+      qwenAbortController.abort();
+      streamReader?.cancel().catch(() => {});
+    };
+    streamWriter.onAbort(abortUpstream);
+    c.req.raw.signal?.addEventListener('abort', abortUpstream, { once: true });
     const ampState: AmplificationGuardState = { rawInputBytes: 0, emittedOutputBytes: 0, triggered: false };
 
     try {
@@ -141,6 +147,7 @@ export async function handleStreamingRequest(ctx: StreamingContext): Promise<Res
       streamReleased = true;
       logStore.log('debug', 'stream', `[Stream] <<< Streaming completed for ${logId} in ${Date.now() - _streamStartTime}ms`);
     } finally {
+      c.req.raw.signal?.removeEventListener('abort', abortUpstream);
       if (c.req.raw.signal?.aborted) qwenAbortController.abort();
       if (!streamReleased) {
         // Always write [DONE] so the SSE stream terminates cleanly, even on error
