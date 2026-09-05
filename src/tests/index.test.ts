@@ -6,7 +6,7 @@ process.env.TEST_MOCK_PLAYWRIGHT = 'true';
 process.env.API_KEY = 'test-key-for-testing';
 
 import { app } from '../index.tsx';
-import { accounts } from '../services/accountManager.ts';
+import { accounts, rebuildEmailIndex } from '../services/accountManager.ts';
 
 const TEST_API_KEY = 'test-key-for-testing';
 const authHeaders = { Authorization: `Bearer ${TEST_API_KEY}` };
@@ -267,6 +267,7 @@ test('RGV587 retries this request with one context upload', async () => {
     totalRequests: 0,
     startupStatus: 'ready',
   });
+  rebuildEmailIndex();
 
   (globalThis as any).fetch = async (input: any, init?: any) => {
     const url = typeof input === 'string' ? input : input.url;
@@ -343,6 +344,7 @@ test('RGV587 retries this request with one context upload', async () => {
   } finally {
     globalThis.fetch = originalFetch;
     accounts.splice(0, accounts.length, ...originalAccounts);
+    rebuildEmailIndex();
   }
 });
 
