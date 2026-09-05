@@ -36,6 +36,7 @@ export class SessionPool {
    * Otherwise, pick the best available account (round-robin, non-throttled).
    */
   async acquire(email?: string, requestSignal?: AbortSignal, transport: QwenTransport = 'wreq'): Promise<PoolEntry> {
+    const acquireStartedAt = Date.now();
     if (requestSignal?.aborted) {
       if (email) decrementInFlight(email);
       throw new DOMException('Request aborted', 'AbortError');
@@ -86,7 +87,11 @@ export class SessionPool {
         };
         this.activeSessions.add(chatId);
         this.activeCount++;
-        logStore.log('info', 'pool', 'Session acquired' + (entry.accountEmail ? ': ' + entry.accountEmail.split('@')[0] : ''));
+        logStore.log(
+          'info',
+          'pool',
+          `Session acquired${entry.accountEmail ? ': ' + entry.accountEmail.split('@')[0] : ''} transport=${transport} duration=${Date.now() - acquireStartedAt}ms`,
+        );
         return entry;
       } catch (err: any) {
         lastErr = err;

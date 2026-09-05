@@ -94,7 +94,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
       const detachedContext = detachOlderContext(requestMessages, true);
       if (detachedContext) {
         try {
-          const contextFile = await uploadContextAsFile(accountEmail, detachedContext, requestSignal);
+          const contextFile = await uploadContextAsFile(accountEmail, detachedContext, requestSignal, logId);
           requestMessages = [{ ...requestMessages[0], files: [contextFile] }, ...requestMessages.slice(1)];
         } catch (err) {
           decrementInFlight(accountEmail);
@@ -168,7 +168,10 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
       if (err.upstreamStatus === 503 || isQwenCapacityError(err.message || '')) {
         // RGV587 is not solved by repeating the same transport. Alternate
         // browser and wreq while Qwen's capacity/risk response clears.
-        if (isQwenRGV587Error(err.message || '')) uploadContextOnRetry = true;
+        if (isQwenRGV587Error(err.message || '')) {
+          uploadContextOnRetry = true;
+          logStore.log('debug', 'upload', `[ContextUpload] ARMED request=${logId} reason=RGV587 retry=${attempt + 2}`);
+        }
         useBrowserTransport = !useBrowserTransport;
         lastFailedEmail = undefined;
         lastError = Object.assign(err, { upstreamStatus: 503 });
@@ -290,7 +293,10 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
 
       const upstreamError = Object.assign(new Error(firstChunkError.message), { upstreamStatus: firstChunkError.status });
       if (isQwenCapacityError(firstChunkError.message)) {
-        if (isQwenRGV587Error(firstChunkError.message)) uploadContextOnRetry = true;
+        if (isQwenRGV587Error(firstChunkError.message)) {
+          uploadContextOnRetry = true;
+          logStore.log('debug', 'upload', `[ContextUpload] ARMED request=${logId} reason=RGV587 retry=${attempt + 2}`);
+        }
         useBrowserTransport = !useBrowserTransport;
         lastFailedEmail = undefined;
         lastError = Object.assign(upstreamError, { upstreamStatus: 503 });

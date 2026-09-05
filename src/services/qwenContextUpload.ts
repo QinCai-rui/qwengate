@@ -164,16 +164,45 @@ async function waitForParse(email: string, fileId: string, signal?: AbortSignal)
 }
 
 /** Upload only detached conversation history when Qwen's inline request becomes too large. */
-export async function uploadContextAsFile(email: string, text: string, signal?: AbortSignal): Promise<QwenContextAttachment> {
+export async function uploadContextAsFile(
+  email: string,
+  text: string,
+  signal?: AbortSignal,
+  requestId?: string,
+): Promise<QwenContextAttachment> {
+  const startedAt = Date.now();
+  const requestTag = requestId ? ` request=${requestId}` : '';
   const content = Buffer.from(text, 'utf8');
   if (content.length > 2_000_000) throw new Error('Context upload exceeds the maximum size');
+  logStore.log('info', 'upload', `[ContextUpload] START${requestTag} account=${email} bytes=${content.length}`);
+
+  const stsStartedAt = Date.now();
   const sts = await getStsToken(email, content.length, signal);
+  logStore.log('debug', 'upload', `[ContextUpload] STS ready${requestTag} file=${sts.file_id} duration=${Date.now() - stsStartedAt}ms`);
+
+  const ossStartedAt = Date.now();
   await uploadToOss(sts, content, signal);
+  logStore.log(
+    'debug',
+    'upload',
+    `[ContextUpload] OSS upload complete${requestTag} file=${sts.file_id} duration=${Date.now() - ossStartedAt}ms`,
+  );
+
+  const parseStartedAt = Date.now();
   await waitForParse(email, sts.file_id, signal);
+  logStore.log(
+    'debug',
+    'upload',
+    `[ContextUpload] Parse complete${requestTag} file=${sts.file_id} duration=${Date.now() - parseStartedAt}ms`,
+  );
 
   const now = Date.now();
   const userId = sts.file_path.split('/')[0] || '';
-  logStore.log('debug', 'upload', `[ContextUpload] Attached ${content.length} bytes of older history for ${email}`);
+  logStore.log(
+    'info',
+    'upload',
+    `[ContextUpload] COMPLETE${requestTag} account=${email} file=${sts.file_id} bytes=${content.length} duration=${Date.now() - startedAt}ms`,
+  );
   return {
     type: 'file',
     file: {

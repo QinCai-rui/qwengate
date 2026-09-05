@@ -228,6 +228,7 @@ export async function createAccountContext(email: string, cookies?: Record<strin
 }
 
 async function createContextInternal(email: string, cookies?: Record<string, string>): Promise<AccountContext> {
+  const contextStartedAt = Date.now();
   await initPlaywright();
   if (!defaultBrowser) throw new Error('Playwright browser not initialized');
   if (accountContexts.has(email)) return accountContexts.get(email)!;
@@ -303,9 +304,12 @@ async function createContextInternal(email: string, cookies?: Record<string, str
   });
   try {
     validateQwenUrl('https://chat.qwen.ai/');
+    const navigationStartedAt = Date.now();
     // Do not wait for every image/font on the challenge page. The browser can
     // continue loading those assets while the API request is prepared.
     await page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+    const navigationDuration = Date.now() - navigationStartedAt;
+    const warmupStartedAt = Date.now();
 
     for (let attempt = 0; attempt < 8; attempt++) {
       const hasBaxia = await page
@@ -331,6 +335,11 @@ async function createContextInternal(email: string, cookies?: Record<string, str
         await page.waitForTimeout(1000);
       }
     }
+    logStore.log(
+      'debug',
+      'playwright',
+      `[Browser] Account context ready account=${email} navigation=${navigationDuration}ms warmup=${Date.now() - warmupStartedAt}ms total=${Date.now() - contextStartedAt}ms`,
+    );
   } catch (navErr: any) {
     logStore.log('debug', 'playwright', `Initial navigation to qwen.ai failed: ${navErr.message}`);
   }

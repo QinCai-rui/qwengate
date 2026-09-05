@@ -202,21 +202,30 @@ async function applyRequestJitter(accountEmail?: string): Promise<void> {
   const now = Date.now();
   const last = lastRequestTime.get(accountEmail) || 0;
   const elapsed = now - last;
+  let gapWait = 0;
+  let readingPause = 0;
 
   // Minimum gap between requests from the same account (1-3 seconds)
   const minGap = 1000 + Math.random() * 2000;
   if (elapsed < minGap) {
-    const wait = minGap - elapsed + Math.random() * 500;
-    await new Promise((r) => setTimeout(r, wait));
+    gapWait = minGap - elapsed + Math.random() * 500;
+    await new Promise((r) => setTimeout(r, gapWait));
   }
 
   // Occasional longer pause (10% chance of 2-5s delay — simulates user reading/thinking)
   if (Math.random() < 0.1) {
-    const pause = 2000 + Math.random() * 3000;
-    await new Promise((r) => setTimeout(r, pause));
+    readingPause = 2000 + Math.random() * 3000;
+    await new Promise((r) => setTimeout(r, readingPause));
   }
 
   lastRequestTime.set(accountEmail, Date.now());
+  if (gapWait > 0 || readingPause > 0) {
+    logStore.log(
+      'debug',
+      'qwen',
+      `[Qwen] Request jitter account=${accountEmail} gap=${Math.round(gapWait)}ms pause=${Math.round(readingPause)}ms total=${Math.round(gapWait + readingPause)}ms`,
+    );
+  }
 }
 
 const qwenCircuitBreaker = new CircuitBreaker('qwen-api', {
@@ -396,6 +405,7 @@ export async function createQwenStream(
   const makeRequest = async (
     requestSignal?: AbortSignal,
   ): Promise<{ response: Response; headers: Record<string, string>; qwenLogFile?: string }> => {
+    const requestStartedAt = Date.now();
     const bodyStr = JSON.stringify(payload);
     if (config.get('SAVE_REQUEST_LOGS') === 'true') {
       makeRequestQwenLogFile = logQwenRequest(payload, url);
@@ -463,7 +473,7 @@ export async function createQwenStream(
     logStore.log(
       'debug',
       'qwen',
-      `[Qwen] Fetch response status=${response.status} ok=${response.ok} account=${currentAccountEmail || '?'}`,
+      `[Qwen] Fetch response status=${response.status} ok=${response.ok} account=${currentAccountEmail || '?'} transport=${currentTransport} duration=${Date.now() - requestStartedAt}ms`,
     );
     recordResponse(lastDebugEntryId, response);
     if (!response.ok) await handleErrorResponse(response, debugEntry.id);

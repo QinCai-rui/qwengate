@@ -348,7 +348,7 @@ async function setupAnthropicSession(
       const detachedContext = detachOlderContext(requestMessages, true);
       if (detachedContext) {
         try {
-          const contextFile = await uploadContextAsFile(accountEmail, detachedContext, requestSignal);
+          const contextFile = await uploadContextAsFile(accountEmail, detachedContext, requestSignal, logId);
           requestMessages = [{ ...requestMessages[0], files: [contextFile] }, ...requestMessages.slice(1)];
         } catch (err) {
           decrementInFlight(accountEmail);
@@ -409,7 +409,10 @@ async function setupAnthropicSession(
       }
       if (err.upstreamStatus === 503 || isQwenCapacityError(err.message || '')) {
         logStore.log('warn', 'chat', `[Anthropic]   -> Qwen capacity/risk rejection, backing off before browser retry`);
-        if (isQwenRGV587Error(err.message || '')) uploadContextOnRetry = true;
+        if (isQwenRGV587Error(err.message || '')) {
+          uploadContextOnRetry = true;
+          logStore.log('debug', 'upload', `[ContextUpload] ARMED request=${logId} reason=RGV587 retry=${attempt + 2}`);
+        }
         useBrowserTransport = !useBrowserTransport;
         lastFailedEmail = undefined;
         lastError = Object.assign(err, { upstreamStatus: 503 });
