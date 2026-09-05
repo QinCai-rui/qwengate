@@ -13,6 +13,7 @@
 
 import { logCrash, logEvent, logFetchCall } from '../utils/wreqCrashLogger.ts';
 import { extractBxUmidtoken } from './bxTokenExtractor.ts';
+import { config } from './configService.ts';
 import { generateBxPp, generateBxUa, refreshCookiesViaBrowser } from './fireyejsRunner.ts';
 import { logStore } from './logStore.ts';
 import { QWEN_API_BASE } from './qwen.ts';
@@ -176,26 +177,34 @@ async function browserContextFetch(url: string, options: BrowserlessFetchOptions
   }
   delete browserHeaders['bx-pp'];
   const result = await accountContext.page.evaluate(
-    async ({ requestUrl, method, headers, body }) => {
-      const response = await fetch(requestUrl, {
-        method,
-        headers,
-        body: body ?? undefined,
-        credentials: 'include',
-        cache: 'no-store',
-      });
-      return {
-        status: response.status,
-        statusText: response.statusText,
-        headers: Array.from(response.headers.entries()),
-        body: await response.text(),
-      };
+    async ({ requestUrl, method, headers, body, timeoutMs }) => {
+      const controller = new AbortController();
+      const timeout = timeoutMs > 0 ? window.setTimeout(() => controller.abort(), timeoutMs) : undefined;
+      try {
+        const response = await fetch(requestUrl, {
+          method,
+          headers,
+          body: body ?? undefined,
+          credentials: 'include',
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        return {
+          status: response.status,
+          statusText: response.statusText,
+          headers: Array.from(response.headers.entries()),
+          body: await response.text(),
+        };
+      } finally {
+        if (timeout !== undefined) window.clearTimeout(timeout);
+      }
     },
     {
       requestUrl: url,
       method: options.method || 'GET',
       headers: browserHeaders,
       body: options.body,
+      timeoutMs: config.getInt('QWEN_FETCH_TIMEOUT_MS', 30000),
     },
   );
 
@@ -264,6 +273,7 @@ export async function browserlessFetch(url: string, options: BrowserlessFetchOpt
       try {
         return await browserContextFetch(url, { ...options, method, headers, body, accountEmail, signal, stream, transport });
       } catch (err) {
+        if (signal?.aborted) throw err;
         const message = err instanceof Error ? err.message : String(err);
         logStore.log('warn', 'browserless', `Browser transport unavailable; falling back to wreq: ${message.substring(0, 200)}`);
         // Keep the gateway usable when the host is missing a Chromium shared

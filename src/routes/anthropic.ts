@@ -341,12 +341,7 @@ async function setupAnthropicSession(
 
     let sessionResult;
     try {
-      sessionResult = await acquireSessionWithCorrections(
-        accountEmail,
-        requestMessages,
-        requestSignal,
-        useBrowserTransport ? 'browser' : 'wreq',
-      );
+      sessionResult = await acquireSessionWithCorrections(accountEmail, requestMessages, requestSignal, 'wreq');
     } catch (err) {
       lastFailedEmail = accountEmail;
       lastError = err;

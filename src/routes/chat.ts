@@ -63,8 +63,8 @@ async function parseRequestBody(c: Context) {
 
 async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: boolean, logId: string, requestSignal?: AbortSignal) {
   let lastFailedEmail: string | undefined;
-  // Qwen's risk system keys off the browser session. Prefer the real browser
-  // transport from the first request; wreq remains available for other API paths.
+  // Qwen completion requests prefer the real browser transport. Session
+  // bootstrap stays on wreq so a browser challenge cannot block pool creation.
   let useBrowserTransport = true;
 
   const thinkingMode = resolveThinkingMode(body.model, body);
@@ -89,7 +89,9 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
         accountEmail,
         requestMessages,
         requestSignal,
-        useBrowserTransport ? 'browser' : 'wreq',
+        // Session creation is a small bootstrap call. Keep it on wreq so a
+        // browser page challenge cannot prevent the pool entry from forming.
+        'wreq',
       );
     } catch (err) {
       lastFailedEmail = accountEmail;
