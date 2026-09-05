@@ -303,9 +303,11 @@ async function createContextInternal(email: string, cookies?: Record<string, str
   });
   try {
     validateQwenUrl('https://chat.qwen.ai/');
-    await page.goto('https://chat.qwen.ai/', { waitUntil: 'load', timeout: 30000 });
+    // Do not wait for every image/font on the challenge page. The browser can
+    // continue loading those assets while the API request is prepared.
+    await page.goto('https://chat.qwen.ai/', { waitUntil: 'domcontentloaded', timeout: 15000 });
 
-    for (let attempt = 0; attempt < 10; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
       const hasBaxia = await page
         .evaluate(() => {
           const w = window as any;
@@ -324,9 +326,9 @@ async function createContextInternal(email: string, cookies?: Record<string, str
 
       if (isChallenged) {
         logStore.log('debug', 'playwright', `WAF challenge page still showing, waiting... (attempt ${attempt + 1})`);
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(1000);
       } else {
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(1000);
       }
     }
   } catch (navErr: any) {

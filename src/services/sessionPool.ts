@@ -49,7 +49,7 @@ export class SessionPool {
 
     const maxAttempts = email ? 1 : Math.max(1, getAllAccountEmails().length);
     let lastErr: unknown;
-    const ACQUIRE_TIMEOUT = 30_000; // ponytail: overall timeout to prevent hanging session creation
+    const ACQUIRE_TIMEOUT = transport === 'browser' ? 60_000 : 30_000;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const resolvedEmail = email || (await pickAccount())?.email;
