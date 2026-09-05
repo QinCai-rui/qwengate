@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
 import { Context } from 'hono';
-import { pickAccount } from '../services/auth.ts';
+import { decrementInFlight, pickAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
 import { RetryableQwenStreamError, resolveThinkingMode } from '../services/qwen.ts';
+import { uploadContextAsFile } from '../services/qwenContextUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts } from '../tools/xmlToolParser.ts';
 import { OpenAIRequest } from '../types/openai.ts';
@@ -13,8 +14,10 @@ import {
   acquireSessionWithCorrections,
   buildQwenMessages,
   createQwenStreamWithRetry,
+  detachOlderContext,
   handleImageModelFallback,
   isQwenCapacityError,
+  isQwenRGV587Error,
   parseQwenErrorPayload,
   waitForQwenRetry,
 } from './chatHelpers.ts';
@@ -66,6 +69,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
   // Qwen completion requests prefer the real browser transport. Session
   // bootstrap stays on wreq so a browser challenge cannot block pool creation.
   let useBrowserTransport = true;
+  let uploadContextOnRetry = false;
 
   const thinkingMode = resolveThinkingMode(body.model, body);
   const MAX_ACCOUNT_RETRIES = 5;
@@ -81,7 +85,23 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
     }
 
     const { qwenMessages: processedMessages } = buildQwenMessages(messages, body, toolCalling);
-    const requestMessages = processedMessages.map((message) => ({ ...message, files: [] as unknown[] }));
+    let requestMessages = processedMessages.map((message) => ({ ...message, files: [] as unknown[] }));
+    if (uploadContextOnRetry) {
+      // RGV587 changes only this request's next retry. Do not upload context
+      // for ordinary requests or for unrelated concurrent sessions.
+      uploadContextOnRetry = false;
+      if (!accountEmail) throw new Error('Unable to upload older conversation history without a Qwen account');
+      const detachedContext = detachOlderContext(requestMessages, true);
+      if (detachedContext) {
+        try {
+          const contextFile = await uploadContextAsFile(accountEmail, detachedContext, requestSignal);
+          requestMessages = [{ ...requestMessages[0], files: [contextFile] }, ...requestMessages.slice(1)];
+        } catch (err) {
+          decrementInFlight(accountEmail);
+          throw err;
+        }
+      }
+    }
 
     let sessionResult;
     try {
@@ -148,6 +168,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
       if (err.upstreamStatus === 503 || isQwenCapacityError(err.message || '')) {
         // RGV587 is not solved by repeating the same transport. Alternate
         // browser and wreq while Qwen's capacity/risk response clears.
+        if (isQwenRGV587Error(err.message || '')) uploadContextOnRetry = true;
         useBrowserTransport = !useBrowserTransport;
         lastFailedEmail = undefined;
         lastError = Object.assign(err, { upstreamStatus: 503 });
@@ -269,6 +290,7 @@ async function setupSession(messages: any[], body: OpenAIRequest, toolCalling: b
 
       const upstreamError = Object.assign(new Error(firstChunkError.message), { upstreamStatus: firstChunkError.status });
       if (isQwenCapacityError(firstChunkError.message)) {
+        if (isQwenRGV587Error(firstChunkError.message)) uploadContextOnRetry = true;
         useBrowserTransport = !useBrowserTransport;
         lastFailedEmail = undefined;
         lastError = Object.assign(upstreamError, { upstreamStatus: 503 });

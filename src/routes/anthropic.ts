@@ -2,11 +2,12 @@ import crypto from 'node:crypto';
 import { Context } from 'hono';
 import { stream as honoStream } from 'hono/streaming';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
-import { pickAccount } from '../services/auth.ts';
+import { decrementInFlight, pickAccount } from '../services/auth.ts';
 import { config } from '../services/configService.ts';
 import { logStore } from '../services/logStore.ts';
 import { modelRouter } from '../services/modelRouter.ts';
 import { RetryableQwenStreamError, resolveThinkingMode } from '../services/qwen.ts';
+import { uploadContextAsFile } from '../services/qwenContextUpload.ts';
 import { sessionPool } from '../services/sessionPool.ts';
 import { cleanTextOfXmlArtifacts, parseXmlToolCalls, xmlToolCallToParsed } from '../tools/xmlToolParser.ts';
 import type { OpenAIRequest, ParsedToolCall } from '../types/openai.ts';
@@ -15,9 +16,11 @@ import {
   acquireSessionWithCorrections,
   buildQwenMessages,
   createQwenStreamWithRetry,
+  detachOlderContext,
   extractDeltaContent,
   handleImageModelFallback,
   isQwenCapacityError,
+  isQwenRGV587Error,
   waitForQwenRetry,
 } from './chatHelpers.ts';
 import { ToolSpamGuard } from './chatHelpersCore.ts';
@@ -316,6 +319,7 @@ async function setupAnthropicSession(
   let lastFailedEmail: string | undefined;
   // Keep Anthropic-compatible requests on the same browser-backed Qwen path.
   let useBrowserTransport = true;
+  let uploadContextOnRetry = false;
   const thinkingMode = resolveThinkingMode(body.model, body);
   let lastError: any;
 
@@ -337,7 +341,21 @@ async function setupAnthropicSession(
       throw lastError || new Error('All accounts are rate-limited. Please wait and try again later.');
     }
 
-    const requestMessages = processedMessages.map((message) => ({ ...message, files: [] as unknown[] }));
+    let requestMessages = processedMessages.map((message) => ({ ...message, files: [] as unknown[] }));
+    if (uploadContextOnRetry) {
+      uploadContextOnRetry = false;
+      if (!accountEmail) throw new Error('Unable to upload older conversation history without a Qwen account');
+      const detachedContext = detachOlderContext(requestMessages, true);
+      if (detachedContext) {
+        try {
+          const contextFile = await uploadContextAsFile(accountEmail, detachedContext, requestSignal);
+          requestMessages = [{ ...requestMessages[0], files: [contextFile] }, ...requestMessages.slice(1)];
+        } catch (err) {
+          decrementInFlight(accountEmail);
+          throw err;
+        }
+      }
+    }
 
     let sessionResult;
     try {
@@ -391,6 +409,7 @@ async function setupAnthropicSession(
       }
       if (err.upstreamStatus === 503 || isQwenCapacityError(err.message || '')) {
         logStore.log('warn', 'chat', `[Anthropic]   -> Qwen capacity/risk rejection, backing off before browser retry`);
+        if (isQwenRGV587Error(err.message || '')) uploadContextOnRetry = true;
         useBrowserTransport = !useBrowserTransport;
         lastFailedEmail = undefined;
         lastError = Object.assign(err, { upstreamStatus: 503 });

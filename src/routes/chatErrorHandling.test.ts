@@ -1,8 +1,15 @@
 import assert from 'node:assert';
 import test from 'node:test';
-import { parseQwenErrorPayload } from './chatHelpersCore.ts';
+import { isQwenRGV587Error, parseQwenErrorPayload } from './chatHelpersCore.ts';
+
 import { processStreamData, type StreamProcessingState } from './chatStreamingHelpers.ts';
 import { runStreamLoop } from './streamLoop.ts';
+
+test('only RGV587 capacity errors trigger context-upload retries', () => {
+  assert.strictEqual(isQwenRGV587Error('RGV587_ERROR::SM::request rejected'), true);
+  assert.strictEqual(isQwenRGV587Error('哎哟喂,被挤爆啦,请稍后重试'), true);
+  assert.strictEqual(isQwenRGV587Error('RateLimited: daily usage limit'), false);
+});
 
 function streamState(): StreamProcessingState {
   return {

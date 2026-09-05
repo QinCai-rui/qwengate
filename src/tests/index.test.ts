@@ -249,6 +249,103 @@ test('Chat Completions detects a split HTTP-200 CAPTCHA body before opening the 
   }
 });
 
+test('RGV587 retries this request with one context upload', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalAccounts = [...accounts];
+  const completionPayloads: any[] = [];
+  const fileRequests: string[] = [];
+
+  accounts.push({
+    email: 'capacity-test@qwen-gate.dev',
+    password: 'test',
+    state: { token: 'mock-token', expiresAt: Date.now() + 3600000, refreshToken: null },
+    lastUsed: 0,
+    throttledUntil: 0,
+    refreshInFlight: null,
+    loginAttempt: 0,
+    inFlight: 0,
+    totalRequests: 0,
+    startupStatus: 'ready',
+  });
+
+  (globalThis as any).fetch = async (input: any, init?: any) => {
+    const url = typeof input === 'string' ? input : input.url;
+    const body = typeof init?.body === 'string' ? init.body : '';
+
+    if (url.includes('/api/models')) {
+      return new Response(JSON.stringify({ data: [{ id: 'qwen3.6-plus', owned_by: 'qwen' }] }), { status: 200 });
+    }
+    if (url.includes('/api/v2/chat/completions')) {
+      const payload = body ? JSON.parse(body) : {};
+      completionPayloads.push(payload);
+      if (completionPayloads.length === 1) {
+        return new Response(JSON.stringify({ ret: ['RGV587_ERROR::SM::哎哟喂,被挤爆啦,请稍后重试'] }), { status: 200 });
+      }
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'));
+          controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200 });
+    }
+    if (url.includes('/api/v2/files/')) {
+      fileRequests.push(url);
+      if (url.endsWith('/getstsToken')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              access_key_id: 'access',
+              access_key_secret: 'secret',
+              security_token: 'security',
+              bucketname: 'bucket',
+              endpoint: 'https://oss.test',
+              file_id: 'file-id',
+              file_path: 'bucket/context.txt',
+              file_url: 'https://oss.test/context.txt',
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith('/parse/status')) return new Response(JSON.stringify({ data: [{ status: 'success' }] }), { status: 200 });
+      return new Response(JSON.stringify({ data: {} }), { status: 200 });
+    }
+    if (url.includes('oss.test')) return new Response('', { status: 200 });
+    return originalFetch(input, init);
+  };
+
+  try {
+    const req = new Request('http://localhost/v1/chat/completions', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders),
+      body: JSON.stringify({
+        model: 'qwen3.6-plus',
+        messages: [
+          { role: 'user', content: 'Earlier request.' },
+          { role: 'assistant', content: 'Earlier response.' },
+          { role: 'user', content: 'Current request.' },
+        ],
+        stream: false,
+      }),
+    });
+
+    const res = await app.fetch(req);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(completionPayloads.length, 2);
+    assert.deepStrictEqual(completionPayloads[0].messages[0].files, []);
+    assert.strictEqual(completionPayloads[1].messages[0].files.length, 1);
+    assert.strictEqual(completionPayloads[1].messages[0].files[0].name, 'context.txt');
+    assert.ok(fileRequests.some((url) => url.endsWith('/getstsToken')));
+    assert.ok(fileRequests.some((url) => url.endsWith('/parse')));
+    assert.ok(fileRequests.some((url) => url.endsWith('/parse/status')));
+  } finally {
+    globalThis.fetch = originalFetch;
+    accounts.splice(0, accounts.length, ...originalAccounts);
+  }
+});
+
 test('Chat Completions returns a JSON chat.completion object for non-streaming requests', async () => {
   const originalFetch = globalThis.fetch;
   (globalThis as any).fetch = async (input: any) => {

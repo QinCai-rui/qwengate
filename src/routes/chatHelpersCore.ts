@@ -202,7 +202,11 @@ export const pendingCorrections = new Map<string, string[]>();
 
 /** Qwen uses this anti-bot envelope for temporary capacity/risk rejection. */
 export function isQwenCapacityError(message: string): boolean {
-  return /RGV587_ERROR|overloaded|try again later|too many requests|crowded/i.test(message);
+  return /RGV587_ERROR|挤爆|overloaded|try again later|too many requests|crowded/i.test(message);
+}
+
+export function isQwenRGV587Error(message: string): boolean {
+  return /RGV587_ERROR|挤爆/i.test(message);
 }
 
 export async function waitForQwenRetry(attempt: number, signal?: AbortSignal): Promise<void> {
